@@ -24,9 +24,9 @@ declare namespace monaco {
   namespace editor {
     interface IStandaloneCodeEditor {
       getValue(): string;
-      getModel(): any;
-      getSelection(): any;
-      setSelection(selection: any): void;
+      getModel(): monaco.editor.ITextModel;
+      getSelection(): monaco.Selection;
+      setSelection(selection: monaco.Selection): void;
     }
   }
 }

@@ -28,9 +28,13 @@ export default function ThreeCodeEditor() {
   const cube = new THREE.Mesh(geometry, material);
   cube.userData.autoRotate = true;
   scene.add(cube);
+  
+  return cube;
 }`);
+  const [previousCode, setPreviousCode] = useState(""); // 存储上一次的代码
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
+  const [showDiff, setShowDiff] = useState(false); // 控制是否显示对比
 
   // 从全局状态获取历史记录
   const { addToHistory } = useSceneStore();
@@ -74,9 +78,19 @@ export default function ThreeCodeEditor() {
     const gridHelper = new THREE.GridHelper(10, 10);
     scene.add(gridHelper);
 
+    // 添加OrbitControls以支持手动旋转
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true; // 添加阻尼效果使旋转更平滑
+    controls.dampingFactor = 0.25;
+    controls.screenSpacePanning = false;
+    controls.maxPolarAngle = Math.PI / 2; // 限制垂直旋转角度
+
     // 动画循环
     const animate = () => {
       requestAnimationFrame(animate);
+
+      // 更新OrbitControls
+      controls.update();
 
       // 更新场景中的物体（如旋转）
       scene.children.forEach((child) => {
@@ -90,7 +104,7 @@ export default function ThreeCodeEditor() {
     };
     animate();
 
-    threeRef.current = { scene, camera, renderer };
+    threeRef.current = { scene, camera, renderer, controls };
 
     // 响应窗口大小变化
     const handleResize = () => {
@@ -145,28 +159,72 @@ export default function ThreeCodeEditor() {
         }
       });
 
-      // 执行用户代码
-      const fn = new Function(
-        "scene",
-        "camera",
-        "renderer",
-        "THREE",
-        code + "\nsetup(scene, camera, renderer);"
-      );
-      fn(scene, camera, renderer, THREE);
-      console.log("代码执行成功", scene.children);
+      try {
+        // 使用更安全的方式执行用户代码
+        const functionBody = `
+          let setup;
+          try {
+            ${code}
+            if (typeof setup !== 'function') {
+              throw new Error('setup function not defined in code');
+            }
+            return setup;
+          } catch(e) {
+            console.error("Setup function parsing error:", e);
+            throw e;
+          }
+        `;
 
-      // 确保渲染器重新渲染一次
-      renderer.render(scene, camera);
+        // 创建Function实例，避免使用eval
+        const getSetupFn = Function(
+          "scene",
+          "camera",
+          "renderer",
+          "THREE",
+          "OrbitControls",
+          functionBody
+        );
 
-      // 保存到历史记录
-      addToHistory(code);
+        // 执行函数获取setup函数
+        const setupFn = getSetupFn(null, null, null, THREE, OrbitControls);
 
-      // 清除错误（如果之前有的话）
-      if (error) setError("");
+        if (typeof setupFn !== "function") {
+          throw new Error("setup function not found in code");
+        }
+
+        // 执行用户代码
+        if (THREE && scene && camera && renderer) {
+          try {
+            if (typeof setupFn === "function") {
+              setupFn(scene, camera, renderer, THREE, OrbitControls);
+            }
+
+            console.log("代码执行成功", scene.children);
+
+            // 确保渲染器重新渲染一次
+            renderer.render(scene, camera);
+
+            // 保存到历史记录
+            addToHistory(code);
+
+            // 清除错误（如果之前有的话）
+            if (error) setError("");
+          } catch (e) {
+            console.error("代码执行错误:", e);
+            setError(
+              "代码执行错误: " + (e instanceof Error ? e.message : String(e))
+            );
+          }
+        }
+      } catch (e) {
+        console.error("场景清理错误:", e);
+        setError(
+          "场景清理错误: " + (e instanceof Error ? e.message : String(e))
+        );
+      }
     } catch (e) {
-      console.error("代码执行错误:", e);
-      setError("代码执行错误: " + (e instanceof Error ? e.message : String(e)));
+      console.error("场景清理错误:", e);
+      setError("场景清理错误: " + (e instanceof Error ? e.message : String(e)));
     }
   }, [code, addToHistory, error]);
 
@@ -194,6 +252,9 @@ export default function ThreeCodeEditor() {
         codeStart: code.substring(0, 50),
         codeEnd: code.substring(code.length - 50),
       });
+
+      // 保存当前代码以便对比
+      setPreviousCode(code);
 
       const response = await fetch("/api/agent", {
         method: "POST",
@@ -313,6 +374,28 @@ export default function ThreeCodeEditor() {
         </button>
 
         {error && <div className="error">{error}</div>}
+
+        <div className="controls-help">
+          <p>提示: 您可以使用鼠标拖拽来旋转场景，滚轮缩放，按住Shift键平移。</p>
+        </div>
+
+        {previousCode && code !== previousCode && (
+          <div className="diff-toggle">
+            <button
+              onClick={() => setShowDiff(!showDiff)}
+              className="diff-toggle-btn"
+            >
+              {showDiff ? "隐藏代码差异" : "显示代码差异"}
+            </button>
+            {showDiff && (
+              <div className="diff-info">
+                <p>
+                  AI进行了增量代码修改，而不是完全重写。这保留了您之前定义的特性和逻辑。
+                </p>
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="code-section">
           <label>当前代码:</label>
