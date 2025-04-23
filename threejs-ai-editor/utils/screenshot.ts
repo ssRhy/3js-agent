@@ -1,5 +1,3 @@
-import html2canvas from "html2canvas";
-
 export async function captureThreeJsCanvas(
   canvasElement: HTMLCanvasElement
 ): Promise<string> {

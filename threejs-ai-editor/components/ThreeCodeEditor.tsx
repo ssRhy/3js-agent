@@ -3,7 +3,6 @@ import * as THREE from "three";
 import { useSceneStore } from "../stores/useSceneStore";
 import { Editor, OnMount } from "@monaco-editor/react";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
-import { captureThreeJsCanvas } from "../utils/screenshot";
 
 export default function ThreeCodeEditor() {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -380,6 +379,13 @@ export default function ThreeCodeEditor() {
       </div>
 
       <div className="preview" ref={containerRef}></div>
+
+      {/* Display code diff when showDiff is true */}
+      {showDiff && diff && (
+        <div className="diff-viewer">
+          <pre>{diff}</pre>
+        </div>
+      )}
     </div>
   );
 }

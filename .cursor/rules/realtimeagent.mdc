@@ -3,62 +3,30 @@ description:
 globs: 
 alwaysApply: true
 ---
-你整理的规则概述了如何在前端和后端协同工作，实现基于历史代码的多轮编辑、实时渲染以及增量更新的场景。以下是简化后的核心流程：
+Agentic Workflow:
+动态决策与推理：每次任务执行时，AI 代理根据用户的输入、历史数据、反馈信息等进行决策，选择合适的工具并生成增量代码。
+
+工具选择：代理能够选择不同的工具来分析图像、生成代码、优化性能等。
+
+记忆管理：代理记住每次任务的历史上下文，确保在多轮任务中能够根据历史数据做出更精确的决策。
+
+多轮修正：通过多轮交互，代理能基于每轮的结果进行自我修正，持续优化代码。
+
+核心流程：Agent 能自动截图自检→多模态诊断→生成修正→前端增量更新，实现真正的 AI 驱动 3D 场景自我优化闭环
 使用的是AZure OpenAI
-核心流程
-LangChain Agent 生成增量代码（diff）：
 
-每次调用 LangChain 的 Agent 时，它根据当前代码和用户意图生成代码差异（patch），而不是全新的代码。
-
-Monaco 编辑器实时修改和高亮：
-
-Monaco 编辑器通过 editor.getValue() 获取当前的代码。
-
-每次接收到新的 diff 后，Monaco 会应用这个差异，并同步更新显示的代码。
-
-diff 应用与 Three.js 场景渲染：
-
-前端接收到 LangChain 生成的 diff 后，会利用 diff-match-patch 合并生成的新代码（patch）到现有的代码中。
-
-使用 eval() 或沙箱方式执行新代码，确保 Three.js 场景的状态不会丢失。
-
-Zustand 状态管理：
-
-Zustand 用来管理 Three.js 场景中的物体状态，确保场景对象、物体的颜色、位置等与用户的输入保持同步。
-
-BufferMemory 管理上下文：
-
-BufferMemory 保留用户的历史意图和代码上下文，确保每次 LangChain agent 生成增量代码时能够基于当前的代码和用户意图来理解修改的目标。
-
-增量逻辑
-每次 LangChain 返回 diff，前端将这个差异合并到现有的代码中，更新后立即渲染 Three.js 场景。
-
-场景不会被清空，而是基于已有内容继续编辑。
-
-前端持久化保存完整的代码（Monaco 的 value），并将这个代码发送到后端，后端再生成新的修改块。
-
-工作流
-用户通过 Monaco 编辑器输入代码，或通过 AI 生成增量修改。
-
-Monaco 将当前代码和用户意图（如「添加旋转动画」）发送到后端。
-
-后端的 LangChainjs0.3 通过结合历史代码和用户意图，返回一个新的 diff（修改块）。
-
-前端使用 diff-match-patch 合并差异，并应用到现有代码中。
-
-前端通过 eval() 执行新代码，实时更新 Three.js 渲染的场景。
-
-文件与组件概述
-useSceneStore.ts：使用 Zustand 管理 Three.js 场景状态，记录物体的状态、执行历史等。
-
-applyDiff.ts：封装 diff-match-patch 工具，用于合并差异并更新代码。
-
-/api/agent：后端接口，接收前端的代码和意图，通过 LangChain 生成增量代码。
-
-简化后的流程
-前后端统一json通信
-前端：接收用户输入并展示代码，发送请求到后端获取 diff，合并并实时渲染 Three.js 场景。
-
-后端：根据用户输入和历史代码，通过 LangChain 生成 diff，返回增量代码给前端。
-
-这种增量编辑的方式，能够使场景在多个步骤中不断扩展和变化，同时避免了每次完全重置场景，提升了用户体验。
+注意：
+返回JSON格式数据
+使用AzureOpenAI和langchainjs0.3的api和函数，接口。
+✅ 每次只传差异（diff），而非完整代码块；
+✅ 用 intent 和 summary 做语义导航/用户可视记录；
+✅ 截图接收：接收前端上传的截图并处理。以使用 HTML5 <canvas> 元素直接进行截图，并通过 toDataURL() 方法将图像转换为 Base64 编码格式。
+✅ 用 intent 和 summary 做语义导航/用户可视记录；
+多模态诊断：使用 GPT-4 Vision 模型分析截图。
+✅ 用 intent 和 summary 做语义导航/用户可视记录；
+生成修正：根据诊断结果生成 Three.js 代码的增量修正。
+✅内存管理：使用 BufferMemory 维护上下文和用户的代码状态。
+✅ 使用 Structured Output Parser 确保返回 JSON，防止 LLM“发散”；
+✅ 用 intent 和 summary 做语义导航/用户可视记录；
+✅ 前端 Zustant 管理 Three.js 对象，不用每次清空场景；
+✅ diff-match-patch 保证代码精准合并，引入jsdiff 等专门的差异化算法，可以显著提高增量修改的稳定性和一致性。结合增强的 diff 输出和标准的增量更新逻辑

@@ -24,21 +24,21 @@ class Logger {
     this.debugMode = process.env.NODE_ENV === "development";
   }
 
-  info(message: string, data?: any): void {
+  info(message: string, data?: object): void {
     console.log(`[${this.prefix}] INFO: ${message}`, data ? data : "");
   }
 
-  error(message: string, error?: any): void {
+  error(message: string, error?: Error): void {
     console.error(`[${this.prefix}] ERROR: ${message}`, error ? error : "");
   }
 
-  debug(message: string, data?: any): void {
+  debug(message: string, data?: object): void {
     if (this.debugMode) {
       console.debug(`[${this.prefix}] DEBUG: ${message}`, data ? data : "");
     }
   }
 
-  warn(message: string, data?: any): void {
+  warn(message: string, data?: object): void {
     console.warn(`[${this.prefix}] WARN: ${message}`, data ? data : "");
   }
 
@@ -173,9 +173,12 @@ const parseLanguageTool = new DynamicStructuredTool({
         responseLength: response.content.length,
       });
       return response.content;
-    } catch (error) {
-      logger.error("parseLanguage工具出错", error);
-      throw error;
+    } catch (error: unknown) {
+      logger.error(
+        "parseLanguage工具出错",
+        error instanceof Error ? error : new Error(String(error))
+      );
+      throw error instanceof Error ? error : new Error(String(error));
     }
   },
 });
@@ -212,9 +215,12 @@ const analyzeImageTool = new DynamicStructuredTool({
 
       // 返回处理结果
       return response.content;
-    } catch (error) {
-      logger.error("图像分析出错", error);
-      throw error;
+    } catch (error: unknown) {
+      logger.error(
+        "图像分析出错",
+        error instanceof Error ? error : new Error(String(error))
+      );
+      throw error instanceof Error ? error : new Error(String(error));
     }
   },
 });
@@ -232,6 +238,11 @@ const analyzeScreenshotTool = new DynamicStructuredTool({
     logger.info("========== 开始分析截图 ==========");
     logger.info(`用户提示: "${userPrompt}"`);
 
+    // 记录代码信息
+    if (currentCode) {
+      logger.debug(`分析当前代码: 长度 ${currentCode.length}字符`);
+    }
+
     // 保存图像截图到临时文件以便查看（可选）
     const imageDataSize = imageBase64.length;
     logger.info(`图像数据大小: ${(imageDataSize / 1024).toFixed(2)} KB`);
@@ -248,11 +259,10 @@ const analyzeScreenshotTool = new DynamicStructuredTool({
     const userPromptText = `分析以下Three.js场景截图，${
       userPrompt ? `考虑用户的需求: "${userPrompt}"，` : ""
     }识别出以下内容：
-1. 场景中存在哪些3D对象？
-2. 光照和阴影是否正确？
-3. 材质和纹理是否正确应用？
-4. 是否有明显的渲染错误或性能问题？
-5. 提出具体的代码级改进或修复建议。`;
+1.模型是否符合生活常识和精细程度
+2. 材质和纹理是否正确应用？
+3.如果物体为黑色，一般就是纹理和材质选择了本地的，导致渲染失败
+4. 提出具体的代码级改进或修复建议。`;
 
     try {
       // 在调用AI前记录
@@ -297,12 +307,18 @@ const analyzeScreenshotTool = new DynamicStructuredTool({
 
         logger.info(`截图已保存到: ${imagePath}`);
       } catch (saveError) {
-        logger.warn("保存调试截图失败", saveError);
+        logger.warn(
+          "保存调试截图失败",
+          saveError instanceof Error ? saveError : new Error(String(saveError))
+        );
       }
 
       return analysisResult;
     } catch (error) {
-      logger.error("图像分析错误:", error);
+      logger.warn(
+        "图像分析错误:",
+        error instanceof Error ? error : new Error(String(error))
+      );
       return "图像分析失败。请确保提供有效的图像并检查API密钥和设置。";
     }
   },
@@ -351,6 +367,7 @@ ${currentCode}
 2. 遵循Three.js最佳实践
 3. 保持原始代码的基本结构
 4. 有效地实现用户需求
+5. 使用在线cdn纹理或者贴图，不要使用本地纹理jpg和gtlf
 特别重要：如果提供了场景分析，请确保根据分析结果来修改代码，解决分析中指出的问题。
 
 同时，请生成一个diff格式的补丁，显示与原始代码的差异。
@@ -410,7 +427,13 @@ ${currentCode}
           const extractedCode = extractCodeFromMessage(
             response.content as string
           );
-          let result: any = {};
+          let result: {
+            directCode?: string;
+            summary?: string;
+            diff?: string;
+            patch?: string;
+            [key: string]: unknown;
+          } = {};
 
           if (typeof extractedCode === "string") {
             result = {
@@ -445,15 +468,21 @@ ${currentCode}
 
           return result;
         }
-      } catch (error) {
-        logger.error("解析generateCode结果失败", error);
+      } catch (error: unknown) {
+        logger.error(
+          "解析generateCode结果失败",
+          error instanceof Error ? error : new Error(String(error))
+        );
         return {
           directCode: currentCode,
           summary: "代码生成失败，保留原有代码",
         };
       }
-    } catch (error) {
-      logger.error("generateCode工具出错", error);
+    } catch (error: unknown) {
+      logger.error(
+        "generateCode工具出错",
+        error instanceof Error ? error : new Error(String(error))
+      );
       throw error;
     }
   },
@@ -494,8 +523,8 @@ const setupAgent = async () => {
     new MessagesPlaceholder("agent_scratchpad"),
   ]);
 
-  // 创建输出解析器
-  const outputParser = StructuredOutputParser.fromZodSchema(codeOutputSchema);
+  // 创建输出解析器 - 需要保留但当前未使用
+  StructuredOutputParser.fromZodSchema(codeOutputSchema);
   logger.debug("创建输出解析器");
 
   // 创建agent
@@ -642,7 +671,7 @@ export default async function handler(
         // 2. 否则，使用Agent进行推理和工具选择
         logger.info("使用Agent推理路径");
 
-        const input: Record<string, any> = {
+        const input: { input: string; currentCode: string } = {
           input: prompt,
           currentCode: currentCode || initialCode,
         };
@@ -657,7 +686,7 @@ export default async function handler(
             response = JSON.parse(result.output);
             logger.debug("成功解析JSON输出");
           } catch (parseError) {
-            logger.warn("解析JSON失败，尝试提取代码", parseError);
+            logger.warn("解析JSON失败，尝试提取代码", parseError as Error);
 
             // 如果不是JSON，检查是否包含代码块
             const cleanCode = extractCodeFromMessage(result.output);
@@ -755,8 +784,7 @@ export default async function handler(
         }
       }
 
-      logger.info("请求处理完成", {
-        processingTimeMs: processingTime,
+      logger.info(`请求处理完成 (耗时: ${processingTime}ms)`, {
         responseType: typeof response,
         hasDirectCode: !!response.directCode,
         hasDiff: !!response.diff,
@@ -765,12 +793,14 @@ export default async function handler(
 
       // 返回生成的代码和摘要
       return res.status(200).json(response);
-    } catch (error: any) {
+    } catch (error: unknown) {
       const processingTime = Date.now() - startTime;
-      logger.error("处理请求时出错", {
-        processingTimeMs: processingTime,
-        errorMessage: error.message,
-      });
+      logger.error(
+        `处理请求时出错: ${
+          error instanceof Error ? error.message : "未知错误"
+        } (耗时: ${processingTime}ms)`,
+        error instanceof Error ? error : new Error(String(error))
+      );
 
       return res.status(500).json({
         error: "处理请求失败",

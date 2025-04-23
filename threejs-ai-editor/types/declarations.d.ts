@@ -18,9 +18,14 @@ declare module "diff" {
     patch: ParsedDiff
   ): string | [string, boolean];
 
-  export function diffLines(codeToUse: any, newCode: string) {
-    throw new Error("Function not implemented.");
-  }
+  export function diffLines(
+    originalCode: string,
+    newCode: string
+  ): Array<{
+    value: string;
+    added?: boolean;
+    removed?: boolean;
+  }>;
 }
 
 // 添加monaco命名空间声明
