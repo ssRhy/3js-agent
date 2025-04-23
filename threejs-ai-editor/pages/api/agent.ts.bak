@@ -1,330 +1,526 @@
 import { NextApiRequest, NextApiResponse } from "next";
 import { AzureChatOpenAI } from "@langchain/openai";
 import { BufferMemory } from "langchain/memory";
-import { createReactAgent, AgentExecutor } from "langchain/agents";
-import { DynamicTool } from "@langchain/core/tools";
-import { JsonOutputParser } from "@langchain/core/output_parsers";
-import { ChatPromptTemplate } from "@langchain/core/prompts";
+import { DynamicStructuredTool } from "@langchain/core/tools";
+import { AgentExecutor, createOpenAIToolsAgent } from "langchain/agents";
+import { PromptTemplate } from "@langchain/core/prompts";
+import {
+  ChatPromptTemplate,
+  MessagesPlaceholder,
+  SystemMessagePromptTemplate,
+  HumanMessagePromptTemplate,
+} from "@langchain/core/prompts";
+import { StructuredOutputParser } from "langchain/output_parsers";
+import { RunnableSequence } from "@langchain/core/runnables";
+import { z } from "zod";
 
 // 初始脚本模板
 const initialCode = `function setup(scene, camera, renderer) {
-  // 初始示例：一个简单的立方体
   const geometry = new THREE.BoxGeometry();
   const material = new THREE.MeshBasicMaterial({ color: 0x44aa88 });
   const cube = new THREE.Mesh(geometry, material);
   scene.add(cube);
 }`;
 
-// 后端内存：存储 currentCode，仅在内存中持久化
+// 定义用于结构化输出的schema
+const codeOutputSchema = z.object({
+  directCode: z.string().describe("完整的Three.js代码"),
+  summary: z.string().describe("本次修改的摘要"),
+  diff: z.string().optional().describe("代码的差异部分，使用diff格式"),
+});
+
+// 后端内存：存储 currentCode
 const memory = new BufferMemory({
-  memoryKey: "currentCode",
+  memoryKey: "chatHistory",
   inputKey: "input",
   returnMessages: false,
 });
 
-// Azure OpenAI model setup if needed
+// Azure OpenAI model setup
 const azureModel = new AzureChatOpenAI({
   model: "gpt-4o",
   temperature: 0,
   azureOpenAIApiKey: process.env.AZURE_OPENAI_API_KEY,
   azureOpenAIApiDeploymentName: process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME,
-  azureOpenAIApiVersion: "2023-03-15-preview", // 使用较旧但更稳定的版本
+  azureOpenAIApiVersion: "2024-02-15-preview", // 更新到支持图像的版本
   azureOpenAIApiInstanceName: process.env.AZURE_OPENAI_API_INSTANCE_NAME,
   azureOpenAIEndpoint: process.env.AZURE_OPENAI_API_ENDPOINT,
+  maxTokens: 4000,
 });
 
-// 创建解析用户输入的工具
-interface ParsedUserIntent {
-  intention: string;
-  threeJsFeatures: string[];
-  technicalDescription: string;
-  complexity: "simple" | "moderate" | "complex";
+// 定义提取代码结果的类型
+interface CodeResult {
+  type: string;
+  content: string;
 }
 
-// 创建解析用户意图的工具
-const parseUserIntentTool = new DynamicTool({
-  name: "parse_user_intent",
-  description: "解析用户的意图并提供对Three.js实现的详细技术描述",
-  func: async (input: string) => {
-    try {
-      // 创建解析器来处理结构化数据
-      const parser = new JsonOutputParser<ParsedUserIntent>();
+// 提取代码块的函数
+function extractCodeFromMessage(message: string): string | CodeResult {
+  // 尝试提取代码块
+  const codeBlockRegex = /```(?:js|javascript)?\s*([\s\S]*?)\s*```/;
+  const match = message.match(codeBlockRegex);
 
-      // 创建提示模板
-      const promptTemplate = ChatPromptTemplate.fromTemplate(
-        `你是一个Three.js专家，请分析用户的需求拆分描述，描述生成物体的详细形状，并返回一个JSON对象，包含以下字段:
-        用户需求: "{input}"
-        
-        请返回一个JSON对象，包含以下字段:
-        - intention: 用户意图的描述
-        - threeJsFeatures: 需要用到的Three.js特性列表
-        
-      
-        
-        请确保返回格式正确的JSON，不要有额外的文本或解释。`
-      );
+  if (match && match[1]) {
+    return match[1].trim();
+  }
 
-      // 创建链
-      const chain = promptTemplate.pipe(azureModel).pipe(parser);
+  // 如果没有代码块，尝试提取function setup部分
+  const setupRegex = /(function\s+setup\s*\([^)]*\)\s*\{[\s\S]*?\})/;
+  const setupMatch = message.match(setupRegex);
 
-      // 执行链
-      const result = await chain.invoke({ input });
-      console.log("用户意图解析结果:", result);
-      return JSON.stringify(result);
-    } catch (error) {
-      console.error("解析用户意图时出错:", error);
-      throw error;
+  if (setupMatch && setupMatch[1]) {
+    return setupMatch[1].trim();
+  }
+
+  // 检查是否包含diff标记，如果有，这可能是diff格式的回复
+  if (message.includes("```diff")) {
+    // 处理diff格式，这里仅作简单处理，实际应用可能需要更复杂的diff解析
+    const diffBlockRegex = /```diff\s*([\s\S]*?)\s*```/;
+    const diffMatch = message.match(diffBlockRegex);
+
+    if (diffMatch && diffMatch[1]) {
+      return {
+        type: "diff",
+        content: diffMatch[1].trim(),
+      };
     }
+  }
+
+  return message; // 如果无法提取，返回原始消息
+}
+
+// 创建语言解析工具
+const parseLanguageTool = new DynamicStructuredTool({
+  name: "parseLanguage",
+  description: "分析用户的自然语言指令，提取三维开发需求",
+  schema: z.object({
+    userInput: z.string().describe("用户的原始自然语言输入"),
+  }),
+  func: async ({ userInput }) => {
+    const template = `你是Three.js需求分析专家。请对以下用户输入进行分析，提取出所有Three.js相关的开发需求并组织成结构化格式。
+
+用户输入: "${userInput}"
+
+请输出需求分析：
+1. 主要场景元素：
+2. 视觉效果需求：
+3. 动画和交互要求：
+4. 技术约束和性能考虑：
+`;
+
+    const result = await azureModel.invoke(template);
+    return String(result.content);
   },
 });
 
-// 直接生成代码的函数
-async function generateCode(technicalDescription: string, currentCode: string) {
-  try {
-    // 使用更直接的方式请求代码修改，明确要求完整的、可执行的代码
-    const template = `你是一个Three.js代码生成专家。请基于以下当前代码：
+// 创建图像分析工具 - 由Agent主动调用而非用户提供
+const analyzeImageTool = new DynamicStructuredTool({
+  name: "analyzeImage",
+  description:
+    "对Three.js场景进行截图并分析，识别场景元素和潜在问题。当需要了解当前渲染的场景状态时使用此工具。",
+  schema: z.object({
+    currentCode: z.string().describe("当前执行的Three.js代码"),
+    userPrompt: z
+      .string()
+      .optional()
+      .describe("用户的原始指令，可用于理解分析重点"),
+  }),
+  func: async ({ currentCode, userPrompt }) => {
+    // 在实际实现中，此处会使用Canvas API获取当前Three.js渲染画面
+    // 由于API中无法直接访问前端渲染结果，这里我们假设图像已经由前端传递
+    // 这部分将由前端Component处理并传递给API
+
+    const template = `你是Three.js视觉分析专家。请分析当前场景状态，识别场景中的元素并指出任何潜在的问题。
+
+基于以下代码创建的场景:
 \`\`\`js
 ${currentCode}
 \`\`\`
 
-根据以下技术描述：
-"${technicalDescription}"
+${userPrompt ? `用户需求: ${userPrompt}` : ""}
 
-生成一个新的、完整的setup函数实现。
+请分析以下几个方面:
+1. 根据代码，场景中应该存在哪些3D对象？
+2. 光照和阴影设置是否合理？
+3. 材质和纹理是否正确应用？
+4. 是否可能存在渲染错误或性能问题？
+5. 提出改进或修复建议。`;
 
-你必须给出完整的可执行代码，包括完整的function setup(scene, camera, renderer) {...}函数定义。
-代码必须使用THREE库，必须能直接运行，不要添加任何注释或解释。
-
-只返回代码，不要返回任何解释、文档或markdown格式。`;
-
-    const result = await azureModel.invoke(template);
-    const responseContent = result.content;
-
-    // 提取代码
-    let newCode = "";
-    if (typeof responseContent === "string") {
-      // 尝试提取代码块
-      const codeMatch = responseContent.match(
-        /```(?:js|javascript)?\s*([\s\S]*?)```/
-      );
-      if (codeMatch && codeMatch[1]) {
-        newCode = codeMatch[1].trim();
-      } else if (responseContent.includes("function setup")) {
-        // 如果没有代码块标记但包含函数定义
-        newCode = responseContent.trim();
-      } else {
-        // 基本文本清理
-        newCode = responseContent.trim();
-        // 确保代码是setup函数定义
-        if (!newCode.startsWith("function setup")) {
-          newCode = `function setup(scene, camera, renderer) {
-${newCode}
-}`;
-        }
-      }
-    }
-
-    // 检查代码是否有变化
-    if (newCode === currentCode) {
-      console.log("生成的代码与原代码相同");
-      return {
-        unchanged: true,
-        message: "生成的代码与原代码相同",
-        code: newCode,
-      };
-    }
-
-    // 记录完整的新代码
-    console.log("生成的新代码:", newCode);
-
-    // 更新后端记忆
-    await memory.saveContext(
-      { input: technicalDescription },
-      { currentCode: newCode }
-    );
-    console.log("已更新内存中的代码");
-
-    // 直接返回完整代码
-    return {
-      directCode: newCode,
-      message: "已生成新代码",
-    };
-  } catch (error) {
-    console.error("生成Three.js代码时出错:", error);
-    throw error;
-  }
-}
-
-// 创建代码生成工具 - 这是之前缺少的定义
-const generateCodeTool = new DynamicTool({
-  name: "generate_threejs_code",
-  description: "基于技术描述和当前代码生成Three.js代码",
-  func: async (input: string) => {
     try {
-      const { technicalDescription, currentCode } = JSON.parse(input);
-
-      // 获取当前代码，如果没有提供则从内存中加载
-      let codeToUse = currentCode;
-      if (!codeToUse) {
-        const memoryVars = await memory.loadMemoryVariables({});
-        codeToUse = memoryVars.currentCode || initialCode;
-      }
-
-      const result = await generateCode(technicalDescription, codeToUse);
-      return JSON.stringify(result);
+      // 由于API无法直接获取渲染结果，我们基于代码分析来模拟视觉分析
+      const result = await azureModel.invoke(template);
+      return String(result.content);
     } catch (error) {
-      console.error("生成代码工具出错:", error);
-      throw error;
+      console.error("场景分析错误:", error);
+      return "无法完成场景分析。请确保代码有效并检查API设置。";
     }
   },
 });
 
-// 创建代理
-// 创建代理
-// 创建代理
-async function createAgent() {
-  const tools = [parseUserIntentTool, generateCodeTool];
+// 实际的图像分析工具 - 用于前端直接传递截图的情况
+const analyzeScreenshotTool = new DynamicStructuredTool({
+  name: "analyzeScreenshot",
+  description: "分析Three.js场景的截图，识别场景元素和潜在问题",
+  schema: z.object({
+    imageBase64: z.string().describe("场景截图的base64编码"),
+    currentCode: z.string().optional().describe("当前Three.js代码"),
+    userPrompt: z.string().optional().describe("用户的原始指令"),
+  }),
+  func: async ({ imageBase64, currentCode, userPrompt }) => {
+    if (!imageBase64.startsWith("data:image")) {
+      throw new Error("无效的图像格式");
+    }
 
-  try {
-    // 正确创建ReAct agent的提示，包含所有必需的变量
-    const prompt = ChatPromptTemplate.fromTemplate(
-      `你是一个Three.js代码生成助手，负责将用户的需求转换为可执行的Three.js代码。
-      你将按照以下步骤工作：
-      1. 首先，使用parse_user_intent工具解析用户需求并获取技术细节
-      2. 然后，使用generate_threejs_code工具生成对应的Three.js代码
-      3. 最后，返回完整代码给用户
+    // 处理base64图像数据
+    const base64Image = imageBase64.replace(/^data:image\/\w+;base64,/, "");
+    const buffer = Buffer.from(base64Image, "base64");
 
-      可用工具: {tools}
-      工具名称: {tool_names}
+    const systemPrompt =
+      "你是一个Three.js视觉分析专家，能够分析3D场景并提供具体的改进建议。";
+    const userPromptText = `分析以下Three.js场景截图，${
+      userPrompt ? `考虑用户的需求: "${userPrompt}"，` : ""
+    }识别出以下内容：
+1. 场景中存在哪些3D对象？
+2. 光照和阴影是否正确？
+3. 材质和纹理是否正确应用？
+4. 是否有明显的渲染错误或性能问题？
+5. 提出具体的代码级改进或修复建议。`;
 
-      用户输入: {input}
+    try {
+      const result = await azureModel.invoke([
+        { role: "system", content: systemPrompt },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: userPromptText },
+            {
+              type: "image_url",
+              image_url: { url: `data:image/png;base64,${base64Image}` },
+            },
+          ],
+        },
+      ]);
 
-      {agent_scratchpad}`
-    );
+      return String(result.content);
+    } catch (error) {
+      console.error("图像分析错误:", error);
+      return "图像分析失败。请确保提供有效的图像并检查API密钥和设置。";
+    }
+  },
+});
 
-    // 创建 Agent
-    const agent = await createReactAgent({
-      llm: azureModel,
-      tools: tools,
-      prompt: prompt,
-    });
+// 创建代码生成工具
+const generateCodeTool = new DynamicStructuredTool({
+  name: "generateCode",
+  description: "基于用户需求和当前代码生成三维场景代码",
+  schema: z.object({
+    parsedIntent: z.string().describe("从parseLanguage工具获取的用户意图"),
+    imageAnalysis: z
+      .string()
+      .optional()
+      .describe("从analyzeImage或analyzeScreenshot工具获取的图像分析结果"),
+    currentCode: z.string().optional().describe("当前的Three.js代码"),
+  }),
+  func: async ({ parsedIntent, imageAnalysis, currentCode }) => {
+    let codeToUse =
+      currentCode ||
+      (await memory.loadMemoryVariables({})).currentCode ||
+      initialCode;
 
-    // 创建执行器
-    const executor = new AgentExecutor({
-      agent,
-      tools,
-      verbose: true,
-    });
+    let analysisContent = "";
+    if (imageAnalysis) {
+      analysisContent = `
+图像分析结果:
+${imageAnalysis}
 
-    return executor;
-  } catch (error) {
-    console.error("创建Agent时出错:", error);
-    throw error;
-  }
-}
-// Agent实例缓存
+基于上述图像分析，`;
+    }
+
+    const template = `你是一个Three.js专家，基于以下当前代码：
+\`\`\`js
+${codeToUse}
+\`\`\`
+
+根据以下需求：
+"${parsedIntent}"
+${analysisContent}
+
+增量修改（diff）思维，保留尽可能多的原始代码
+遵循原始代码的风格和组织方式
+避免重写整个函数或大段代码
+请对当前代码进行增量修改，保留现有代码结构并增加必要的代码部分。
+重要：请返回完整的代码，不要只返回差异部分。确保代码能够完整执行且不缺少关键元素：
+`;
+
+    const result = await azureModel.invoke(template);
+    const responseContent = String(result.content);
+
+    // 尝试从回复中提取干净的代码
+    const cleanCode = extractCodeFromMessage(responseContent);
+
+    // 如果提取出的是diff格式，则将diff应用到原始代码上
+    if (typeof cleanCode === "object" && cleanCode.type === "diff") {
+      // 由于diff可能导致代码不完整，我们在这里处理完整代码
+      try {
+        // 尝试应用diff来获取完整代码
+        const diffLines = cleanCode.content.split("\n");
+        let modifiedCode = "";
+
+        // 基于diff手动构建完整代码
+        for (const line of diffLines) {
+          if (line.startsWith("+") && !line.startsWith("+++")) {
+            // 添加新行
+            modifiedCode += line.substring(1) + "\n";
+          } else if (!line.startsWith("-") && !line.startsWith("---")) {
+            // 保留未修改的行
+            if (line.startsWith(" ")) {
+              modifiedCode += line.substring(1) + "\n";
+            } else {
+              modifiedCode += line + "\n";
+            }
+          }
+        }
+
+        // 如果生成的代码不是完整的函数，则确保它是
+        if (modifiedCode && !modifiedCode.startsWith("function setup")) {
+          // 尝试将diff转换为完整代码
+          await memory.saveContext(
+            { input: parsedIntent },
+            { currentCode: codeToUse }
+          );
+          return {
+            directCode: codeToUse, // 返回原始代码作为基础
+            patch: cleanCode.content, // 同时返回diff
+            summary: "生成了差异代码，但需要完整应用",
+          };
+        }
+
+        // 如果构建了有效的完整代码
+        if (modifiedCode) {
+          await memory.saveContext(
+            { input: parsedIntent },
+            { currentCode: modifiedCode }
+          );
+          return {
+            directCode: modifiedCode,
+            summary: "基于差异生成了完整代码",
+            diff: cleanCode.content,
+          };
+        }
+      } catch (diffError) {
+        console.error("处理diff时出错:", diffError);
+      }
+
+      // 如果diff处理失败，返回原始diff
+      await memory.saveContext(
+        { input: parsedIntent },
+        { currentCode: codeToUse }
+      );
+      return {
+        directCode: codeToUse,
+        patch: cleanCode.content,
+        summary: "生成了增量修改代码（diff格式）",
+        diff: cleanCode.content,
+      };
+    }
+
+    // 检查是否成功提取了代码
+    let newCode = typeof cleanCode === "string" ? cleanCode : responseContent;
+
+    // 确保代码以function setup开头，且是完整的函数
+    if (!newCode.startsWith("function setup")) {
+      // 尝试从回复中找到完整的function setup定义
+      const setupFnMatch = newCode.match(
+        /(function\s+setup\s*\([^)]*\)\s*\{[\s\S]*?\})/
+      );
+      if (setupFnMatch) {
+        newCode = setupFnMatch[1];
+      } else {
+        // 如果找不到完整函数，使用模板确保参数正确
+        newCode = `function setup(scene, camera, renderer, THREE, OrbitControls) {
+${newCode}
+}`;
+      }
+    }
+
+    // 验证代码是否包含必要部分
+    if (!newCode.includes("scene.add") && codeToUse.includes("scene.add")) {
+      // 如果新代码缺少场景添加，可能不完整，尝试保留原来的scene.add
+      const sceneAddMatch = codeToUse.match(/scene\.add\([^;]*\);/g);
+      if (sceneAddMatch) {
+        // 确保关键的scene.add语句被保留
+        if (!newCode.endsWith("}")) {
+          newCode = newCode.substring(0, newCode.lastIndexOf("}"));
+          newCode += "  " + sceneAddMatch.join("\n  ") + "\n}";
+        } else {
+          newCode = newCode.substring(0, newCode.lastIndexOf("}"));
+          newCode += "  " + sceneAddMatch.join("\n  ") + "\n}";
+        }
+      }
+    }
+
+    await memory.saveContext({ input: parsedIntent }, { currentCode: newCode });
+    return {
+      directCode: newCode,
+      summary: "生成了完整的代码",
+      diff: "", // 没有差异信息
+    };
+  },
+});
+
+// 设置Agent
+const setupAgent = async () => {
+  // 定义工具集
+  const tools = [
+    parseLanguageTool,
+    analyzeImageTool,
+    analyzeScreenshotTool,
+    generateCodeTool,
+  ];
+
+  // 创建正确的提示模板，包含agent_scratchpad
+  const systemMessage = SystemMessagePromptTemplate.fromTemplate(
+    `你是一个先进的Three.js AI助手，能够理解、生成和优化Three.js代码。
+你可以根据用户需求动态选择最合适的工具：
+- 如果用户提供了自然语言需求，使用parseLanguage工具进行分析
+- 如果需要分析当前场景的视觉状态，系统会自动提供场景截图，你可使用analyzeScreenshot工具分析图像
+- 根据分析结果和当前代码，使用generateCode工具生成或修改代码
+
+每次生成代码时，请确保：
+1. 保持渐进式修改，不要完全重写用户的代码
+2. 返回完整、可执行的代码
+3. 保持代码风格一致性
+4. 提供修改摘要
+
+请以结构化JSON格式返回结果，包含directCode（完整代码）、summary（修改摘要）和可选的diff（代码差异）。`
+  );
+
+  const promptTemplate = ChatPromptTemplate.fromMessages([
+    systemMessage,
+    HumanMessagePromptTemplate.fromTemplate("{input}"),
+    new MessagesPlaceholder("agent_scratchpad"),
+  ]);
+
+  // 创建输出解析器
+  const outputParser = StructuredOutputParser.fromZodSchema(codeOutputSchema);
+
+  // 创建agent
+  const agent = await createOpenAIToolsAgent({
+    llm: azureModel,
+    tools: tools,
+    prompt: promptTemplate,
+  });
+
+  // 创建agent执行器
+  return new AgentExecutor({
+    agent,
+    tools,
+    verbose: process.env.NODE_ENV === "development",
+    maxIterations: 3, // 限制最大迭代次数
+  });
+};
+
+// 缓存agent实例
 let agentExecutor: AgentExecutor | null = null;
 
+// API 路由处理
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
   if (req.method === "POST") {
-    const { prompt, currentCode } = req.body;
+    const { prompt, image, currentCode } = req.body;
     if (!prompt) return res.status(400).json({ error: "No prompt provided" });
 
     try {
-      console.log("处理前端请求:", { prompt, hasCurrentCode: !!currentCode });
-
-      // 检查环境变量是否正确配置
-      if (
-        !process.env.AZURE_OPENAI_API_KEY ||
-        !process.env.AZURE_OPENAI_API_ENDPOINT
-      ) {
-        console.error("Azure OpenAI API 环境变量未配置");
-        return res.status(500).json({ error: "Azure OpenAI API 配置缺失" });
-      }
-
-      // 如果请求中有代码，更新内存
-      if (currentCode) {
-        await memory.saveContext({ input: prompt }, { currentCode });
-        console.log("已更新内存中的代码");
-      }
-
-      // 创建或获取Agent
+      // 初始化agent（如果未初始化）
       if (!agentExecutor) {
-        agentExecutor = await createAgent();
+        agentExecutor = await setupAgent();
       }
 
-      // 使用Agent处理用户输入
-      const result = await agentExecutor.invoke({
-        input: prompt,
-        currentCode:
-          currentCode ||
-          (
-            await memory.loadMemoryVariables({})
-          ).currentCode ||
-          initialCode,
-      });
+      // 两种不同的处理路径：
+      // 1. 如果提供了图像，直接使用analyzeScreenshotTool
+      if (image) {
+        // 直接分析图像并生成代码
+        const analysisResult = await analyzeScreenshotTool.invoke({
+          imageBase64: image,
+          currentCode: currentCode || initialCode,
+          userPrompt: prompt,
+        });
 
-      // 解析Agent返回的结果
-      let finalResult;
-      try {
-        // 尝试查找返回结果中的代码 - 可能是JSON字符串
-        const responseText = result.output;
+        // 生成代码
+        const codeResult = await generateCodeTool.invoke({
+          parsedIntent: prompt,
+          imageAnalysis: analysisResult,
+          currentCode: currentCode || initialCode,
+        });
 
-        // 首先尝试解析为JSON
-        try {
-          const jsonResult = JSON.parse(responseText);
-          if (jsonResult.directCode) {
-            finalResult = jsonResult;
-          } else {
-            finalResult = {
-              directCode: jsonResult.code || responseText,
-              message: jsonResult.message || "代码已生成",
-            };
-          }
-        } catch {
-          // 如果不是JSON，尝试提取代码块
-          const codeMatch = responseText.match(
-            /```(?:js|javascript)?\s*([\s\S]*?)```/
-          );
-          if (codeMatch && codeMatch[1]) {
-            finalResult = {
-              directCode: codeMatch[1].trim(),
-              message: "代码已生成",
-            };
-          } else if (responseText.includes("function setup")) {
-            // 如果找到了function setup定义
-            finalResult = {
-              directCode: responseText,
-              message: "代码已生成",
-            };
-          } else {
-            // 返回原始结果
-            finalResult = {
-              directCode: responseText,
-              message: "原始返回结果",
-            };
-          }
-        }
-      } catch (error) {
-        console.error("解析Agent结果时出错:", error);
-        finalResult = {
-          error: "解析结果失败",
-          rawOutput: result.output,
+        return res.status(200).json(codeResult);
+      }
+      // 2. 否则，使用Agent进行推理和工具选择
+      else {
+        // 构建输入
+        const input: Record<string, any> = {
+          input: prompt,
+          currentCode: currentCode || initialCode,
         };
-      }
 
-      return res.status(200).json(finalResult);
-    } catch (error) {
+        // 执行agent
+        const result = await agentExecutor.invoke(input);
+
+        // 解析返回结果
+        let response;
+
+        if (typeof result.output === "string") {
+          // 尝试将输出解析为JSON
+          try {
+            response = JSON.parse(result.output);
+          } catch (parseError) {
+            // 如果不是JSON，检查是否包含代码块
+            const cleanCode = extractCodeFromMessage(result.output);
+
+            if (typeof cleanCode === "string") {
+              response = {
+                directCode: cleanCode,
+                summary: "代码已生成",
+              };
+            } else if (
+              typeof cleanCode === "object" &&
+              cleanCode.type === "diff"
+            ) {
+              response = {
+                patch: cleanCode.content,
+                summary: "生成了增量修改代码",
+              };
+            } else {
+              // 没有找到代码，返回错误
+              throw new Error("Agent未能生成有效代码");
+            }
+          }
+        } else {
+          // 直接返回输出（已经是对象）
+          response = result.output;
+        }
+
+        // 如果有directCode，确保保存到记忆中
+        if (response.directCode) {
+          await memory.saveContext(
+            { input: prompt },
+            { currentCode: response.directCode }
+          );
+        }
+
+        // 返回生成的代码和摘要
+        return res.status(200).json(response);
+      }
+    } catch (error: any) {
       console.error("处理请求时出错:", error);
-      res.status(500).json({
+      return res.status(500).json({
         error: "处理请求失败",
-        message: error instanceof Error ? error.message : String(error),
+        message: error instanceof Error ? error.message : "未知错误",
       });
     }
   } else {
-    res.status(405).end();
+    res.status(405).send("Method Not Allowed");
   }
 }
