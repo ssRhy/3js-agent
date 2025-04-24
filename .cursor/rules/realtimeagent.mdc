@@ -3,31 +3,39 @@ description:
 globs: 
 alwaysApply: true
 ---
-Agentic Workflow:
-动态决策与推理：每次任务执行时，AI 代理根据用户的输入、历史数据、反馈信息等进行决策，选择合适的工具并生成增量代码。
 
-工具选择：代理能够选择不同的工具来分析图像、生成代码、优化性能等。
 
-记忆管理：代理记住每次任务的历史上下文，确保在多轮任务中能够根据历史数据做出更精确的决策。
+下面给出一个基于 LangChainJS0.3和Nextjs 的 “循环式（loop-based）LLM Agentic workflow” 实现思路与代码示例。Agent 能自动截图自检→多模态诊断→生成修正→前端增量更新，实现真正的 AI 驱动 threejs 的3D 场景自我优化闭环
 
-多轮修正：通过多轮交互，代理能基于每轮的结果进行自我修正，持续优化代码。
+前端使用的是monaco：，结合 Three.js 和 Monaco 编辑器
+使用的是AZure OpenAI核心思路是：
 
-核心流程：Agent 能自动截图自检→多模态诊断→生成修正→前端增量更新，实现真正的 AI 驱动 3D 场景自我优化闭环
-使用的是AZure OpenAI
+系统提示（system prompt）静态加载，利用提示缓存；
+
+定义工具（functions），比如 lint、diff、apply_patch、run_tests 等；
+
+创建 AgentExecutor，设置 maxIterations，让模型在每次调用工具后带入新上下文；
+
+循环执行：Agent 会自动计划调用 functions，执行本地操作并将 <tool_result> 注入对话；
+
+终止条件：当 lint/test 全部通过或达到迭代上限时自动退出
 
 注意：
 返回JSON格式数据
 使用AzureOpenAI和langchainjs0.3的api和函数，接口。
-✅ 每次只传差异（diff），而非完整代码块；
-✅ 用 intent 和 summary 做语义导航/用户可视记录；
-✅ 截图接收：用户输入请求，Agent分析请求，发现需要了解当前场景，调用requestScreenshot工具
-前端收到截图请求响应，设置shouldCaptureNext标记，前端自动截图，将截图数据发送给API，Agent分析截图并生成代码修改，这种方式让Agent能够自主决定何时需要截图，而不是强制用户每次都上传截图。并通过 toDataURL() 方法将图像转换为 Base64 编码格式。
-✅ 用 intent 和 summary 做语义导航/用户可视记录；
-多模态诊断：使用 GPT-4 Vision 模型分析截图。
-✅ 用 intent 和 summary 做语义导航/用户可视记录；
-生成修正：根据诊断结果生成 Three.js 代码的增量修正。
-✅内存管理：使用 BufferMemory 维护上下文和用户的代码状态。
-✅ 使用 Structured Output Parser 确保返回 JSON，防止 LLM“发散”；
-✅ 用 intent 和 summary 做语义导航/用户可视记录；
-✅ 前端 Zustant 管理 Three.js 对象，不用每次清空场景；
-✅ diff-match-patch 保证代码精准合并，引入jsdiff 等专门的差异化算法，可以显著提高增量修改的稳定性和一致性。结合增强的 diff 输出和标准的增量更新逻辑
+
+
+##
+工具定义（lint、diff、apply_patch）
+在这里，我们使用 Tool 类来封装每个工具（lint、diff、apply_patch）。这些工具会被 LangChain 调用并执行相应的操作：
+lint：执行 ESLint 对代码进行检查并返回结构化的错误、警告信息。
+diff：根据原始代码与更新代码生成 diff 补丁。
+apply_patch：应用 diff 补丁，并返回更新后的代码。
+
+
+##
+LangChain AgentExecutor
+使用 initializeAgentExecutorWithOptions 创建 executor，其中包含：
+tools：传入需要的工具（lint、diff、apply_patch）。
+maxIterations：最多迭代次数，避免无限循环。
+

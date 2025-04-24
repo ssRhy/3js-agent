@@ -2,7 +2,33 @@
 const nextConfig = {
   /* config options here */
   reactStrictMode: true,
-  webpack: (config) => {
+  // 确保API路由正确处理
+  async rewrites() {
+    return [
+      {
+        source: "/api/:path*",
+        destination: "/api/:path*",
+      },
+    ];
+  },
+  // 设置basePath为空，确保正确处理路径
+  basePath: "",
+  // 禁用文件追踪功能以避免.next/trace文件访问问题
+  experimental: {
+    outputFileTracingRoot: false,
+  },
+  // 更安全的webpack配置
+  webpack: (config, { isServer }) => {
+    // 避免在客户端尝试导入node-only模块
+    if (!isServer) {
+      config.resolve.fallback = {
+        ...config.resolve.alias,
+        fs: false,
+        path: false,
+        os: false,
+        child_process: false,
+      };
+    }
     // Monaco Editor的webpack配置
     config.resolve.alias = {
       ...config.resolve.alias,

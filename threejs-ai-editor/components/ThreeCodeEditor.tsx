@@ -1,19 +1,12 @@
-import React, { useEffect, useRef, useState } from "react";
-import * as THREE from "three";
-import { useSceneStore } from "../stores/useSceneStore";
+import React, { useState } from "react";
 import { Editor, OnMount } from "@monaco-editor/react";
-import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
+import { callTestApi, callAgentApi } from "../lib/api-client";
+import ThreeScene from "./ThreeScene";
 
 export default function ThreeCodeEditor() {
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const threeRef = useRef<{
-    scene: THREE.Scene;
-    camera: THREE.PerspectiveCamera;
-    renderer: THREE.WebGLRenderer;
-    controls?: OrbitControls;
-  } | null>(null);
-
-  const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
+  const editorRef = React.useRef<monaco.editor.IStandaloneCodeEditor | null>(
+    null
+  );
   const [prompt, setPrompt] = useState("添加一个旋转的红色立方体");
   const [code, setCode] =
     useState(`function setup(scene, camera, renderer, THREE, OrbitControls) {
@@ -36,208 +29,17 @@ export default function ThreeCodeEditor() {
   const [showDiff, setShowDiff] = useState(false);
   const [diff, setDiff] = useState<string>("");
 
-  const { addToHistory } = useSceneStore();
-
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-
-    if (threeRef.current) {
-      threeRef.current.renderer.dispose();
-      container.innerHTML = "";
-    }
-
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0xf0f0f0);
-
-    const camera = new THREE.PerspectiveCamera(
-      75,
-      container.clientWidth / container.clientHeight,
-      0.1,
-      1000
-    );
-    camera.position.z = 5;
-
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setSize(container.clientWidth, container.clientHeight);
-    container.appendChild(renderer.domElement);
-
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
-    scene.add(ambientLight);
-
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
-    directionalLight.position.set(5, 5, 5);
-    scene.add(directionalLight);
-
-    const gridHelper = new THREE.GridHelper(10, 10);
-    scene.add(gridHelper);
-
-    const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.25;
-    controls.screenSpacePanning = false;
-    controls.maxPolarAngle = Math.PI / 2;
-
-    const animate = () => {
-      requestAnimationFrame(animate);
-      controls.update();
-      scene.children.forEach((child) => {
-        if (child.userData.autoRotate) {
-          child.rotation.x += 0.01;
-          child.rotation.y += 0.01;
-        }
-      });
-      renderer.render(scene, camera);
-    };
-    animate();
-
-    threeRef.current = { scene, camera, renderer, controls };
-
-    const handleResize = () => {
-      if (!threeRef.current || !container) return;
-      const { camera, renderer } = threeRef.current;
-      camera.aspect = container.clientWidth / container.clientHeight;
-      camera.updateProjectionMatrix();
-      renderer.setSize(container.clientWidth, container.clientHeight);
-    };
-
-    window.addEventListener("resize", handleResize);
-
-    return () => {
-      window.removeEventListener("resize", handleResize);
-      renderer.dispose();
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!threeRef.current || !code) return;
-    if (code === "") return;
-
-    const { scene, camera, renderer } = threeRef.current;
-    let customControlsCreated = false;
-
-    try {
-      const objectsToRemove: THREE.Mesh[] = [];
-      scene.children.forEach((child) => {
-        if (
-          child instanceof THREE.Mesh &&
-          !(child instanceof THREE.GridHelper)
-        ) {
-          objectsToRemove.push(child);
-        }
-      });
-
-      objectsToRemove.forEach((obj) => {
-        scene.remove(obj);
-        if (obj.geometry) obj.geometry.dispose();
-        if (obj.material) {
-          if (Array.isArray(obj.material)) {
-            obj.material.forEach((m: THREE.Material) => m.dispose());
-          } else {
-            obj.material.dispose();
-          }
-        }
-      });
-
-      const isSafeCode =
-        code.includes("function setup") &&
-        code.match(/\{/g)?.length === code.match(/\}/g)?.length;
-
-      if (!isSafeCode) {
-        setError("代码不完整或格式有误，请检查代码");
-        return;
-      }
-
-      const functionBody = `
-        let setup;
-        try {
-          ${code}
-          if (typeof setup !== 'function') {
-            throw new Error('setup function not defined in code');
-          }
-          return setup;
-        } catch(e) {
-          console.error("Setup function parsing error:", e);
-          throw e;
-        }
-      `;
-
-      const getSetupFn = Function(
-        "scene",
-        "camera",
-        "renderer",
-        "THREE",
-        "OrbitControls",
-        functionBody
-      );
-
-      const setupFn = getSetupFn(null, null, null, THREE, {
-        create: function (cam: THREE.Camera, domElement: HTMLElement) {
-          if (threeRef.current && threeRef.current.controls) {
-            return threeRef.current.controls;
-          }
-          customControlsCreated = true;
-          return new OrbitControls(cam, domElement);
-        },
-      });
-
-      if (typeof setupFn !== "function") {
-        throw new Error("setup function not found in code");
-      }
-
-      if (THREE && scene && camera && renderer) {
-        try {
-          setupFn(scene, camera, renderer, THREE, {
-            create: function (cam: THREE.Camera, domElement: HTMLElement) {
-              if (threeRef.current && threeRef.current.controls) {
-                return threeRef.current.controls;
-              }
-              customControlsCreated = true;
-              return new OrbitControls(cam, domElement);
-            },
-          });
-          renderer.render(scene, camera);
-          addToHistory(code);
-
-          if (error) setError("");
-          if (
-            customControlsCreated &&
-            threeRef.current &&
-            threeRef.current.controls
-          ) {
-            console.warn(
-              "警告: 检测到同时存在多个OrbitControls实例，可能会导致控制冲突"
-            );
-          }
-        } catch (e) {
-          console.error("代码执行错误:", e);
-          setError(
-            "代码执行错误: " + (e instanceof Error ? e.message : String(e))
-          );
-        }
-      }
-    } catch (e) {
-      console.error("场景清理错误:", e);
-      setError("场景清理错误: " + (e instanceof Error ? e.message : String(e)));
-    }
-  }, [code, addToHistory, error]);
-
   const captureScreenshot = async () => {
-    if (!threeRef.current) return null;
-
     try {
-      // 强制渲染一次当前场景状态
-      const { scene, camera, renderer } = threeRef.current;
-      renderer.render(scene, camera);
+      // 使用canvas.toDataURL获取截图
+      const canvas = document.querySelector("canvas");
+      if (!canvas) {
+        throw new Error("Canvas not found");
+      }
 
-      // 获取画布并截图
-      const canvas = renderer.domElement;
-
-      // 直接使用canvas的toDataURL方法
       const imageBase64 = canvas.toDataURL("image/png");
       console.log("获取到截图数据，长度:", imageBase64.length);
 
-      // 简单验证截图是否有效
       if (imageBase64 === "data:,") {
         console.error("截图为空白");
         throw new Error("截图内容为空");
@@ -261,28 +63,69 @@ export default function ThreeCodeEditor() {
       setIsLoading(true);
       setError("");
 
-      const imageBase64 = await captureScreenshot();
+      console.log("开始生成代码...");
 
-      const response = await fetch("/api/agent", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          prompt,
-          currentCode: code,
-          image: imageBase64,
-        }),
-      });
+      // 先测试简单的API端点是否能正常工作
+      try {
+        console.log("测试API端点...");
+        const testResult = await callTestApi();
+        console.log("测试API响应:", testResult);
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        const errorMessage =
-          errorData.message || errorData.error || response.statusText;
-        throw new Error("API请求失败: " + errorMessage);
+        if (!testResult.success) {
+          throw new Error(`测试API失败: ${testResult.error || "未知错误"}`);
+        }
+      } catch (testErr) {
+        console.error("测试API错误:", testErr);
+        setError(
+          `API测试失败: ${
+            testErr instanceof Error ? testErr.message : String(testErr)
+          }`
+        );
+        setIsLoading(false);
+        return;
       }
 
-      const data = await response.json();
-      if (data.error) {
-        setError(data.message || data.error || "API返回错误");
+      // 确保可以获取截图
+      let imageBase64 = null;
+      try {
+        imageBase64 = await captureScreenshot();
+        console.log(
+          "截图获取成功，长度:",
+          imageBase64 ? imageBase64.length : 0
+        );
+      } catch (imgErr) {
+        console.warn("截图获取失败，将继续不使用截图:", imgErr);
+        // 截图失败继续执行，只是不传递图像
+      }
+
+      // 如果截图失败，则不传递图像参数
+      const apiPayload = {
+        instruction: prompt,
+        currentCode: code,
+      };
+
+      // 只有当imageBase64不为null时才添加图像
+      if (imageBase64 !== null) {
+        // @ts-expect-error - 动态添加属性
+        apiPayload.image = imageBase64;
+      }
+
+      console.log("准备调用Agent API...");
+      // 使用API客户端调用Agent API
+      const data = await callAgentApi(apiPayload);
+      console.log("Agent API响应:", data);
+
+      if (!data.success || data.error) {
+        const errorMsg = data.error || data.message || "未知错误";
+        console.error("API错误:", errorMsg);
+        setError(`API返回错误: ${errorMsg}`);
+        return;
+      }
+
+      // 确保directCode存在
+      if (!data.directCode) {
+        console.error("API响应中缺少directCode:", data);
+        setError("API响应格式不正确，缺少代码内容");
         return;
       }
 
@@ -378,7 +221,9 @@ export default function ThreeCodeEditor() {
         </div>
       </div>
 
-      <div className="preview" ref={containerRef}></div>
+      <div className="preview">
+        <ThreeScene code={code} />
+      </div>
 
       {/* Display code diff when showDiff is true */}
       {showDiff && diff && (

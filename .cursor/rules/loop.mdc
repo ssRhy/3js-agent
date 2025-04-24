@@ -1,0 +1,26 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+不会“盲目”重复——生成初始代码的工具（generate_code）和在自修复循环中应用补丁的工具（apply_patch），其实扮演的是两个不同阶段的角色，它们在流程中出现的频率也应当不同：
+
+generate_code——只在「初始阶段」调用一次
+
+目的：根据用户自然语言指令，生成第一版可运行的完整代码
+
+调用时机：在 Agent 的第一步（或独立预处理环节）执行，拿到初版代码后就不会再次调用
+
+如何保证只调用一次：
+
+分离流程：先单独 await codeGenTool.func({ instruction }) 拿到 code，再进入后续自修复循环
+
+提示限制：在 system prompt 中明确「仅在无代码时调用 generate_code，后续请使用 lint/diff/apply_patch」
+
+apply_patch——在“自修复循环”中可多次调用
+
+目的：根据每轮 Diff 生成的补丁，将修改落地到文件，然后再进入下次 lint 校验
+
+调用时机：只要有修复建议（semantic diff），就会多次调用，直至 ESLint 无错误或达到迭代上限
+
+

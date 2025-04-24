@@ -26,6 +26,12 @@ declare module "diff" {
     added?: boolean;
     removed?: boolean;
   }>;
+
+  export function createPatch(
+    filename: string,
+    original: string,
+    updated: string
+  ): string;
 }
 
 // 添加monaco命名空间声明
