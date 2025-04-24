@@ -13,6 +13,7 @@ import { StructuredOutputParser } from "langchain/output_parsers";
 import { z } from "zod";
 import * as fs from "fs";
 import * as path from "path";
+import { diffLines } from "diff";
 
 // 日志记录器
 class Logger {
@@ -87,7 +88,7 @@ const setupModel = () => {
   }
 
   return new AzureChatOpenAI({
-    model: "gpt-4o",
+    model: "gpt-4.1",
     temperature: 0,
     azureOpenAIApiKey: process.env.AZURE_OPENAI_API_KEY,
     azureOpenAIApiDeploymentName: process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME,
@@ -165,7 +166,7 @@ const parseLanguageTool = new DynamicStructuredTool({
         1. intention: 用户的主要意图
         2. features: Three.js需要实现的具体特性列表
         3. technicalDescription: 详细的技术描述
-        4. complexity: 复杂度评估 (simple/moderate/complex)
+      
         `
       );
 
@@ -176,48 +177,6 @@ const parseLanguageTool = new DynamicStructuredTool({
     } catch (error: unknown) {
       logger.error(
         "parseLanguage工具出错",
-        error instanceof Error ? error : new Error(String(error))
-      );
-      throw error instanceof Error ? error : new Error(String(error));
-    }
-  },
-});
-
-const analyzeImageTool = new DynamicStructuredTool({
-  name: "analyzeImage",
-  description: "分析图像并提取3D场景的视觉特征",
-  schema: z.object({
-    imageUrl: z.string().describe("图像URL"),
-  }),
-  func: async ({ imageUrl }) => {
-    logger.info("使用analyzeImage工具", {
-      imageUrl: imageUrl.substring(0, 30) + "...",
-    });
-
-    try {
-      // 修复调用参数，使用正确的消息格式
-      const response = await azureModel.invoke([
-        {
-          role: "system",
-          content: "你是一个三维图形专家，分析图像并提取特征。",
-        },
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: `分析这个图像，提取其中可能的3D场景特征：...`,
-            },
-            { type: "image_url", image_url: { url: imageUrl } },
-          ],
-        },
-      ]);
-
-      // 返回处理结果
-      return response.content;
-    } catch (error: unknown) {
-      logger.error(
-        "图像分析出错",
         error instanceof Error ? error : new Error(String(error))
       );
       throw error instanceof Error ? error : new Error(String(error));
@@ -493,12 +452,7 @@ const setupAgent = async () => {
   logger.info("设置Agent");
 
   // 定义工具集
-  const tools = [
-    parseLanguageTool,
-    analyzeImageTool,
-    analyzeScreenshotTool,
-    generateCodeTool,
-  ];
+  const tools = [parseLanguageTool, analyzeScreenshotTool, generateCodeTool];
 
   // 创建提示模板
   const systemMessage = SystemMessagePromptTemplate.fromTemplate(
@@ -547,68 +501,36 @@ const setupAgent = async () => {
 // 缓存agent实例
 let agentExecutor: AgentExecutor | null = null;
 
-// 创建一个diff生成函数
+// 使用jsdiff库的diffLines API生成diff
 function generateDiff(originalCode: string, newCode: string): string {
-  // 简化的diff生成算法
-  const originalLines = originalCode.split("\n");
-  const newLines = newCode.split("\n");
+  // 生成差异对象数组
+  const diffResult = diffLines(originalCode, newCode);
 
-  let diffResult = "";
-  diffResult += "```diff\n";
+  // 格式化输出
+  let formattedDiff = "```diff\n";
 
-  let i = 0,
-    j = 0;
-  while (i < originalLines.length || j < newLines.length) {
-    if (
-      i < originalLines.length &&
-      j < newLines.length &&
-      originalLines[i] === newLines[j]
-    ) {
-      // 相同行，保留上下文
-      diffResult += " " + originalLines[i] + "\n";
-      i++;
-      j++;
-    } else {
-      // 查找下一个匹配点
-      let found = false;
-      const lookAhead = 3; // 向前看几行
+  // 遍历差异结果并格式化
+  diffResult.forEach(
+    (part: { added?: boolean; removed?: boolean; value: string }) => {
+      // 根据是否是新增、删除或保持来添加前缀
+      const prefix = part.added ? "+" : part.removed ? "-" : " ";
 
-      for (let k = 1; k <= lookAhead && i + k < originalLines.length; k++) {
-        for (let l = 1; l <= lookAhead && j + l < newLines.length; l++) {
-          if (originalLines[i + k] === newLines[j + l]) {
-            // 找到匹配点，先输出删除的行
-            for (let m = 0; m < k; m++) {
-              diffResult += "-" + originalLines[i + m] + "\n";
-            }
-            // 再输出添加的行
-            for (let m = 0; m < l; m++) {
-              diffResult += "+" + newLines[j + m] + "\n";
-            }
-            i += k;
-            j += l;
-            found = true;
-            break;
-          }
-        }
-        if (found) break;
+      // 分割成行并去除空行
+      const lines = part.value.split("\n");
+      // 不要去除最后一个空行，避免格式问题
+      if (lines[lines.length - 1] === "") {
+        lines.pop();
       }
 
-      if (!found) {
-        // 没找到匹配点，按顺序输出
-        if (i < originalLines.length) {
-          diffResult += "-" + originalLines[i] + "\n";
-          i++;
-        }
-        if (j < newLines.length) {
-          diffResult += "+" + newLines[j] + "\n";
-          j++;
-        }
-      }
+      // 为每行添加前缀并拼接
+      lines.forEach((line: string) => {
+        formattedDiff += prefix + line + "\n";
+      });
     }
-  }
+  );
 
-  diffResult += "```";
-  return diffResult;
+  formattedDiff += "```";
+  return formattedDiff;
 }
 
 // API 路由处理

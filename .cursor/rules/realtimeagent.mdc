@@ -20,7 +20,8 @@ Agentic Workflow:
 使用AzureOpenAI和langchainjs0.3的api和函数，接口。
 ✅ 每次只传差异（diff），而非完整代码块；
 ✅ 用 intent 和 summary 做语义导航/用户可视记录；
-✅ 截图接收：接收前端上传的截图并处理。以使用 HTML5 <canvas> 元素直接进行截图，并通过 toDataURL() 方法将图像转换为 Base64 编码格式。
+✅ 截图接收：用户输入请求，Agent分析请求，发现需要了解当前场景，调用requestScreenshot工具
+前端收到截图请求响应，设置shouldCaptureNext标记，前端自动截图，将截图数据发送给API，Agent分析截图并生成代码修改，这种方式让Agent能够自主决定何时需要截图，而不是强制用户每次都上传截图。并通过 toDataURL() 方法将图像转换为 Base64 编码格式。
 ✅ 用 intent 和 summary 做语义导航/用户可视记录；
 多模态诊断：使用 GPT-4 Vision 模型分析截图。
 ✅ 用 intent 和 summary 做语义导航/用户可视记录；
