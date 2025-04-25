@@ -1,7 +1,7 @@
-import { diffTool } from "../tools/diffTool";
-import { lintTool } from "../tools/lintTool";
-import { applyPatchTool } from "../tools/applyPatchTool";
-import { codeGenTool } from "../tools/codeGenTool";
+import { diffTool } from "./diffTool";
+import { lintTool } from "./lintTool";
+import { applyPatchTool } from "./applyPatchTool";
+import { codeGenTool } from "./codeGenTool";
 // 工具结果类型
 export interface ToolResult {
   [key: string]:

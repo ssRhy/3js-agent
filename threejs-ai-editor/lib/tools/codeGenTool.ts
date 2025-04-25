@@ -1,78 +1,130 @@
 import { DynamicTool } from "@langchain/core/tools";
 import { AzureChatOpenAI } from "@langchain/openai";
 
+// Initialize Azure OpenAI client for code generation
+const codeGenModel = new AzureChatOpenAI({
+  model: "gpt-4o",
+  temperature: 0.2, // Slightly higher temperature for more creative code generation
+  azureOpenAIApiKey: process.env.AZURE_OPENAI_API_KEY,
+  azureOpenAIApiDeploymentName: process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME,
+  azureOpenAIApiVersion: "2024-02-15-preview",
+  azureOpenAIApiInstanceName: process.env.AZURE_OPENAI_API_INSTANCE_NAME,
+  azureOpenAIEndpoint: process.env.AZURE_OPENAI_API_ENDPOINT,
+  maxTokens: 4000,
+});
+
+/**
+ * 处理LLM响应内容 - 支持字符串或数组格式
+ */
+function handleLLMResponseContent(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+
+  if (Array.isArray(content)) {
+    return content
+      .filter(
+        (item) =>
+          typeof item === "object" &&
+          item !== null &&
+          "type" in item &&
+          item.type === "text" &&
+          "text" in item
+      )
+      .map((item) => (item as { text: string }).text)
+      .join("\n");
+  }
+
+  return JSON.stringify(content);
+}
+
+/**
+ * Code Generation Tool - Generates initial Three.js code based on user instructions
+ * Only used during the first interaction to create the base code
+ */
 export const codeGenTool = new DynamicTool({
   name: "generate_code",
-  description: "根据用户自然语言指令生成初始代码",
-  func: async (instruction: string) => {
-    const llm = new AzureChatOpenAI({
-      temperature: 0,
-      azureOpenAIApiKey: process.env.AZURE_OPENAI_API_KEY,
-      azureOpenAIApiDeploymentName:
-        process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME,
-      azureOpenAIApiVersion: "2024-02-15-preview",
-      azureOpenAIApiInstanceName: process.env.AZURE_OPENAI_API_INSTANCE_NAME,
-    });
+  description: "生成初始Three.js代码，基于用户指令",
+  func: async (instruction: string): Promise<string> => {
+    try {
+      console.log("Generating initial Three.js code...");
 
-    const prompt = `请生成一个完整的、经过改进的setup函数，确保：
-1. 遵循Three.js最佳实践
-2. 有效地实现用户需求
-请生成一个符合以下格式的 Three.js 代码：
-function setup(scene, camera, renderer, THREE, OrbitControls) {
-  // 在这里编写 Three.js 代码，使用传入的参数
-  // 创建几何体、材质、网格等
-  // 添加到场景中
-  // 可以配置相机、渲染器
-  // 可以设置动画、交互等
-  
-  // 必须返回主要的 3D 对象
-  
-}
-注意事项：
-1. 不要包含任何 import 语句，所有需要的库已通过参数提供
-2. 不要包含 HTML、CSS 或完整网页结构
-3. 不要使用 Markdown 代码块标记，只返回纯 JavaScript 代码
-4. 确保代码在函数内定义并使用传入的 scene, camera, renderer, THREE 和 OrbitControls 参数
-5. 不要尝试重新创建场景、相机或渲染器，使用传入的参数
-6. 函数必须显式返回创建的主要对象（例如网格对象）
-7. 使用 scene.add() 将对象添加到场景中
-8. 如果需要创建控制器，请使用 OrbitControls.create(camera, renderer.domElement)
+      // Generate initial Three.js code based on user instructions
+      const prompt = `You are a Three.js expert. Generate a complete, functional Three.js setup function 
+based on the following user instructions:
 
-指令: ${instruction}`;
+"${instruction}"
 
-    const resp = await llm.invoke(prompt);
+Requirements:
+1. The code must be a complete "function setup(scene, camera, renderer, THREE, OrbitControls) { ... }" function
+2. The function must properly use the provided scene, camera, and renderer parameters
+3. Add appropriate lighting, materials, and objects as required by the instructions
+4. Include any necessary animation or interaction logic
+5. Return the main object/scene at the end of the function
+6. Do not include imports or other code outside the function
+7. Ensure the code follows Three.js best practices
+8. Ensure the code is clean, optimized, and well-structured
 
-    // 提取代码内容
-    let code =
-      typeof resp.content === "string"
-        ? resp.content
-        : JSON.stringify(resp.content);
+Return ONLY the complete code without explanations or markdown formatting.
+The code should be ready to run immediately.`;
 
-    // 如果代码包含markdown标记，提取其中的代码块
-    if (code.includes("```")) {
-      const match = code.match(/```(?:js|javascript)?([\s\S]*?)```/);
-      code = match ? match[1].trim() : code;
-    }
+      const result = await codeGenModel.invoke(prompt);
+      const responseContent = handleLLMResponseContent(result.content);
 
-    // 确保代码是setup函数格式
-    if (!code.includes("function setup")) {
-      code = `function setup(scene, camera, renderer, THREE, OrbitControls) {
-  ${
-    code.includes("const geometry")
-      ? code
-      : `
-  // 创建一个符合要求的对象
+      // Extract code from the response
+      let code = responseContent.trim();
+
+      // Remove markdown code blocks if present
+      if (code.includes("```")) {
+        const codeMatch = code.match(/```(?:js|javascript)?\s*([\s\S]*?)```/);
+        if (codeMatch && codeMatch[1]) {
+          code = codeMatch[1].trim();
+        }
+      }
+
+      // Ensure the code is a setup function
+      if (!code.startsWith("function setup")) {
+        code = `function setup(scene, camera, renderer, THREE, OrbitControls) {
+  ${code}
+  // Return the main object or scene
+  return scene.children.find(child => child instanceof THREE.Mesh) || scene;
+}`;
+      }
+
+      // 返回JSON格式结果
+      return JSON.stringify({
+        code,
+        status: "success",
+        message: "已成功生成Three.js代码",
+      });
+    } catch (error) {
+      console.error("Error in code generation tool:", error);
+      // 返回错误信息和备用代码
+      const fallbackCode = `function setup(scene, camera, renderer, THREE, OrbitControls) {
+  // Basic fallback code - a simple colored cube
   const geometry = new THREE.BoxGeometry(1, 1, 1);
-  const material = new THREE.MeshStandardMaterial({ color: 0xff0000 });
+  const material = new THREE.MeshBasicMaterial({ color: 0xff0000 });
   const cube = new THREE.Mesh(geometry, material);
-  cube.userData.autoRotate = true;
   scene.add(cube);
   
-  return cube;`
-  }
+  // Add some basic lighting
+  const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+  scene.add(ambientLight);
+  
+  const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+  directionalLight.position.set(5, 5, 5);
+  scene.add(directionalLight);
+  
+  return cube;
 }`;
-    }
 
-    return code;
+      return JSON.stringify({
+        code: fallbackCode,
+        status: "error",
+        message: `代码生成出错: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      });
+    }
   },
 });

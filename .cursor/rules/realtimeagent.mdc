@@ -1,25 +1,28 @@
 ---
 description: 
 globs: 
-alwaysApply: true
+alwaysApply: false
 ---
 
 
 下面给出一个基于 LangChainJS0.3和Nextjs 的 “循环式（loop-based）LLM Agentic workflow” 实现思路与代码示例。Agent 能自动截图自检→多模态诊断→生成修正→前端增量更新，实现真正的 AI 驱动 threejs 的3D 场景自我优化闭环
 
 前端使用的是monaco：，结合 Three.js 和 Monaco 编辑器
-使用的是AZure OpenAI核心思路是：
+使用的是AZure OpenAI
 
+流程：
+只有第一次用户请求时，才使用直接生成代码的函数生成，以后的情况都进入lint、diff、apply_patch的agent循环，直至循环结束。
+每次用户请求后，截图和分析图片功能不经过agent，而是直接调用llm
+
+##
+核心思路是：
 系统提示（system prompt）静态加载，利用提示缓存；
-
-定义工具（functions），比如 lint、diff、apply_patch、run_tests 等；
-
+定义工具（functions），比如 lint、diff、apply_patch
 创建 AgentExecutor，设置 maxIterations，让模型在每次调用工具后带入新上下文；
-
 循环执行：Agent 会自动计划调用 functions，执行本地操作并将 <tool_result> 注入对话；
-
 终止条件：当 lint/test 全部通过或达到迭代上限时自动退出
 
+##
 注意：
 返回JSON格式数据
 使用AzureOpenAI和langchainjs0.3的api和函数，接口。

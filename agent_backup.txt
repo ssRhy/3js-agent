@@ -1,1 +1,184 @@
-"�޸�ǰ���ļ�����" 
+// import { AzureChatOpenAI } from "@langchain/openai";
+// import { AgentExecutor } from "langchain/agents";
+// import { createOpenAIToolsAgent } from "langchain/agents";
+// import {
+//   MessagesPlaceholder,
+//   HumanMessagePromptTemplate,
+//   SystemMessagePromptTemplate,
+// } from "@langchain/core/prompts";
+// import { ChatPromptTemplate } from "@langchain/core/prompts";
+// import { lintTool } from "../tools/lintTool";
+// import { diffTool } from "../tools/diffTool";
+// import { applyPatchTool } from "../tools/applyPatchTool";
+// import { codeGenTool } from "../tools/codeGenTool";
+
+// // 准备工具列表
+// const tools = [lintTool, diffTool, applyPatchTool, codeGenTool];
+
+// // 初始化 Azure OpenAI 客户端
+// const model = new AzureChatOpenAI({
+//   model: "gpt-4o",
+//   temperature: 0,
+//   azureOpenAIApiKey: process.env.AZURE_OPENAI_API_KEY,
+//   azureOpenAIApiDeploymentName: process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME,
+//   azureOpenAIApiVersion: "2024-02-15-preview",
+//   azureOpenAIApiInstanceName: process.env.AZURE_OPENAI_API_INSTANCE_NAME,
+//   azureOpenAIEndpoint: process.env.AZURE_OPENAI_API_ENDPOINT,
+//   maxTokens: 4000,
+// });
+
+// // 创建 LLM 与 AgentExecutor
+// export async function runAgent(
+//   instruction: string,
+//   options: {
+//     maxIterations?: number;
+//     currentCode?: string;
+//     image?: string;
+//   } = {}
+// ) {
+//   const maxIterations = options.maxIterations || 5;
+
+//   // 如果没有现有代码，先调用codeGenTool生成初始代码
+//   let initialCode = options.currentCode;
+//   if (!initialCode) {
+//     try {
+//       console.log("首次生成基础代码...");
+//       initialCode = await codeGenTool.func(instruction);
+//       console.log("初始代码生成完成");
+//     } catch (codeGenError) {
+//       console.error("初始代码生成失败:", codeGenError);
+//       // 使用默认代码
+//       initialCode = `function setup(scene, camera, renderer, THREE, OrbitControls) {
+//         const geometry = new THREE.BoxGeometry(1, 1, 1);
+//         const material = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+//         const cube = new THREE.Mesh(geometry, material);
+//         scene.add(cube);
+//         return cube;
+//       }`;
+//     }
+//   }
+
+//   // 从Agent工具列表中移除codeGenTool，避免在循环中再次调用
+//   const loopTools = tools.filter((tool) => tool.name !== "generate_code");
+
+//   // 简化系统提示
+//   const systemMessage = SystemMessagePromptTemplate.fromTemplate(
+//     "你是一个专业的Three.js AI助手，负责优化和修复Three.js代码。" +
+//       "请按照以下步骤改进代码：\n" +
+//       "1. 使用lint工具检查代码问题\n" +
+//       "2. 基于lint结果，创建改进后的代码版本\n" +
+//       "3. 使用diff工具生成补丁\n" +
+//       "4. 使用apply_patch工具应用补丁\n" +
+//       "不要再次生成新代码，应该逐步优化现有代码。"
+//   );
+
+//   try {
+//     // 构建人类消息
+//     let humanPrompt =
+//       "根据以下需求，优化Three.js代码：\n\n用户需求：{input}\n\n";
+//     humanPrompt += "当前代码：\n```javascript\n{currentCode}\n```\n\n";
+//     humanPrompt += `请优化此代码，使其：
+// 1. 更加符合Three.js最佳实践
+// 2. 有效地实现用户需求
+// 3. 保持setup函数格式
+// 4. 使用lint工具检查代码问题
+// 5. 使用diff工具生成修改补丁
+// 6. 使用apply_patch工具应用修改`;
+
+//     const promptTemplate = ChatPromptTemplate.fromMessages([
+//       systemMessage,
+//       HumanMessagePromptTemplate.fromTemplate(humanPrompt),
+//       new MessagesPlaceholder("agent_scratchpad"),
+//     ]);
+
+//     // 创建agent，只使用循环工具，不包含codeGenTool
+//     const agent = await createOpenAIToolsAgent({
+//       llm: model,
+//       tools: loopTools.map((tool) => {
+//         if (!tool.name) {
+//           console.warn(`Tool missing name: ${JSON.stringify(tool)}`);
+//         }
+//         return tool;
+//       }),
+//       prompt: promptTemplate,
+//     });
+
+//     // 创建执行器
+//     const executor = new AgentExecutor({
+//       agent,
+//       tools: loopTools,
+//       maxIterations,
+//       verbose: true,
+//       handleParsingErrors: true,
+//       returnIntermediateSteps: false,
+//     });
+
+//     // 构建输入对象，使用已经生成的初始代码
+//     const agentInput = {
+//       input: instruction,
+//       currentCode: initialCode,
+//     };
+
+//     // 调用agent执行
+//     try {
+//       const result = await executor.invoke(agentInput);
+
+//       let output = result.output;
+
+//       // 清理代码，确保只返回JavaScript部分
+//       // 1. 移除HTML文档结构
+//       if (output.includes("<!DOCTYPE html>") || output.includes("<html>")) {
+//         // 提取script标签中的内容
+//         const scriptMatch = output.match(/<script>([\s\S]*?)<\/script>/);
+//         if (scriptMatch && scriptMatch[1]) {
+//           output = scriptMatch[1].trim();
+//         }
+//       }
+
+//       // 2. 移除Markdown代码块标记
+//       if (output.includes("```")) {
+//         const codeBlockMatch = output.match(
+//           /```(?:js|javascript)?([\s\S]*?)```/
+//         );
+//         if (codeBlockMatch && codeBlockMatch[1]) {
+//           output = codeBlockMatch[1].trim();
+//         }
+//       }
+
+//       // 3. 确保代码是setup函数
+//       if (!output.includes("function setup")) {
+//         // 将代码包装在setup函数中
+//         output = `function setup(scene, camera, renderer, THREE, OrbitControls) {
+//           ${output}
+//           return scene.children.find(child => child instanceof THREE.Mesh) || scene;
+//         }`;
+//       }
+
+//       return output;
+//     } catch (executionError) {
+//       console.error("Agent执行过程中出错:", executionError);
+//       // 返回一个基础代码，确保前端不会崩溃
+//       return `function setup(scene, camera, renderer, THREE, OrbitControls) {
+//         // Agent执行出错，返回一个基础立方体
+//         const geometry = new THREE.BoxGeometry(1, 1, 1);
+//         const material = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+//         const cube = new THREE.Mesh(geometry, material);
+//         scene.add(cube);
+
+//         return cube;
+//       }`;
+//     }
+//   } catch (error) {
+//     console.error("Agent创建或初始化错误:", error);
+//     // 返回一个基础代码，确保前端不会崩溃
+//     return `function setup(scene, camera, renderer, THREE, OrbitControls) {
+//       // Agent执行出错，返回一个基础立方体
+//       const geometry = new THREE.BoxGeometry(1, 1, 1);
+//       const material = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+//       const cube = new THREE.Mesh(geometry, material);
+//       scene.add(cube);
+
+//       return cube;
+//     }`;
+//   }
+// }
