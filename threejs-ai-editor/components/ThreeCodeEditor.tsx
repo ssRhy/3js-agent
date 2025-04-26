@@ -32,11 +32,13 @@ export default function ThreeCodeEditor() {
     cube.userData.autoRotate = true;
     scene.add(cube);
 
-    // 注意：不要直接使用 new OrbitControls()，应该使用以下方式
-    // 使用现有控制器或创建新控制器
-    if (OrbitControls && OrbitControls.create) {
+    // 使用OrbitControls，确保通过create方法创建控制器
+    if (OrbitControls) {
+      // 通过create方法获取或创建一个新的控制器实例
       const controls = OrbitControls.create(camera, renderer.domElement);
-      controls.enableDamping = true;
+      if (controls) {
+        controls.enableDamping = true;
+      }
     }
   
     return cube;
@@ -46,6 +48,16 @@ export default function ThreeCodeEditor() {
   const [error, setError] = useState("");
   const [showDiff, setShowDiff] = useState(false);
   const [diff, setDiff] = useState<string>("");
+  const [lintErrors, setLintErrors] = useState<
+    {
+      ruleId: string | null;
+      severity: number;
+      message: string;
+      line: number;
+      column: number;
+    }[]
+  >([]);
+  const [lintOverlayVisible, setLintOverlayVisible] = useState(false);
 
   const { addToHistory } = useSceneStore();
 
@@ -120,6 +132,100 @@ export default function ThreeCodeEditor() {
     };
   }, []);
 
+  // Run ESLint on code changes
+  useEffect(() => {
+    if (!code) return;
+
+    // Run lint and send results to agent
+    const lintCode = async () => {
+      try {
+        const response = await fetch("/api/lint", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ code }),
+        });
+
+        if (response.ok) {
+          const lintResult = await response.json();
+          setLintErrors(lintResult.errors || []);
+
+          // Only send lint errors to agent if there are any
+          if (lintResult.errors && lintResult.errors.length > 0) {
+            // Add visual indicator on the Three.js canvas
+            renderLintErrorsIndicator(lintResult.errors);
+          } else {
+            // Clear visual indicator if no errors
+            clearLintErrorsIndicator();
+          }
+        }
+      } catch (err) {
+        console.error("Error running lint:", err);
+      }
+    };
+
+    // Debounce lint checking
+    const debounceTimeout = setTimeout(() => {
+      lintCode();
+    }, 1000);
+
+    return () => clearTimeout(debounceTimeout);
+  }, [code]);
+
+  const renderLintErrorsIndicator = (
+    errors: {
+      ruleId: string | null;
+      severity: number;
+      message: string;
+      line: number;
+      column: number;
+    }[]
+  ) => {
+    if (!threeRef.current || errors.length === 0) return;
+
+    const { scene, renderer } = threeRef.current;
+
+    // Clear any previous lint error indicators
+    clearLintErrorsIndicator();
+
+    // Create the error indicator in the corner of the canvas
+    const canvas = renderer.domElement;
+    const errorIndicator = document.createElement("div");
+    errorIndicator.id = "lint-error-indicator";
+    errorIndicator.style.position = "absolute";
+    errorIndicator.style.top = "10px";
+    errorIndicator.style.right = "10px";
+    errorIndicator.style.backgroundColor = "rgba(255, 0, 0, 0.7)";
+    errorIndicator.style.color = "white";
+    errorIndicator.style.padding = "5px 10px";
+    errorIndicator.style.borderRadius = "4px";
+    errorIndicator.style.fontFamily = "monospace";
+    errorIndicator.style.cursor = "pointer";
+    errorIndicator.style.zIndex = "1000";
+    errorIndicator.innerText = `${errors.length} ESLint ${
+      errors.length === 1 ? "error" : "errors"
+    }`;
+
+    // Add click handler to toggle detailed view
+    errorIndicator.onclick = () => setLintOverlayVisible(!lintOverlayVisible);
+
+    // Add to canvas container
+    const container = canvas.parentElement;
+    if (container) {
+      container.style.position = "relative";
+      container.appendChild(errorIndicator);
+    }
+
+    // Render the scene to show the indicator
+    renderer.render(scene, threeRef.current.camera);
+  };
+
+  const clearLintErrorsIndicator = () => {
+    const existingIndicator = document.getElementById("lint-error-indicator");
+    if (existingIndicator && existingIndicator.parentElement) {
+      existingIndicator.parentElement.removeChild(existingIndicator);
+    }
+  };
+
   useEffect(() => {
     if (!threeRef.current || !code) return;
     if (code === "") return;
@@ -173,6 +279,17 @@ export default function ThreeCodeEditor() {
         }
       `;
 
+      // Create a wrapper for OrbitControls to prevent direct instantiation
+      const OrbitControlsWrapper = {
+        create: function (cam: THREE.Camera, domElement: HTMLElement) {
+          if (threeRef.current && threeRef.current.controls) {
+            return threeRef.current.controls;
+          }
+          customControlsCreated = true;
+          return new OrbitControls(cam, domElement);
+        },
+      };
+
       const getSetupFn = Function(
         "scene",
         "camera",
@@ -182,15 +299,7 @@ export default function ThreeCodeEditor() {
         functionBody
       );
 
-      const setupFn = getSetupFn(null, null, null, THREE, {
-        create: function (cam: THREE.Camera, domElement: HTMLElement) {
-          if (threeRef.current && threeRef.current.controls) {
-            return threeRef.current.controls;
-          }
-          customControlsCreated = true;
-          return new OrbitControls(cam, domElement);
-        },
-      });
+      const setupFn = getSetupFn(null, null, null, THREE, OrbitControlsWrapper);
 
       if (typeof setupFn !== "function") {
         throw new Error("setup function not found in code");
@@ -198,15 +307,7 @@ export default function ThreeCodeEditor() {
 
       if (THREE && scene && camera && renderer) {
         try {
-          setupFn(scene, camera, renderer, THREE, {
-            create: function (cam: THREE.Camera, domElement: HTMLElement) {
-              if (threeRef.current && threeRef.current.controls) {
-                return threeRef.current.controls;
-              }
-              customControlsCreated = true;
-              return new OrbitControls(cam, domElement);
-            },
-          });
+          setupFn(scene, camera, renderer, THREE, OrbitControlsWrapper);
           renderer.render(scene, camera);
           addToHistory(code);
 
@@ -274,6 +375,14 @@ export default function ThreeCodeEditor() {
 
       const imageBase64 = await captureScreenshot();
 
+      // 获取代码历史上下文
+      const historyContext = "";
+      try {
+        // Add code to get history context if needed
+      } catch (err) {
+        console.error("获取历史上下文出错:", err);
+      }
+
       const response = await fetch("/api/agent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -281,6 +390,8 @@ export default function ThreeCodeEditor() {
           prompt,
           currentCode: code,
           image: imageBase64,
+          historyContext,
+          lintErrors: lintErrors.length > 0 ? lintErrors : undefined,
         }),
       });
 
@@ -395,6 +506,32 @@ export default function ThreeCodeEditor() {
       {showDiff && diff && (
         <div className="diff-viewer">
           <pre>{diff}</pre>
+        </div>
+      )}
+
+      {/* ESLint errors overlay */}
+      {lintOverlayVisible && lintErrors.length > 0 && (
+        <div className="lint-overlay">
+          <div className="lint-overlay-content">
+            <h3>ESLint 检查结果</h3>
+            <button
+              onClick={() => setLintOverlayVisible(false)}
+              className="close-button"
+            >
+              ×
+            </button>
+            <ul className="lint-errors-list">
+              {lintErrors.map((error, index) => (
+                <li key={index} className="lint-error-item">
+                  <span className="lint-error-location">
+                    行 {error.line}:{error.column}
+                  </span>
+                  <span className="lint-error-message">{error.message}</span>
+                  <span className="lint-error-rule">{error.ruleId}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
         </div>
       )}
     </div>

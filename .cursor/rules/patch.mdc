@@ -1,0 +1,16 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+首轮传全量：只在第一次读取文件时加载完整 code。
+
+LLM 生成改进：codeGenTool 根据 originalCode 和 instruction 输出 improvedCode（完整文本），但不写回。
+
+合并 Patch & Apply：applyPatchTool 内部用 jsdiff 一次性生成 patch 并打到本地 code 上，返回增量后的 updatedCode。
+
+循环迭代：在多轮自修循环中，每次只传输 { code, improvedCode } 给 applyPatchTool，只在本地做增量合并，不用再传回全量的 improvedCode 或 code。
+
+真正的增量：网络／Token 开销只在 LLM 生成 improvedCode 那一步；applyPatchTool 则完全在本地对比并更新，大幅节省了上下文大小和重复传输。
+
+通过这种方式，你就能实现“真正的增量更新”，Agent 每次只需要把“差量”（patch）应用到本地代码即可，而无需全量覆盖。

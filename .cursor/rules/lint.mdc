@@ -1,0 +1,44 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+
+ Three.js 代码渲染模型的 Canvas 上，实时嵌入 ESLint 检查，并且把检查结果回传给你的 LangChain “Agent 中心”，形成一个闭环的“实时自检 → 反馈 → 修复”流程。不需要在前端显示lint错误，在后端执行即可
+
+ 
+参考思路：要结合项目实际
+代码修改（Agent）
+前端打包 ESLint 到浏览器
+前端：lintAndOverlay(code)
+ESLint 检查 → 返回给“agent中心”
+POST /api/....
+后端：runAgentWithLintReport(file, messages)
+Agent 接收到 lint 报告 → 规划下一步（修复、patch 或反馈）
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

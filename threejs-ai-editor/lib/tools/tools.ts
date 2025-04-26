@@ -1,5 +1,3 @@
-import { diffTool } from "./diffTool";
-import { lintTool } from "./lintTool";
 import { applyPatchTool } from "./applyPatchTool";
 import { codeGenTool } from "./codeGenTool";
 // 工具结果类型
@@ -16,8 +14,6 @@ export interface ToolResult {
 
 // 工具映射表
 const tools = {
-  lint: lintTool,
-  diff: diffTool,
   apply_patch: applyPatchTool,
   generate_code: codeGenTool,
 };
@@ -34,5 +30,6 @@ export async function executeTool(
 
   // 对于 DynamicTool，将 args 转换为 JSON 字符串
   const input = typeof args === "string" ? args : JSON.stringify(args);
-  return await tool.invoke(input);
+  // 检查 tool.invoke 是否需要 JSON.parse
+  return await tool.invoke(JSON.parse(input));
 }

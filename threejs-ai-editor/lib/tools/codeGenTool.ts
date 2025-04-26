@@ -1,20 +1,21 @@
-import { DynamicTool } from "@langchain/core/tools";
+import { DynamicStructuredTool } from "@langchain/core/tools";
 import { AzureChatOpenAI } from "@langchain/openai";
+import { z } from "zod";
+import { getCachedCode } from "./applyPatchTool";
 
 // Initialize Azure OpenAI client for code generation
 const codeGenModel = new AzureChatOpenAI({
-  model: "gpt-4o",
+  model: "gpt-4.1",
   temperature: 0.2, // Slightly higher temperature for more creative code generation
   azureOpenAIApiKey: process.env.AZURE_OPENAI_API_KEY,
   azureOpenAIApiDeploymentName: process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME,
-  azureOpenAIApiVersion: "2024-02-15-preview",
+  azureOpenAIApiVersion: "2024-12-01-preview",
   azureOpenAIApiInstanceName: process.env.AZURE_OPENAI_API_INSTANCE_NAME,
   azureOpenAIEndpoint: process.env.AZURE_OPENAI_API_ENDPOINT,
-  maxTokens: 4000,
 });
 
 /**
- * 处理LLM响应内容 - 支持字符串或数组格式
+ * Process LLM response content - supports string or array format
  */
 function handleLLMResponseContent(content: unknown): string {
   if (typeof content === "string") {
@@ -39,24 +40,38 @@ function handleLLMResponseContent(content: unknown): string {
 }
 
 /**
- * Code Generation Tool - Generates initial Three.js code based on user instructions
- * Only used during the first interaction to create the base code
+ * Code Generation Tool - Generates initial Three.js code or fixes existing code based on errors
  */
-export const codeGenTool = new DynamicTool({
-  name: "generate_code",
-  description: "生成初始Three.js代码，基于用户指令",
-  func: async (instruction: string): Promise<string> => {
+export const codeGenTool = new DynamicStructuredTool({
+  name: "generate_fix_code",
+  description: "Generate or modify Three.js code based on instruction",
+  schema: z.object({
+    instruction: z.string().describe("用户指令或代码修复要求"),
+    code: z
+      .string()
+      .optional()
+      .describe("当前代码，如不提供则使用系统缓存中的代码"),
+  }),
+  func: async ({ instruction, code }) => {
     try {
-      console.log("Generating initial Three.js code...");
+      console.log("Processing Three.js code request...");
 
-      // Generate initial Three.js code based on user instructions
-      const prompt = `You are a Three.js expert. Generate a complete, functional Three.js setup function 
+      // 确定当前代码：优先使用传入的code，否则使用缓存的代码
+      const currentCode = code || getCachedCode();
+      const isInitialGeneration = !currentCode;
+
+      // 根据情况生成提示语
+      let prompt: string;
+
+      if (isInitialGeneration) {
+        // 首次生成代码
+        prompt = `You are a Three.js expert. Generate complete, functional Three.js code 
 based on the following user instructions:
 
 "${instruction}"
 
-Requirements:
-1. The code must be a complete "function setup(scene, camera, renderer, THREE, OrbitControls) { ... }" function
+Requirements for generation:
+1. Create a complete "function setup(scene, camera, renderer, THREE, OrbitControls) { ... }" function
 2. The function must properly use the provided scene, camera, and renderer parameters
 3. Add appropriate lighting, materials, and objects as required by the instructions
 4. Include any necessary animation or interaction logic
@@ -67,61 +82,68 @@ Requirements:
 
 Return ONLY the complete code without explanations or markdown formatting.
 The code should be ready to run immediately.`;
+      } else {
+        // 修复或改进现有代码
+        prompt = `You are a Three.js expert. Fix or improve the Three.js code based on the following requirement:
 
+"${instruction}"
+
+Here is the current code:
+\`\`\`javascript
+${currentCode}
+\`\`\`
+
+Requirements for fixing/improving:
+1. Maintain the setup function structure: "function setup(scene, camera, renderer, THREE, OrbitControls) { ... }"
+2. Address the specific requirement or issue mentioned
+3. Keep all existing functionality that is working correctly
+4. Ensure the code is clean, optimized, and follows Three.js best practices
+5. Return the complete improved function, ready to run immediately
+
+Return ONLY the complete code without explanations or markdown formatting.`;
+      }
+
+      // 调用LLM生成或修改代码
       const result = await codeGenModel.invoke(prompt);
       const responseContent = handleLLMResponseContent(result.content);
 
-      // Extract code from the response
-      let code = responseContent.trim();
+      // 提取生成的代码
+      let improvedCode = responseContent.trim();
 
-      // Remove markdown code blocks if present
-      if (code.includes("```")) {
-        const codeMatch = code.match(/```(?:js|javascript)?\s*([\s\S]*?)```/);
+      // 移除代码块标记（如果有）
+      if (improvedCode.includes("```")) {
+        const codeMatch = improvedCode.match(
+          /```(?:js|javascript)?\s*([\s\S]*?)```/
+        );
         if (codeMatch && codeMatch[1]) {
-          code = codeMatch[1].trim();
+          improvedCode = codeMatch[1].trim();
         }
       }
 
-      // Ensure the code is a setup function
-      if (!code.startsWith("function setup")) {
-        code = `function setup(scene, camera, renderer, THREE, OrbitControls) {
-  ${code}
+      // 确保代码是setup函数格式
+      if (!improvedCode.startsWith("function setup")) {
+        improvedCode = `function setup(scene, camera, renderer, THREE, OrbitControls) {
+  ${improvedCode}
   // Return the main object or scene
   return scene.children.find(child => child instanceof THREE.Mesh) || scene;
 }`;
       }
 
-      // 返回JSON格式结果
+      // 返回生成的代码
       return JSON.stringify({
-        code,
+        code: improvedCode,
+        originalCode: currentCode,
         status: "success",
-        message: "已成功生成Three.js代码",
+        message: isInitialGeneration
+          ? "Successfully generated Three.js code"
+          : "Successfully improved Three.js code",
+        isFirstGeneration: isInitialGeneration,
       });
     } catch (error) {
-      console.error("Error in code generation tool:", error);
-      // 返回错误信息和备用代码
-      const fallbackCode = `function setup(scene, camera, renderer, THREE, OrbitControls) {
-  // Basic fallback code - a simple colored cube
-  const geometry = new THREE.BoxGeometry(1, 1, 1);
-  const material = new THREE.MeshBasicMaterial({ color: 0xff0000 });
-  const cube = new THREE.Mesh(geometry, material);
-  scene.add(cube);
-  
-  // Add some basic lighting
-  const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
-  scene.add(ambientLight);
-  
-  const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
-  directionalLight.position.set(5, 5, 5);
-  scene.add(directionalLight);
-  
-  return cube;
-}`;
-
+      console.error("Failed to generate or modify Three.js code:", error);
       return JSON.stringify({
-        code: fallbackCode,
         status: "error",
-        message: `代码生成出错: ${
+        message: `Failed to generate or modify Three.js code: ${
           error instanceof Error ? error.message : String(error)
         }`,
       });

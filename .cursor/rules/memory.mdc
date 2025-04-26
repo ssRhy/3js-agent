@@ -1,0 +1,35 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+Memory 在 LangChain 里确实可以用来帮助记录上下文的变化，从而更高效地生成和应用 patch。
+##
+优势：
+更小的上下文：不需要每次传一整份代码，只要传补丁或者最新状态。
+更快的推理速度：LLM只处理必要的变化。
+更高的连贯性：保证 patch 一直是基于最新版本打的，避免冲突。
+
+
+memmory功能加入agent
+如果 memory 里保存：最新一次的 latestCode,或者最近的 patch 列表（差量历史） 那么，当 Agent 要继续生成 patch 时，就可以直接基于 memory 里的最新状态生成 针对性很强的增量更新。
+Agent 在运行时，会从 Memory 里取出当前状态，比如拿到 latestCode。
+然后根据用户的需求或者 LLM推理，生成新的 patch。
+应用 patch，更新 Memory 中的 latestCode，继续下一轮。
+Patch 只是操作数据，Memory 是保存数据。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

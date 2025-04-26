@@ -22,6 +22,7 @@ alwaysApply: false
 循环执行：Agent 会自动计划调用 functions，执行本地操作并将 <tool_result> 注入对话；
 终止条件：当 lint/test 全部通过或达到迭代上限时自动退出
 
+
 ##
 注意：
 返回JSON格式数据
