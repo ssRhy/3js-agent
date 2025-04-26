@@ -32,11 +32,7 @@ export const applyPatchTool = new DynamicStructuredTool({
   description:
     "应用unified diff格式的补丁到内存中保存的代码。可以提交两种格式：1) 包含完整代码，用于初始化：{ code: string } 2) 包含标准unified diff补丁：{ patch: string, description?: string }。初次必须先提交完整代码，之后只需提交补丁文本即可增量更新。",
   schema: z.object({
-    input: z
-      .string()
-      .describe(
-        "JSON格式的输入，初次使用时应包含 { code: string }，后续使用时包含 { patch: string, description?: string }"
-      ),
+    input: z.string().describe("JSON格式的输入"),
   }),
   func: async ({ input }) => {
     try {

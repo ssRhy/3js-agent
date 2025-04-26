@@ -20,8 +20,8 @@ export default async function handler(
     const eslint = new Linter();
     const lintConfig: Linter.Config = {
       languageOptions: {
-        ecmaVersion: 2020,
-        sourceType: "script",
+        ecmaVersion: 2020, // 支持到 ES2020 特性
+        sourceType: "module", // 支持 import/export
         globals: {
           // Three.js and browser globals
           THREE: "readonly",
@@ -37,14 +37,10 @@ export default async function handler(
           clearTimeout: "readonly",
           requestAnimationFrame: "readonly",
         },
-        parserOptions: {
-          ecmaVersion: 2020,
-        },
       },
       rules: {
-        // Basic rules for cleaner Three.js code
-        "no-undef": "error",
-        "no-unused-vars": "warn",
+        "no-undef": 2,
+        "no-unused-vars": 1,
         semi: ["error", "always"],
         "no-extra-semi": "warn",
         quotes: ["warn", "double"],
@@ -56,10 +52,12 @@ export default async function handler(
         "prefer-const": "warn",
         eqeqeq: ["warn", "always"],
       },
+      linterOptions: {
+        reportUnusedDisableDirectives: true,
+      },
     };
 
     // Create a temporary file content for linting
-    // Since ESLint works with files, wrap the code in a setup function if not already
     let codeToLint = code;
 
     // Ensure code isn't missing semi-colons at the end of statements which causes hard to debug issues
@@ -67,7 +65,7 @@ export default async function handler(
       codeToLint = `function setup(scene, camera, renderer, THREE) {\n${codeToLint}\n}`;
     }
 
-    // Perform linting
+    // Perform linting using the Linter class
     const results = eslint.verify(codeToLint, lintConfig);
 
     // Process and return the lint results

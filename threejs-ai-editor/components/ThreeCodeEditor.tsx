@@ -25,24 +25,19 @@ export default function ThreeCodeEditor() {
   const [prompt, setPrompt] = useState("添加一个旋转的红色立方体");
   const [code, setCode] =
     useState(`function setup(scene, camera, renderer, THREE, OrbitControls) {
-    // 创建基本几何体
-    const geometry = new THREE.BoxGeometry(1, 1, 1);
-    const material = new THREE.MeshStandardMaterial({ color: 0x44aa88 });
-    const cube = new THREE.Mesh(geometry, material);
-    cube.userData.autoRotate = true;
-    scene.add(cube);
-
-    // 使用OrbitControls，确保通过create方法创建控制器
-    if (OrbitControls) {
-      // 通过create方法获取或创建一个新的控制器实例
-      const controls = OrbitControls.create(camera, renderer.domElement);
-      if (controls) {
-        controls.enableDamping = true;
-      }
-    }
+  // 创建一个红色立方体
+  const geometry = new THREE.BoxGeometry(1, 1, 1);
+  const material = new THREE.MeshStandardMaterial({ color: 0xff0000 });
+  const cube = new THREE.Mesh(geometry, material);
   
-    return cube;
-  }`);
+  // 设置自动旋转
+  cube.userData.autoRotate = true;
+  
+  // 添加到场景
+  scene.add(cube);
+  
+  return cube;
+}`);
   const [previousCode, setPreviousCode] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
@@ -230,10 +225,17 @@ export default function ThreeCodeEditor() {
     if (!threeRef.current || !code) return;
     if (code === "") return;
 
-    const { scene, camera, renderer } = threeRef.current;
-    let customControlsCreated = false;
-
     try {
+      // Check if we have a valid scene to work with
+      const { scene, camera, renderer } = threeRef.current;
+      if (!scene || !camera || !renderer) {
+        console.warn("Scene, camera or renderer not available");
+        return;
+      }
+
+      let customControlsCreated = false;
+
+      // Clean up previous objects
       const objectsToRemove: THREE.Mesh[] = [];
       scene.children.forEach((child) => {
         if (
@@ -256,56 +258,83 @@ export default function ThreeCodeEditor() {
         }
       });
 
-      const isSafeCode =
-        code.includes("function setup") &&
-        code.match(/\{/g)?.length === code.match(/\}/g)?.length;
-
-      if (!isSafeCode) {
-        setError("代码不完整或格式有误，请检查代码");
+      // Validate code using our enhanced validation function
+      if (!validateCode(code)) {
+        setError("代码不完整或包含语法错误，请检查代码");
         return;
       }
 
-      const functionBody = `
-        let setup;
+      try {
+        // Sanitize the code before evaluation
+        const sanitizedCode = code.trim();
+
+        const functionBody = `
+          let setup;
+          try {
+            ${sanitizedCode}
+            if (typeof setup !== 'function') {
+              throw new Error('setup function not defined in code');
+            }
+            return setup;
+          } catch(e) {
+            console.error("Setup function parsing error:", e);
+            throw e;
+          }
+        `;
+
+        // Create a wrapper for OrbitControls to prevent direct instantiation
+        const OrbitControlsWrapper = {
+          create: function (cam: THREE.Camera, domElement: HTMLElement) {
+            if (threeRef.current && threeRef.current.controls) {
+              return threeRef.current.controls;
+            }
+            customControlsCreated = true;
+            return new OrbitControls(cam, domElement);
+          },
+        };
+
+        // Use try-catch for Function creation
+        let getSetupFn;
         try {
-          ${code}
-          if (typeof setup !== 'function') {
-            throw new Error('setup function not defined in code');
-          }
-          return setup;
-        } catch(e) {
-          console.error("Setup function parsing error:", e);
-          throw e;
+          getSetupFn = Function(
+            "scene",
+            "camera",
+            "renderer",
+            "THREE",
+            "OrbitControls",
+            functionBody
+          );
+        } catch (syntaxError) {
+          console.error("代码语法错误:", syntaxError);
+          setError(
+            "代码语法错误: " +
+              (syntaxError instanceof Error
+                ? syntaxError.message
+                : String(syntaxError))
+          );
+          return;
         }
-      `;
 
-      // Create a wrapper for OrbitControls to prevent direct instantiation
-      const OrbitControlsWrapper = {
-        create: function (cam: THREE.Camera, domElement: HTMLElement) {
-          if (threeRef.current && threeRef.current.controls) {
-            return threeRef.current.controls;
-          }
-          customControlsCreated = true;
-          return new OrbitControls(cam, domElement);
-        },
-      };
+        // Use try-catch for setup function execution
+        let setupFn;
+        try {
+          setupFn = getSetupFn(null, null, null, THREE, OrbitControlsWrapper);
+        } catch (execError) {
+          console.error("Setup函数执行错误:", execError);
+          setError(
+            "Setup函数执行错误: " +
+              (execError instanceof Error
+                ? execError.message
+                : String(execError))
+          );
+          return;
+        }
 
-      const getSetupFn = Function(
-        "scene",
-        "camera",
-        "renderer",
-        "THREE",
-        "OrbitControls",
-        functionBody
-      );
+        if (typeof setupFn !== "function") {
+          throw new Error("setup function not found in code");
+        }
 
-      const setupFn = getSetupFn(null, null, null, THREE, OrbitControlsWrapper);
-
-      if (typeof setupFn !== "function") {
-        throw new Error("setup function not found in code");
-      }
-
-      if (THREE && scene && camera && renderer) {
+        // Execute the setup function
         try {
           setupFn(scene, camera, renderer, THREE, OrbitControlsWrapper);
           renderer.render(scene, camera);
@@ -327,40 +356,88 @@ export default function ThreeCodeEditor() {
             "代码执行错误: " + (e instanceof Error ? e.message : String(e))
           );
         }
+      } catch (e) {
+        console.error("代码评估错误:", e);
+        setError(
+          "代码评估错误: " + (e instanceof Error ? e.message : String(e))
+        );
       }
     } catch (e) {
-      console.error("场景清理错误:", e);
-      setError("场景清理错误: " + (e instanceof Error ? e.message : String(e)));
+      console.error("场景处理错误:", e);
+      setError("场景处理错误: " + (e instanceof Error ? e.message : String(e)));
     }
   }, [code, addToHistory, error]);
 
   const captureScreenshot = async () => {
-    if (!threeRef.current) return null;
+    if (!threeRef.current) {
+      console.warn("无法捕获截图：Three.js场景未初始化");
+      return null;
+    }
+
+    const { scene, camera, renderer } = threeRef.current;
+    if (!scene || !camera || !renderer) {
+      console.warn("无法捕获截图：Three.js场景组件不完整");
+      return null;
+    }
 
     try {
       // 强制渲染一次当前场景状态
-      const { scene, camera, renderer } = threeRef.current;
       renderer.render(scene, camera);
 
       // 获取画布并截图
       const canvas = renderer.domElement;
+      if (!canvas) {
+        console.warn("无法捕获截图：canvas元素不存在");
+        return null;
+      }
 
       // 直接使用canvas的toDataURL方法
       const imageBase64 = canvas.toDataURL("image/png");
       console.log("获取到截图数据，长度:", imageBase64.length);
 
       // 简单验证截图是否有效
-      if (imageBase64 === "data:,") {
-        console.error("截图为空白");
-        throw new Error("截图内容为空");
+      if (
+        imageBase64 === "data:," ||
+        !imageBase64.startsWith("data:image/png;base64,")
+      ) {
+        console.error("截图为空白或格式无效");
+        return null;
       }
 
       return imageBase64;
     } catch (err) {
       console.error("截图失败:", err);
-      setError("无法捕获场景截图");
+      setError(
+        "无法捕获场景截图: " +
+          (err instanceof Error ? err.message : String(err))
+      );
       return null;
     }
+  };
+
+  const validateCode = (codeToValidate: string) => {
+    // Check if the code contains the setup function
+    const hasSetupFn = codeToValidate.includes("function setup");
+
+    // Check if braces are balanced
+    const openBraces = (codeToValidate.match(/\{/g) || []).length;
+    const closeBraces = (codeToValidate.match(/\}/g) || []).length;
+    const balancedBraces = openBraces === closeBraces;
+
+    // Basic check for invalid tokens that could cause issues
+    const hasValidSyntax = (() => {
+      try {
+        // Try to parse the code using Function constructor without executing it
+        // This will throw a SyntaxError if the code contains invalid syntax
+        new Function(`"use strict"; ${codeToValidate}`);
+        return true;
+      } catch (e) {
+        console.error("代码语法检查失败:", e);
+        return false;
+      }
+    })();
+
+    return hasSetupFn && balancedBraces && hasValidSyntax;
   };
 
   const handleGenerate = async () => {
@@ -375,82 +452,52 @@ export default function ThreeCodeEditor() {
 
       const imageBase64 = await captureScreenshot();
 
-      // 获取代码历史上下文
-      const historyContext = "";
+      // Add your API call logic here
       try {
-        // Add code to get history context if needed
-      } catch (err) {
-        console.error("获取历史上下文出错:", err);
-      }
+        const response = await fetch("/api/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ prompt, code, image: imageBase64 }),
+        });
 
-      const response = await fetch("/api/agent", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          prompt,
-          currentCode: code,
-          image: imageBase64,
-          historyContext,
-          lintErrors: lintErrors.length > 0 ? lintErrors : undefined,
-        }),
-      });
+        if (!response.ok) {
+          throw new Error(`API responded with status: ${response.status}`);
+        }
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        const errorMessage =
-          errorData.message || errorData.error || response.statusText;
-        throw new Error("API请求失败: " + errorMessage);
-      }
-
-      const data = (await response.json()) as ApiResponse;
-      if (data.error) {
-        setError(data.message || data.error || "API返回错误");
-        return;
-      }
-
-      const validateCode = (codeToValidate: string) => {
-        const hasSetupFn = codeToValidate.includes("function setup");
-        const openBraces = (codeToValidate.match(/\{/g) || []).length;
-        const closeBraces = (codeToValidate.match(/\}/g) || []).length;
-
-        return hasSetupFn && openBraces === closeBraces;
-      };
-
-      if (data.directCode) {
-        if (validateCode(data.directCode)) {
+        const data: ApiResponse = await response.json();
+        if (data.directCode) {
           setPreviousCode(code);
           setCode(data.directCode);
-        } else {
-          setError("API返回的代码不完整，无法安全渲染");
-          console.error("不完整代码:", data.directCode);
-        }
-      }
 
-      if (data.patch) {
-        try {
-          const { applyDiff } = await import("../utils/applyDiff");
-          const newCode = applyDiff(code, data.patch);
-
-          if (newCode !== code) {
-            if (validateCode(newCode)) {
-              setPreviousCode(code);
-              setCode(newCode);
-              setDiff(data.patch);
-            } else {
-              setError("应用差异后的代码不完整，无法安全渲染");
-              console.error("应用diff后的不完整代码:", newCode);
-            }
+          // Generate simple diff for display
+          if (data.patch) {
+            setDiff(data.patch);
           } else {
-            setError("补丁应用后代码没有变化");
+            // Simple diff calculation if patch not provided
+            const diffLines = data.directCode
+              .split("\n")
+              .filter((line, i) => {
+                const oldLines = code.split("\n");
+                return i >= oldLines.length || line !== oldLines[i];
+              })
+              .join("\n");
+            setDiff(diffLines);
           }
-        } catch (diffError) {
-          console.error("应用diff时出错:", diffError);
-          setError("应用代码差异时出错");
+        } else if (data.error) {
+          throw new Error(data.error);
         }
+      } catch (error) {
+        console.error("生成错误:", error);
+        setError(
+          "生成错误: " +
+            (error instanceof Error ? error.message : String(error))
+        );
       }
-    } catch (err) {
-      console.error("生成代码错误:", err);
-      setError(err instanceof Error ? err.message : "生成失败");
+    } catch (error) {
+      console.error("生成错误:", error);
+      setError(
+        "生成错误: " + (error instanceof Error ? error.message : String(error))
+      );
     } finally {
       setIsLoading(false);
     }
@@ -485,7 +532,7 @@ export default function ThreeCodeEditor() {
           <Editor
             height="100%"
             defaultLanguage="javascript"
-            value={code}
+            value={showDiff && diff ? diff : code}
             onChange={(value) => value !== undefined && setCode(value)}
             onMount={handleEditorDidMount}
             theme="vs-dark"
@@ -501,13 +548,6 @@ export default function ThreeCodeEditor() {
       </div>
 
       <div className="preview" ref={containerRef}></div>
-
-      {/* Display code diff when showDiff is true */}
-      {showDiff && diff && (
-        <div className="diff-viewer">
-          <pre>{diff}</pre>
-        </div>
-      )}
 
       {/* ESLint errors overlay */}
       {lintOverlayVisible && lintErrors.length > 0 && (

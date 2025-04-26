@@ -17,6 +17,12 @@ const nextConfig = {
   experimental: {
     outputFileTracingRoot: false,
   },
+  // ESLint configuration
+  eslint: {
+    // Explicitly enable ESLint detection during development
+    ignoreDuringBuilds: false,
+    dirs: ["pages", "components", "lib", "utils", "stores"],
+  },
   // 更安全的webpack配置
   webpack: (config, { isServer }) => {
     // 避免在客户端尝试导入node-only模块

@@ -169,8 +169,10 @@ If there are ESLint errors, make sure to address them in your solution.`;
     await agentMemory.saveContext(
       { userPrompt },
       {
-        codeState: `分析图像后的建议: ${contentText.substring(0, 200)}...`,
-        lastAnalysisTimestamp: new Date().toISOString(),
+        codeStateContext: {
+          codeState: `分析图像后的建议: ${contentText.substring(0, 200)}...`,
+          lastAnalysisTimestamp: new Date().toISOString(),
+        },
       }
     );
 
@@ -357,51 +359,6 @@ export async function runAgentLoop(
       }
     }
 
-    // 特殊处理diff_code工具的输入
-    if (toolName === "diff_code") {
-      try {
-        // 尝试解析为对象
-        const inputObj = JSON.parse(input);
-
-        // 处理嵌套的input字段
-        if (inputObj.input && typeof inputObj.input === "string") {
-          if (inputObj.input.startsWith("{") && inputObj.input.endsWith("}")) {
-            try {
-              // 尝试解析内部JSON
-              const innerObj = JSON.parse(inputObj.input);
-
-              // 确保输入格式正确
-              if (innerObj.originalCode && innerObj.improvedCode) {
-                // 正确格式化JSON字符串，确保特殊字符被正确转义
-                return JSON.stringify({
-                  input: JSON.stringify({
-                    originalCode: innerObj.originalCode,
-                    improvedCode: innerObj.improvedCode,
-                    description: `Diff generated at ${new Date().toISOString()}`,
-                  }),
-                });
-              }
-            } catch (e) {
-              console.error("解析内部JSON失败:", e);
-            }
-          }
-        }
-
-        // 已经是正确格式的情况
-        if (inputObj.originalCode && inputObj.improvedCode) {
-          return JSON.stringify({
-            input: JSON.stringify({
-              originalCode: inputObj.originalCode,
-              improvedCode: inputObj.improvedCode,
-              description: `Diff for update: ${userPrompt.substring(0, 30)}...`,
-            }),
-          });
-        }
-      } catch (e) {
-        console.error("解析diff_code输入失败:", e);
-      }
-    }
-
     return input;
   }
 
@@ -444,13 +401,13 @@ export async function runAgentLoop(
   const systemMessage = new SystemMessage(
     "你是专业的Three.js代码优化AI助手。以下是你的工作指南：\n\n" +
       "# 工具说明\n" +
-      "- **generate_fix_code**：生成或修复代码，" +
-      "- **apply_patch**：应用代码更新，" +
+      "- **generate_fix_code**：生成或修复代码\n" +
+      "- **apply_patch**：应用代码更新\n" +
       "# 工作循环\n" +
       "请遵循以下增量迭代步骤进行代码优化：\n" +
-      "1. **分析**：理解当前代码、截图分析的建议、接收ESLint错误报告和用户需求\n" +
+      "1. **分析**：理解当前代码、截图分析的建议、用户需求\n" +
       "2. **改进**：使用generate_fix_code工具生成优化后的完整代码，传入明确的用户需求\n" +
-      "3. **应用更新**：使用apply_patch工具将改进后的代码应用到当前代码，" +
+      "3. **应用更新**：使用apply_patch工具将改进后的代码应用到当前代码\n" +
       "4. **实时检查**：根据ESLint反馈，修复代码质量问题，确保无语法错误\n" +
       "5. **迭代优化**：如需要进一步改进，返回第1步\n\n" +
       "# 重要规则\n" +
@@ -470,7 +427,7 @@ export async function runAgentLoop(
 
   // 创建人类消息模板
   const humanPromptTemplate = HumanMessagePromptTemplate.fromTemplate(
-    "请按照MDC模式和循环思考优化以下Three.js代码：\n\n```js\n{currentCode}\n```\n\n分析建议：\n{suggestion}\n\n用户需求：\n{userPrompt}"
+    "生成生动精细的3d场景.Three.js代码：\n\n```js\n{currentCode}\n```\n\n分析建议：\n{suggestion}\n\n用户需求：\n{userPrompt}"
   );
 
   // Create the prompt template
@@ -502,13 +459,6 @@ export async function runAgentLoop(
     executor.onToolStart = async (tool, input) => {
       const normalizedInput = prepareToolInput(tool.name, input);
       console.log(`Starting tool ${tool.name} with input:`, normalizedInput);
-
-      if (
-        tool.name === "diff_code" &&
-        !normalizedInput.includes("originalCode")
-      ) {
-        console.warn("Warning: diff_code called without proper JSON format");
-      }
     };
 
     // 跟踪执行中的代码更新
@@ -540,19 +490,7 @@ export async function runAgentLoop(
     executor.onToolError = async (tool, error) => {
       console.error(`Error in tool ${tool.name}:`, error);
 
-      // 对于 diffTool 错误，尝试恢复
-      if (tool.name === "diff_code") {
-        // 为agent提供明确的错误信息和恢复建议
-        return JSON.stringify({
-          error: "工具调用失败，JSON格式不正确",
-          details: error.message,
-          suggestion:
-            "请确保使用正确的JSON格式。应使用以下格式调用diff_code工具：\n" +
-            "1. 确保代码中的所有换行符和特殊字符都被正确转义\n" +
-            '2. 使用正确的JSON结构: {"input":{"originalCode":"...","improvedCode":"..."}}\n' +
-            "3. 可以尝试使用generate_fix_code工具先生成完整的改进代码，然后再使用diff_code工具",
-        });
-      } else if (tool.name === "apply_patch") {
+      if (tool.name === "apply_patch") {
         // 为apply_patch提供错误恢复信息
         return JSON.stringify({
           success: false,

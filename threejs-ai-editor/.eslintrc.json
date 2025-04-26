@@ -1,0 +1,22 @@
+{
+  "extends": "next/core-web-vitals",
+  "parserOptions": {
+    "ecmaVersion": 2022,
+    "sourceType": "module",
+    "ecmaFeatures": {
+      "jsx": true
+    }
+  },
+  "env": {
+    "browser": true,
+    "es6": true,
+    "node": true
+  },
+  "globals": {
+    "THREE": "readonly",
+    "OrbitControls": "readonly",
+    "scene": "readonly",
+    "camera": "readonly",
+    "renderer": "readonly"
+  }
+}

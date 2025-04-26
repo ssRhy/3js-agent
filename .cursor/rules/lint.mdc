@@ -1,7 +1,7 @@
 ---
 description: 
 globs: 
-alwaysApply: false
+alwaysApply: true
 ---
 
  Three.js 代码渲染模型的 Canvas 上，实时嵌入 ESLint 检查，并且把检查结果回传给你的 LangChain “Agent 中心”，形成一个闭环的“实时自检 → 反馈 → 修复”流程。不需要在前端显示lint错误，在后端执行即可
@@ -16,6 +16,8 @@ POST /api/....
 后端：runAgentWithLintReport(file, messages)
 Agent 接收到 lint 报告 → 规划下一步（修复、patch 或反馈）
 
+
+用的是 Next.js，默认已经支持大多数 npm 包。只需确保在 next.config.js 里没有将 eslint4b 标记为外部模块即可。
 
 
 

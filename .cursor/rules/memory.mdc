@@ -1,7 +1,7 @@
 ---
 description: 
 globs: 
-alwaysApply: false
+alwaysApply: true
 ---
 Memory 在 LangChain 里确实可以用来帮助记录上下文的变化，从而更高效地生成和应用 patch。
 ##

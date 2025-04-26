@@ -1,7 +1,7 @@
 ---
 description: 
 globs: 
-alwaysApply: false
+alwaysApply: true
 ---
 首轮传全量：只在第一次读取文件时加载完整 code。
 
