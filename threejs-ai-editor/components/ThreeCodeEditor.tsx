@@ -159,76 +159,180 @@ export default function ThreeCodeEditor() {
 
       console.log("Loading 3D model from URL:", modelUrl);
 
+      // 检测是否是Hyper3D URL (hyperhuman-file.deemos.com)
+      const isHyper3dUrl =
+        modelUrl.includes("hyperhuman-file.deemos.com") ||
+        modelUrl.includes("volces.com") ||
+        (modelUrl.includes("response-content-type") &&
+          modelUrl.includes("glb"));
+
       const { scene, camera } = threeRef.current;
       const loader = threeRef.current.gltfLoader;
 
+      // 设置额外的加载选项
+      loader.setCrossOrigin("anonymous");
+
       return new Promise<boolean>((resolve) => {
-        loader.load(
-          modelUrl,
-          (gltf) => {
-            try {
-              const model = gltf.scene;
+        // 对于Hyper3D URL，通过代理服务器获取
+        if (isHyper3dUrl) {
+          console.log("检测到Hyper3D URL，使用代理服务...");
 
-              // Scale and position model
-              model.scale.set(1, 1, 1);
-              model.position.set(0, 0, 0);
+          // 直接使用POST请求获取模型数据
+          fetch("/api/proxy-model", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ url: modelUrl }),
+          })
+            .then((response) => {
+              if (!response.ok) {
+                throw new Error(
+                  `代理请求失败: ${response.status} ${response.statusText}`
+                );
+              }
+              return response.arrayBuffer();
+            })
+            .then((buffer) => {
+              // 从二进制数据加载模型
+              loader.parse(
+                buffer,
+                "",
+                (gltf) => {
+                  try {
+                    const model = gltf.scene;
 
-              // Apply materials and shadows
-              model.traverse((node: THREE.Object3D) => {
-                if ((node as THREE.Mesh).isMesh) {
-                  (node as THREE.Mesh).castShadow = true;
-                  (node as THREE.Mesh).receiveShadow = true;
+                    // Scale and position model
+                    model.scale.set(1, 1, 1);
+                    model.position.set(0, 0, 0);
+
+                    // Apply materials and shadows
+                    model.traverse((node: THREE.Object3D) => {
+                      if ((node as THREE.Mesh).isMesh) {
+                        (node as THREE.Mesh).castShadow = true;
+                        (node as THREE.Mesh).receiveShadow = true;
+                      }
+                    });
+
+                    // Add to scene
+                    scene.add(model);
+
+                    // Auto-fit camera to model
+                    fitCameraToModel(camera, model);
+
+                    // Save loaded model reference
+                    const modelId = `model_${Date.now()}`;
+                    model.userData.modelId = modelId;
+                    setLoadedModels((prev) => [
+                      ...prev,
+                      { id: modelId, url: modelUrl },
+                    ]);
+
+                    console.log("模型通过代理成功加载");
+                    setIsModelLoading(false);
+                    resolve(true);
+                  } catch (err) {
+                    console.error("处理模型数据时出错:", err);
+                    setError(
+                      `处理模型数据时出错: ${
+                        err instanceof Error ? err.message : String(err)
+                      }`
+                    );
+                    setIsModelLoading(false);
+                    resolve(false);
+                  }
+                },
+                (error) => {
+                  console.error("解析模型时出错:", error);
+                  setError(
+                    `解析模型时出错: ${
+                      error instanceof Error ? error.message : String(error)
+                    }`
+                  );
+                  setIsModelLoading(false);
+                  resolve(false);
                 }
-              });
-
-              // Add to scene
-              scene.add(model);
-
-              // Auto-fit camera to model
-              fitCameraToModel(camera, model);
-
-              // Save loaded model reference
-              const modelId = `model_${Date.now()}`;
-              model.userData.modelId = modelId;
-              setLoadedModels((prev) => [
-                ...prev,
-                { id: modelId, url: modelUrl },
-              ]);
-
-              console.log("Model loaded successfully");
-              console.log("模型加载完成，正在添加到场景");
-              console.log("模型结构:", gltf);
-              setIsModelLoading(false);
-              resolve(true);
-            } catch (err) {
-              console.error("Error processing loaded model:", err);
+              );
+            })
+            .catch((error) => {
+              console.error("获取模型数据时出错:", error);
               setError(
-                `Error processing model: ${
+                `获取模型数据时出错: ${
+                  error instanceof Error ? error.message : String(error)
+                }`
+              );
+              setIsModelLoading(false);
+              resolve(false);
+            });
+        } else {
+          // 对于非Hyper3D URL，继续使用正常的加载方式
+          loader.load(
+            modelUrl,
+            (gltf) => {
+              try {
+                const model = gltf.scene;
+
+                // Scale and position model
+                model.scale.set(1, 1, 1);
+                model.position.set(0, 0, 0);
+
+                // Apply materials and shadows
+                model.traverse((node: THREE.Object3D) => {
+                  if ((node as THREE.Mesh).isMesh) {
+                    (node as THREE.Mesh).castShadow = true;
+                    (node as THREE.Mesh).receiveShadow = true;
+                  }
+                });
+
+                // Add to scene
+                scene.add(model);
+
+                // Auto-fit camera to model
+                fitCameraToModel(camera, model);
+
+                // Save loaded model reference
+                const modelId = `model_${Date.now()}`;
+                model.userData.modelId = modelId;
+                setLoadedModels((prev) => [
+                  ...prev,
+                  { id: modelId, url: modelUrl },
+                ]);
+
+                console.log("Model loaded successfully");
+                console.log("模型加载完成，正在添加到场景");
+                console.log("模型结构:", gltf);
+                setIsModelLoading(false);
+                resolve(true);
+              } catch (err) {
+                console.error("Error processing loaded model:", err);
+                setError(
+                  `Error processing model: ${
+                    err instanceof Error ? err.message : String(err)
+                  }`
+                );
+                setIsModelLoading(false);
+                resolve(false);
+              }
+            },
+            (progress) => {
+              console.log(
+                `Loading progress: ${Math.round(
+                  (progress.loaded / progress.total) * 100
+                )}%`
+              );
+            },
+            (err) => {
+              console.error("Error loading model:", err);
+              setError(
+                `Failed to load model: ${
                   err instanceof Error ? err.message : String(err)
                 }`
               );
               setIsModelLoading(false);
               resolve(false);
             }
-          },
-          (progress) => {
-            console.log(
-              `Loading progress: ${Math.round(
-                (progress.loaded / progress.total) * 100
-              )}%`
-            );
-          },
-          (err) => {
-            console.error("Error loading model:", err);
-            setError(
-              `Failed to load model: ${
-                err instanceof Error ? err.message : String(err)
-              }`
-            );
-            setIsModelLoading(false);
-            resolve(false);
-          }
-        );
+          );
+        }
       });
     } catch (err) {
       console.error("Error initiating model load:", err);
@@ -717,6 +821,17 @@ export default function ThreeCodeEditor() {
       if (data.success && data.modelUrl) {
         console.log("Model URL received:", data.modelUrl);
 
+        // 检查是否是Hyper3D URL
+        const isHyper3dUrl =
+          data.modelUrl.includes("hyperhuman-file.deemos.com") ||
+          data.modelUrl.includes("volces.com") ||
+          (data.modelUrl.includes("response-content-type") &&
+            data.modelUrl.includes("glb"));
+
+        if (isHyper3dUrl) {
+          console.log("检测到Hyper3D URL，将通过代理加载");
+        }
+
         // 直接从远程URL加载模型
         const modelLoaded = await loadModel(data.modelUrl);
 
@@ -744,12 +859,61 @@ function setup(scene, camera, renderer, THREE, OrbitControls, GLTFLoader) {
   
   // 从Hyper3D API生成的URL加载3D模型
   const loader = new GLTFLoader();
-  const modelUrl = '${data.modelUrl}';
+  // 原始模型URL: ${data.modelUrl}
+  ${isHyper3dUrl ? "// 使用代理服务获取模型，避免跨域问题" : ""}
   
-  console.log('正在加载AI生成的模型，URL:', modelUrl);
+  console.log('正在加载AI生成的模型...');
   
+  ${
+    isHyper3dUrl
+      ? `
+  // 通过代理加载Hyper3D模型
+  fetch('/api/proxy-model', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ url: '${data.modelUrl}' })
+  })
+  .then(response => {
+    if (!response.ok) {
+      throw new Error('代理请求失败: ' + response.status);
+    }
+    return response.arrayBuffer();
+  })
+  .then(buffer => {
+    // 从二进制数据加载模型
+    loader.parse(buffer, '', (gltf) => {
+      const model = gltf.scene;
+      
+      // 适当缩放和定位模型
+      model.scale.set(1, 1, 1);
+      model.position.set(0, 0, 0);
+      
+      // 为所有网格添加阴影支持
+      model.traverse((node) => {
+        if (node.isMesh) {
+          node.castShadow = true;
+          node.receiveShadow = true;
+        }
+      });
+      
+      scene.add(model);
+      console.log('AI生成的模型已成功加载到场景中');
+      
+      // 适配相机视角
+      fitCameraToObject(camera, model, 1.5);
+    }, (error) => {
+      console.error('解析模型时出错:', error);
+    });
+  })
+  .catch(error => {
+    console.error('获取模型数据时出错:', error);
+  });
+  `
+      : `
   loader.load(
-    modelUrl,
+    '${data.modelUrl}',
     (gltf) => {
       const model = gltf.scene;
       
@@ -779,7 +943,8 @@ function setup(scene, camera, renderer, THREE, OrbitControls, GLTFLoader) {
     (error) => {
       console.error('Error loading model:', error);
     }
-  );
+  );`
+  }
   
   // 辅助函数：将相机适配到对象大小
   function fitCameraToObject(camera, object, offset = 1.25) {

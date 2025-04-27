@@ -395,7 +395,7 @@ export async function runAgentLoop(
       "\n\n请参考这些历史变更，确保新改动与之前的修改方向一致。";
   }
 
-  // 工具集合现在使用包装后的diffTool
+
   const loopTools = [applyPatchTool, codeGenTool, modelGenTool];
 
   // 创建系统消息，使用普通的SystemMessage而非模板

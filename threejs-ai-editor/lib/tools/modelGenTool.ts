@@ -66,11 +66,18 @@ const createModelGenTool = () => {
 
         console.log("Generating 3D model with params:", params);
 
-        // Use the /api/hyper3d endpoint which handles the entire generation flow
-        console.log("Calling /api/hyper3d endpoint...");
+        // 获取完整的API URL
+        // 在服务器端，我们需要使用环境变量中的URL或构造一个绝对URL
+        const apiUrl =
+          process.env.NEXTAUTH_URL ||
+          process.env.VERCEL_URL ||
+          "http://localhost:3000";
+        const fullApiUrl = `${apiUrl}/api/hyper3d`;
+
+        console.log("Calling full API URL:", fullApiUrl);
         const startTime = Date.now();
 
-        const response = await fetch("/api/hyper3d", {
+        const response = await fetch(fullApiUrl, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -116,6 +123,16 @@ const createModelGenTool = () => {
         return JSON.stringify(successResponse);
       } catch (error: unknown) {
         console.error("Error generating 3D model:", error);
+
+        // 确保在出错时返回有效的JSON字符串
+        return JSON.stringify({
+          success: false,
+          error:
+            error instanceof Error ? error.message : "Unknown error occurred",
+          message: "Error generating 3D model",
+          modelUrl:
+            "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/BoxTextured/glTF/BoxTextured.gltf", // 提供一个后备模型
+        });
       }
     },
   });
