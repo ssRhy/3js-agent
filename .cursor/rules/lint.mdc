@@ -1,7 +1,7 @@
 ---
 description: 
 globs: 
-alwaysApply: true
+alwaysApply: false
 ---
 
  Three.js 代码渲染模型的 Canvas 上，实时嵌入 ESLint 检查，并且把检查结果回传给你的 LangChain “Agent 中心”，形成一个闭环的“实时自检 → 反馈 → 修复”流程。不需要在前端显示lint错误，在后端执行即可

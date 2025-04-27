@@ -194,8 +194,10 @@ export async function runAgentLoop(
   maxIterations = 5,
   userPrompt: string = "",
   historyContext: string = "",
-  lintErrors?: LintError[]
-): Promise<string> {
+  lintErrors?: LintError[],
+  modelRequired?: boolean,
+  res?: NextApiResponse
+): Promise<string | void> {
   // 保存当前代码状态
   let currentCodeState = currentCode;
 
@@ -218,15 +220,39 @@ export async function runAgentLoop(
   function prepareToolInput(toolName: string, input: string): string {
     if (toolName === "apply_patch") {
       try {
-        // 尝试解析为对象
+        // Clean input: replace escaped newlines with actual newlines
+        const cleanedInput = input
+          .replace(/\\n/g, "\n")
+          .replace(/\\t/g, "\t")
+          .replace(/\\\\/g, "\\");
+
+        // Try to parse the cleaned input as JSON
+        try {
+          const inputObj = JSON.parse(cleanedInput);
+          if (inputObj.patch) {
+            // If it already contains a patch property, return it as is
+            return cleanedInput;
+          }
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        } catch (parseError) {
+          // Not valid JSON after cleaning, continue with original logic
+        }
+
+        // Try to parse the original input
         const inputObj = JSON.parse(input);
 
         // 如果是嵌套的input字段，提取出来
         if (inputObj.input && typeof inputObj.input === "string") {
-          if (inputObj.input.startsWith("{") && inputObj.input.endsWith("}")) {
+          let innerInput = inputObj.input;
+
+          // Clean up possible double-escaped quotes in the inner input
+          innerInput = innerInput.replace(/\\"/g, '"');
+
+          // Check if it's a JSON string
+          if (innerInput.startsWith("{") && innerInput.endsWith("}")) {
             try {
-              // 尝试解析内部JSON
-              const innerObj = JSON.parse(inputObj.input);
+              // Try to parse inner JSON
+              const innerObj = JSON.parse(innerInput);
 
               // 如果包含originalCode和improvedCode，转换为正确的格式
               if (innerObj.originalCode && innerObj.improvedCode) {
@@ -262,7 +288,22 @@ export async function runAgentLoop(
               return JSON.stringify(innerObj);
               // eslint-disable-next-line @typescript-eslint/no-unused-vars
             } catch (e) {
-              // 如果无法解析，返回原始输入
+              // 如果无法解析，尝试作为原始文本处理
+              if (
+                innerInput.includes("patch") &&
+                innerInput.includes("---") &&
+                innerInput.includes("+++")
+              ) {
+                // 如果看起来像一个patch，直接返回
+                return JSON.stringify({
+                  patch: innerInput
+                    .replace(/\\n/g, "\n")
+                    .replace(/\\\\/g, "\\"),
+                  description: `Extracted patch data`,
+                });
+              }
+
+              // 否则返回原始输入
               return input;
             }
           }
@@ -315,6 +356,33 @@ export async function runAgentLoop(
       } catch (e) {
         // 解析失败，尝试检查是否包含原始代码和改进代码的字符串
         try {
+          // 处理可能包含在字符串中的patch数据
+          if (
+            input.includes("patch") &&
+            input.includes("---") &&
+            input.includes("+++")
+          ) {
+            // 这可能是一个直接包含在字符串中的patch，尝试提取
+            const cleanedInput = input
+              .replace(/\\n/g, "\n")
+              .replace(/\\\\/g, "\\");
+
+            // 使用正则表达式提取patch部分
+            const patchMatch = cleanedInput.match(
+              /patch[\"']?\s*:\s*[\"']?([\s\S]*?)(?:[\"'],|$)/
+            );
+            if (patchMatch && patchMatch[1]) {
+              const extractedPatch = patchMatch[1]
+                .replace(/\\n/g, "\n")
+                .replace(/\\\\/g, "\\");
+
+              return JSON.stringify({
+                patch: extractedPatch,
+                description: "直接从文本提取的patch",
+              });
+            }
+          }
+
           // 简单处理，如果字符串中包含明显的关键词，尝试解析
           if (
             input.includes("originalCode") &&
@@ -355,8 +423,12 @@ export async function runAgentLoop(
           console.error("Failed to extract code from string:", extractError);
         }
 
-        // 解析失败，返回原始输入
-        return input;
+        console.error("Failed to parse input for apply_patch:", e);
+        // 完全处理失败，返回简化的错误信息
+        return JSON.stringify({
+          error: "无法解析输入数据",
+          originalInput: input.substring(0, 100) + "...",
+        });
       }
     }
 
@@ -395,7 +467,6 @@ export async function runAgentLoop(
       "\n\n请参考这些历史变更，确保新改动与之前的修改方向一致。";
   }
 
-
   const loopTools = [applyPatchTool, codeGenTool, modelGenTool];
 
   // 创建系统消息，使用普通的SystemMessage而非模板
@@ -412,12 +483,17 @@ export async function runAgentLoop(
       "3. **应用更新**：使用apply_patch工具将改进后的代码应用到当前代码\n" +
       "4. **实时检查**：根据ESLint反馈，修复代码质量问题，确保无语法错误\n" +
       "5. **迭代优化**：如需要进一步改进，返回第1步\n\n" +
-      "# 重要规则\n" +
+      "# 3D模型生成集成" +
+      (modelRequired
+        ? "\n当用户需求明确表示需要生成3D模型(如人物、动物、物品等)时，你应优先调用generate_3d_model工具。模型生成后，确保在代码中正确加载并展示该模型。"
+        : "\n如果你判断实现用户需求需要复杂3D模型(如人物、动物、物品等)，可以主动调用generate_3d_model工具生成。") +
+      "\n记住，你拥有内存功能，能够记住之前生成的模型和代码上下文，以避免重复生成或在相同位置添加多个模型。" +
+      "\n\n# 重要规则\n" +
       "- **ESLint优先**：优先修复ESLint报告的代码问题，确保代码质量\n" +
       "- **迭代控制**：最多循环3次，或在无法进一步优化时提前结束\n" +
       "- **需求优先**：所有代码改进必须优先实现用户需求，然后才考虑其他优化\n" +
       "- **结构保持**：保持setup函数结构不变\n" +
-      "- **模型生成**：当需要复杂3D模型（如人物、动物、物品等）时，使用generate_3d_model工具生成模型，然后将其加载到场景中\n" +
+      "- **3D模型位置管理**：当场景中已有模型时，新模型应放置在不同位置，避免重叠，同一位置不要重复生成模型\n" +
       "- **控件创建**：永远不要直接使用new OrbitControls()，必须通过OrbitControls.create(camera, renderer.domElement)创建或获取控制器\n\n" +
       (lintErrorsMessage ? lintErrorsMessage + "\n\n" : "") +
       (patchHistoryText ? patchHistoryText + "\n\n" : "") +
@@ -485,6 +561,45 @@ export async function runAgentLoop(
           }
         } catch (e) {
           console.error("Failed to parse apply_patch result:", e);
+        }
+      } else if (output.tool === "generate_3d_model") {
+        try {
+          const result = JSON.parse(output.result);
+          if (result.success && result.modelUrl) {
+            // 将模型URL和相关信息保存到内存中
+            const existingMemory = await agentMemory.loadMemoryVariables({});
+            const existingContext = existingMemory.codeStateContext || {};
+
+            // 更新或初始化模型记录数组
+            const modelHistory = existingContext.modelHistory || [];
+
+            // 添加新模型到历史记录
+            modelHistory.push({
+              modelUrl: result.modelUrl,
+              timestamp: new Date().toISOString(),
+              prompt: userPrompt,
+              position: modelHistory.length, // 用索引作为简单的位置标识
+            });
+
+            // 保存更新后的内存状态
+            await agentMemory.saveContext(
+              { userPrompt },
+              {
+                codeStateContext: {
+                  ...existingContext,
+                  modelHistory,
+                  lastModelTimestamp: new Date().toISOString(),
+                  lastModelUrl: result.modelUrl,
+                },
+              }
+            );
+
+            console.log(
+              `Model generated and saved to memory: ${result.modelUrl}`
+            );
+          }
+        } catch (e) {
+          console.error("Failed to process model generation result:", e);
         }
       }
     };
@@ -564,6 +679,45 @@ export async function runAgentLoop(
         }
       );
 
+      // Check if the agent's output includes model URL info
+      let modelUrl: string | null = null;
+      const modelUrls: Array<{ url: string; name: string }> = [];
+
+      // Enhanced model URL detection in the agent's response
+      if (typeof output === "string") {
+        // 1. Check for MODEL_URL comment format
+        const modelUrlMatch = output.match(/\/\/\s*MODEL_URL:\s*(\S+)/);
+        if (modelUrlMatch && modelUrlMatch[1]) {
+          modelUrl = modelUrlMatch[1];
+          modelUrls.push({ url: modelUrl, name: "model.glb" });
+          console.log("Found model URL in code comment:", modelUrl);
+        }
+
+        // 2. Check for embedded Hyper3D URLs in the code
+        const hyper3dMatches = output.match(
+          /['"]https:\/\/hyperhuman-file\.deemos\.com\/[^'"]+\.glb[^'"]*['"]/g
+        );
+        if (hyper3dMatches && hyper3dMatches.length > 0) {
+          hyper3dMatches.forEach((match, index) => {
+            const url = match.replace(/^['"]|['"]$/g, "");
+            if (!modelUrl) {
+              modelUrl = url; // Set the primary URL if none found yet
+            }
+            modelUrls.push({ url, name: `model_${index}.glb` });
+            console.log(`Found embedded Hyper3D URL (${index + 1}):`, url);
+          });
+        }
+      }
+
+      if (res) {
+        return res.status(200).json({
+          directCode: output,
+          suggestion,
+          modelUrl,
+          modelUrls: modelUrls.length > 0 ? modelUrls : null,
+        });
+      }
+
       return output;
     } catch (agentError) {
       console.error("Agent execution error:", agentError);
@@ -637,7 +791,7 @@ export default async function handler(
   }
 
   // Process the request for different types of operations
-  const { action, code, prompt, screenshot, modelPrompt, lintErrors } =
+  const { action, code, prompt, screenshot, lintErrors, modelRequired } =
     req.body;
 
   console.log(
@@ -666,97 +820,60 @@ export default async function handler(
             5,
             prompt,
             "",
-            lintErrors
+            lintErrors,
+            modelRequired,
+            res
           );
 
-          // Check if the agent's output includes model URL info
-          let modelUrl = null;
-          const modelUrls = null;
-
-          // Simple detection for model URL in the agent's response
+          // Only process return value if function didn't handle response directly
           if (typeof improvedCode === "string") {
-            // Extract model URL if present in a comment pattern like: // MODEL_URL: http://example.com/model.glb
-            const modelUrlMatch = improvedCode.match(
-              /\/\/\s*MODEL_URL:\s*(\S+)/
-            );
-            if (modelUrlMatch && modelUrlMatch[1]) {
-              modelUrl = modelUrlMatch[1];
-              console.log("Found model URL in code comment:", modelUrl);
+            // Check if the agent's output includes model URL info
+            let modelUrl: string | null = null;
+            const modelUrls: Array<{ url: string; name: string }> = [];
+
+            // Enhanced model URL detection in the agent's response
+            if (typeof improvedCode === "string") {
+              // 1. Check for MODEL_URL comment format
+              const modelUrlMatch = improvedCode.match(
+                /\/\/\s*MODEL_URL:\s*(\S+)/
+              );
+              if (modelUrlMatch && modelUrlMatch[1]) {
+                modelUrl = modelUrlMatch[1];
+                modelUrls.push({ url: modelUrl, name: "model.glb" });
+                console.log("Found model URL in code comment:", modelUrl);
+              }
+
+              // 2. Check for embedded Hyper3D URLs in the code
+              const hyper3dMatches = improvedCode.match(
+                /['"]https:\/\/hyperhuman-file\.deemos\.com\/[^'"]+\.glb[^'"]*['"]/g
+              );
+              if (hyper3dMatches && hyper3dMatches.length > 0) {
+                hyper3dMatches.forEach((match, index) => {
+                  const url = match.replace(/^['"]|['"]$/g, "");
+                  if (!modelUrl) {
+                    modelUrl = url; // Set the primary URL if none found yet
+                  }
+                  modelUrls.push({ url, name: `model_${index}.glb` });
+                  console.log(
+                    `Found embedded Hyper3D URL (${index + 1}):`,
+                    url
+                  );
+                });
+              }
             }
+
+            return res.status(200).json({
+              directCode: improvedCode,
+              suggestion,
+              modelUrl,
+              modelUrls: modelUrls.length > 0 ? modelUrls : null,
+            });
           }
 
-          return res.status(200).json({
-            directCode: improvedCode,
-            suggestion,
-            modelUrl,
-            modelUrls: modelUrls || (modelUrl ? [modelUrl] : null),
-          });
+          // If we reached here, response was already sent
+          return;
         }
         return res.status(400).json({ error: "Missing required parameters" });
-
-      case "generate-model":
-        // Handle 3D model generation request
-        if (!modelPrompt) {
-          return res
-            .status(400)
-            .json({ error: "Model prompt is required for model generation" });
-        }
-
-        console.log("Generating 3D model with prompt:", modelPrompt);
-
-        // Prepare input for the modelGenTool
-        let modelInput: string;
-
-        if (typeof modelPrompt === "string") {
-          // If it's just a string prompt
-          modelInput = modelPrompt;
-        } else {
-          // If it's an object with additional parameters
-          modelInput = JSON.stringify({
-            prompt: modelPrompt,
-            ...req.body.options, // Additional options like quality, material, etc.
-          });
-        }
-
-        try {
-          // Direct invocation of the modelGenTool
-          const result = await modelGenTool.invoke(modelInput);
-
-          // Parse the result
-          let parsedResult;
-          try {
-            parsedResult = JSON.parse(result);
-          } catch (e) {
-            console.error("Failed to parse model generation result:", e);
-            parsedResult = { success: false, error: "Failed to parse result" };
-          }
-
-          if (parsedResult.success && parsedResult.modelUrl) {
-            console.log("Model generated successfully:", parsedResult.modelUrl);
-
-            // Return the result directly
-            return res.status(200).json({
-              success: true,
-              modelUrl: parsedResult.modelUrl,
-              modelUrls: parsedResult.modelUrls || [
-                { url: parsedResult.modelUrl, name: "model.glb" },
-              ],
-              message: "3D model generated successfully",
-            });
-          } else {
-            console.error("Model generation failed:", parsedResult);
-            return res.status(500).json({
-              success: false,
-              error: parsedResult.error || "Unknown error generating model",
-            });
-          }
-        } catch (error) {
-          console.error("Error invoking modelGenTool:", error);
-          return res.status(500).json({
-            success: false,
-            error: error instanceof Error ? error.message : "Unknown error",
-          });
-        }
 
       default:
         return res.status(400).json({ error: "Invalid action" });

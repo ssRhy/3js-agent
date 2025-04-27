@@ -44,16 +44,42 @@ export const applyPatchTool = new DynamicStructuredTool({
         params = JSON.parse(input);
         console.log("解析成功，键:", Object.keys(params));
       } catch (jsonError) {
+        // 尝试清理输入并重新解析
+        try {
+          // 如果直接解析失败，尝试清理输入中的转义字符
+          const cleanedInput = input.replace(/\\n/g, "\n").replace(/\\t/g, "\t").replace(/\\\\/g, "\\");
+          
+          // 如果输入看起来像一个patch（含有标准的patch格式标记）
+          if (cleanedInput.includes("---") && cleanedInput.includes("+++") && cleanedInput.includes("@@")) {
+            // 直接将其视为patch内容
+            console.log("输入看起来像是一个原始patch，直接使用");
+            return JSON.stringify({
+              success: true,
+              message: "补丁应用成功（直接使用）",
+              updatedCode: applyPatch(cachedCode || "", cleanedInput),
+            });
+          }
+          
+          // 尝试解析清理后的JSON
+          params = JSON.parse(cleanedInput);
+          console.log("清理后解析成功，键:", Object.keys(params));
+        } catch (cleanError) {
         return JSON.stringify({
           success: false,
           message: "输入格式错误，需要有效的JSON格式",
-          error:
-            jsonError instanceof Error ? jsonError.message : String(jsonError),
+            error: jsonError instanceof Error ? jsonError.message : String(jsonError),
+            inputPreview: input.substring(0, 100) + "...",
         });
+        }
       }
 
       // 提取参数
-      const { code, patch, description } = params;
+      let { code, patch, description } = params;
+      
+      // 如果patch是字符串，清理可能的转义字符
+      if (patch && typeof patch === "string") {
+        patch = patch.replace(/\\n/g, "\n").replace(/\\t/g, "\t").replace(/\\\\/g, "\\");
+      }
 
       // 情况1: 初始化代码
       if (code) {
@@ -91,6 +117,29 @@ export const applyPatchTool = new DynamicStructuredTool({
 
         // 验证补丁格式
         try {
+          // 确保patch是字符串
+          if (typeof patch !== "string") {
+            console.error("patch不是字符串:", patch);
+            return JSON.stringify({
+              success: false,
+              message: "patch必须是字符串格式",
+              receivedType: typeof patch,
+            });
+          }
+          
+          // 尝试清理和验证patch格式
+          let cleanedPatch = patch;
+          
+          // 检查是否包含必要的patch标记，如果没有可能不是标准的patch格式
+          if (!cleanedPatch.includes("---") || !cleanedPatch.includes("+++") || !cleanedPatch.includes("@@")) {
+            console.error("patch格式错误，缺少必要的标记");
+            return JSON.stringify({
+              success: false,
+              message: "patch格式无效，缺少必要的diff标记(---, +++, @@)",
+              patchPreview: cleanedPatch.substring(0, 100) + "...",
+            });
+          }
+        
           const patches = parsePatch(patch);
           if (patches.length === 0) {
             console.log("补丁没有实际更改");

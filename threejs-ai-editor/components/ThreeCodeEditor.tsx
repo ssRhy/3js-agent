@@ -716,12 +716,40 @@ export default function ThreeCodeEditor() {
 
       const imageBase64 = await captureScreenshot();
 
-      // Add your API call logic here
+      // Check if prompt might require a 3D model
+      const modelKeywords = [
+        "生成",
+        "创建",
+        "添加",
+        "模型",
+        "3d",
+        "3D",
+        "model",
+        "character",
+        "animal",
+        "人物",
+        "动物",
+        "猫",
+        "狗",
+        "车",
+      ];
+      const mightNeedModel = modelKeywords.some((keyword) =>
+        prompt.toLowerCase().includes(keyword)
+      );
+
+      // 调用分析截图API
       try {
-        const response = await fetch("/api/generate", {
+        const response = await fetch("/api/agent", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ prompt, code, image: imageBase64 }),
+          body: JSON.stringify({
+            action: "analyze-screenshot",
+            code,
+            prompt,
+            screenshot: imageBase64,
+            modelRequired: mightNeedModel, // 指示可能需要3D模型
+            lintErrors: lintErrors.length > 0 ? lintErrors : undefined,
+          }),
         });
 
         if (!response.ok) {
@@ -733,8 +761,10 @@ export default function ThreeCodeEditor() {
         // Handle model URL if present
         if (data.modelUrl) {
           console.log("Model URL received:", data.modelUrl);
+          setIsModelLoading(true);
           // Load the model
           await loadModel(data.modelUrl);
+          setIsModelLoading(false);
         }
 
         if (data.directCode) {
@@ -758,6 +788,24 @@ export default function ThreeCodeEditor() {
         } else if (data.error) {
           throw new Error(data.error);
         }
+
+        // 检查代码中是否包含模型URL
+        if (data.directCode && !data.modelUrl) {
+          // 尝试从代码中提取Hyper3D URL
+          const hyper3dMatches = data.directCode.match(
+            /['"]https:\/\/hyperhuman-file\.deemos\.com\/[^'"]+\.glb[^'"]*['"]/g
+          );
+
+          if (hyper3dMatches && hyper3dMatches.length > 0) {
+            const modelUrl = hyper3dMatches[0].replace(/^['"]|['"]$/g, "");
+            console.log("从代码中提取到模型URL:", modelUrl);
+
+            setIsModelLoading(true);
+            // 加载模型
+            await loadModel(modelUrl);
+            setIsModelLoading(false);
+          }
+        }
       } catch (error) {
         console.error("生成错误:", error);
         setError(
@@ -772,240 +820,6 @@ export default function ThreeCodeEditor() {
       );
     } finally {
       setIsLoading(false);
-    }
-  };
-
-  // 直接从远程URL生成并加载3D模型
-  const handleGenerateModel = async () => {
-    if (!prompt || prompt.trim() === "") {
-      setError("请输入模型描述");
-      return;
-    }
-
-    try {
-      setIsModelLoading(true);
-      setError("");
-
-      console.log("Generating model with prompt:", prompt);
-
-      // 调用agent API的模型生成功能
-      const response = await fetch("/api/agent", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          action: "generate-model",
-          modelPrompt: prompt.trim(),
-          options: {
-            quality: "medium",
-            material: "pbr",
-            useHyper: false,
-          },
-        }),
-      });
-
-      console.log("API response status:", response.status);
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error("API error response:", errorText);
-        throw new Error(
-          `API responded with status: ${response.status} - ${errorText}`
-        );
-      }
-
-      const data = await response.json();
-      console.log("API response data:", data);
-
-      if (data.success && data.modelUrl) {
-        console.log("Model URL received:", data.modelUrl);
-
-        // 检查是否是Hyper3D URL
-        const isHyper3dUrl =
-          data.modelUrl.includes("hyperhuman-file.deemos.com") ||
-          data.modelUrl.includes("volces.com") ||
-          (data.modelUrl.includes("response-content-type") &&
-            data.modelUrl.includes("glb"));
-
-        if (isHyper3dUrl) {
-          console.log("检测到Hyper3D URL，将通过代理加载");
-        }
-
-        // 直接从远程URL加载模型
-        const modelLoaded = await loadModel(data.modelUrl);
-
-        if (!modelLoaded) {
-          throw new Error("Failed to load the generated model");
-        }
-
-        // 保存所有模型URL
-        const modelUrls = data.modelUrls || [
-          { name: "model.glb", url: data.modelUrl },
-        ];
-        console.log("All model URLs:", modelUrls);
-
-        // 更新代码以包含模型加载逻辑
-        const modelLoadingCode = `
-function setup(scene, camera, renderer, THREE, OrbitControls, GLTFLoader) {
-  // Add lights for better visualization
-  const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
-  scene.add(ambientLight);
-  
-  const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
-  directionalLight.position.set(5, 5, 5);
-  directionalLight.castShadow = true;
-  scene.add(directionalLight);
-  
-  // 从Hyper3D API生成的URL加载3D模型
-  const loader = new GLTFLoader();
-  // 原始模型URL: ${data.modelUrl}
-  ${isHyper3dUrl ? "// 使用代理服务获取模型，避免跨域问题" : ""}
-  
-  console.log('正在加载AI生成的模型...');
-  
-  ${
-    isHyper3dUrl
-      ? `
-  // 通过代理加载Hyper3D模型
-  fetch('/api/proxy-model', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ url: '${data.modelUrl}' })
-  })
-  .then(response => {
-    if (!response.ok) {
-      throw new Error('代理请求失败: ' + response.status);
-    }
-    return response.arrayBuffer();
-  })
-  .then(buffer => {
-    // 从二进制数据加载模型
-    loader.parse(buffer, '', (gltf) => {
-      const model = gltf.scene;
-      
-      // 适当缩放和定位模型
-      model.scale.set(1, 1, 1);
-      model.position.set(0, 0, 0);
-      
-      // 为所有网格添加阴影支持
-      model.traverse((node) => {
-        if (node.isMesh) {
-          node.castShadow = true;
-          node.receiveShadow = true;
-        }
-      });
-      
-      scene.add(model);
-      console.log('AI生成的模型已成功加载到场景中');
-      
-      // 适配相机视角
-      fitCameraToObject(camera, model, 1.5);
-    }, (error) => {
-      console.error('解析模型时出错:', error);
-    });
-  })
-  .catch(error => {
-    console.error('获取模型数据时出错:', error);
-  });
-  `
-      : `
-  loader.load(
-    '${data.modelUrl}',
-    (gltf) => {
-      const model = gltf.scene;
-      
-      // 适当缩放和定位模型
-      model.scale.set(1, 1, 1);
-      model.position.set(0, 0, 0);
-      
-      // 为所有网格添加阴影支持
-      model.traverse((node) => {
-        if (node.isMesh) {
-          node.castShadow = true;
-          node.receiveShadow = true;
-        }
-      });
-      
-      scene.add(model);
-      console.log('AI生成的模型已成功加载到场景中');
-      
-      // 适配相机视角
-      fitCameraToObject(camera, model, 1.5);
-      
-      return model;
-    },
-    (xhr) => {
-      console.log((xhr.loaded / xhr.total * 100) + '% loaded');
-    },
-    (error) => {
-      console.error('Error loading model:', error);
-    }
-  );`
-  }
-  
-  // 辅助函数：将相机适配到对象大小
-  function fitCameraToObject(camera, object, offset = 1.25) {
-    const boundingBox = new THREE.Box3();
-    boundingBox.setFromObject(object);
-    
-    const center = boundingBox.getCenter(new THREE.Vector3());
-    const size = boundingBox.getSize(new THREE.Vector3());
-    
-    const maxDim = Math.max(size.x, size.y, size.z);
-    const fov = camera.fov * (Math.PI / 180);
-    const cameraDistance = (maxDim / 2) / Math.tan(fov / 2) * offset;
-    
-    camera.position.copy(center);
-    camera.position.z += cameraDistance;
-    camera.lookAt(center);
-  }
-  
-  return scene;
-}
-// AI生成的模型URL: ${data.modelUrl}`;
-
-        setPreviousCode(code);
-        setCode(modelLoadingCode);
-      } else {
-        console.error("Model generation failed:", data);
-        throw new Error(data.error || "Model generation failed");
-      }
-    } catch (error) {
-      console.error("模型生成错误:", error);
-      setError(
-        `模型生成错误: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
-    } finally {
-      setIsModelLoading(false);
-    }
-  };
-
-  // 测试模型加载功能
-  const handleTestModel = async () => {
-    // 使用一个公开可用的测试模型
-    const testModelUrl =
-      "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/BoxTextured/glTF/BoxTextured.gltf";
-
-    setError("");
-    console.log("正在加载测试模型:", testModelUrl);
-
-    try {
-      const success = await loadModel(testModelUrl);
-      if (success) {
-        console.log("测试模型加载成功!");
-      } else {
-        setError("测试模型加载失败");
-      }
-    } catch (err) {
-      console.error("测试模型加载出错:", err);
-      setError(
-        `测试模型加载错误: ${err instanceof Error ? err.message : String(err)}`
-      );
     }
   };
 
@@ -1029,20 +843,6 @@ function setup(scene, camera, renderer, THREE, OrbitControls, GLTFLoader) {
             disabled={isLoading || isModelLoading}
           >
             {isLoading ? "生成中..." : "生成场景代码"}
-          </button>
-          <button
-            onClick={handleGenerateModel}
-            disabled={isLoading || isModelLoading}
-            className="model-btn"
-          >
-            生成3D模型
-          </button>
-          <button
-            onClick={handleTestModel}
-            disabled={isLoading || isModelLoading}
-            className="test-model-btn"
-          >
-            测试模型加载
           </button>
         </div>
         {error && <div className="error">{error}</div>}
