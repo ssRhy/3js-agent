@@ -3,12 +3,15 @@ import * as THREE from "three";
 import { useSceneStore } from "../stores/useSceneStore";
 import { Editor, OnMount } from "@monaco-editor/react";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
 
 interface ApiResponse {
   error?: string;
   message?: string;
   directCode?: string;
   patch?: string;
+  modelUrl?: string;
+  modelUrls?: string[];
   // Add other fields you expect from the API
 }
 
@@ -19,6 +22,7 @@ export default function ThreeCodeEditor() {
     camera: THREE.PerspectiveCamera;
     renderer: THREE.WebGLRenderer;
     controls?: OrbitControls;
+    gltfLoader?: GLTFLoader;
   } | null>(null);
 
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
@@ -53,6 +57,10 @@ export default function ThreeCodeEditor() {
     }[]
   >([]);
   const [lintOverlayVisible, setLintOverlayVisible] = useState(false);
+  const [loadedModels, setLoadedModels] = useState<
+    Array<{ id: string; url: string }>
+  >([]);
+  const [isModelLoading, setIsModelLoading] = useState(false);
 
   const { addToHistory } = useSceneStore();
 
@@ -78,6 +86,7 @@ export default function ThreeCodeEditor() {
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(container.clientWidth, container.clientHeight);
+    renderer.shadowMap.enabled = true;
     container.appendChild(renderer.domElement);
 
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
@@ -85,6 +94,7 @@ export default function ThreeCodeEditor() {
 
     const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
     directionalLight.position.set(5, 5, 5);
+    directionalLight.castShadow = true;
     scene.add(directionalLight);
 
     const gridHelper = new THREE.GridHelper(10, 10);
@@ -95,6 +105,9 @@ export default function ThreeCodeEditor() {
     controls.dampingFactor = 0.25;
     controls.screenSpacePanning = false;
     controls.maxPolarAngle = Math.PI / 2;
+
+    // Initialize GLTF loader
+    const gltfLoader = new GLTFLoader();
 
     const animate = () => {
       requestAnimationFrame(animate);
@@ -109,7 +122,7 @@ export default function ThreeCodeEditor() {
     };
     animate();
 
-    threeRef.current = { scene, camera, renderer, controls };
+    threeRef.current = { scene, camera, renderer, controls, gltfLoader };
 
     const handleResize = () => {
       if (!threeRef.current || !container) return;
@@ -126,6 +139,130 @@ export default function ThreeCodeEditor() {
       renderer.dispose();
     };
   }, []);
+
+  // Function to load 3D model
+  const loadModel = async (modelUrl: string) => {
+    if (!threeRef.current || !threeRef.current.gltfLoader) {
+      setError("Three.js scene not initialized");
+      return false;
+    }
+
+    try {
+      setIsModelLoading(true);
+
+      // Check if model already loaded
+      if (loadedModels.some((model) => model.url === modelUrl)) {
+        console.log("Model already loaded:", modelUrl);
+        setIsModelLoading(false);
+        return true;
+      }
+
+      console.log("Loading 3D model from URL:", modelUrl);
+
+      const { scene, camera } = threeRef.current;
+      const loader = threeRef.current.gltfLoader;
+
+      return new Promise<boolean>((resolve) => {
+        loader.load(
+          modelUrl,
+          (gltf) => {
+            try {
+              const model = gltf.scene;
+
+              // Scale and position model
+              model.scale.set(1, 1, 1);
+              model.position.set(0, 0, 0);
+
+              // Apply materials and shadows
+              model.traverse((node: THREE.Object3D) => {
+                if ((node as THREE.Mesh).isMesh) {
+                  (node as THREE.Mesh).castShadow = true;
+                  (node as THREE.Mesh).receiveShadow = true;
+                }
+              });
+
+              // Add to scene
+              scene.add(model);
+
+              // Auto-fit camera to model
+              fitCameraToModel(camera, model);
+
+              // Save loaded model reference
+              const modelId = `model_${Date.now()}`;
+              model.userData.modelId = modelId;
+              setLoadedModels((prev) => [
+                ...prev,
+                { id: modelId, url: modelUrl },
+              ]);
+
+              console.log("Model loaded successfully");
+              console.log("模型加载完成，正在添加到场景");
+              console.log("模型结构:", gltf);
+              setIsModelLoading(false);
+              resolve(true);
+            } catch (err) {
+              console.error("Error processing loaded model:", err);
+              setError(
+                `Error processing model: ${
+                  err instanceof Error ? err.message : String(err)
+                }`
+              );
+              setIsModelLoading(false);
+              resolve(false);
+            }
+          },
+          (progress) => {
+            console.log(
+              `Loading progress: ${Math.round(
+                (progress.loaded / progress.total) * 100
+              )}%`
+            );
+          },
+          (err) => {
+            console.error("Error loading model:", err);
+            setError(
+              `Failed to load model: ${
+                err instanceof Error ? err.message : String(err)
+              }`
+            );
+            setIsModelLoading(false);
+            resolve(false);
+          }
+        );
+      });
+    } catch (err) {
+      console.error("Error initiating model load:", err);
+      setError(
+        `Model loading error: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+      setIsModelLoading(false);
+      return false;
+    }
+  };
+
+  // Helper function to fit camera to model
+  const fitCameraToModel = (
+    camera: THREE.PerspectiveCamera,
+    model: THREE.Object3D
+  ) => {
+    const box = new THREE.Box3().setFromObject(model);
+    const size = box.getSize(new THREE.Vector3());
+    const center = box.getCenter(new THREE.Vector3());
+
+    // Adjust camera position to fit model
+    const maxDim = Math.max(size.x, size.y, size.z);
+    const fov = camera.fov * (Math.PI / 180);
+    let cameraZ = Math.abs(maxDim / Math.sin(fov / 2));
+
+    // Add some padding
+    cameraZ *= 1.5;
+
+    camera.position.set(center.x, center.y, center.z + cameraZ);
+    camera.lookAt(center);
+    camera.updateProjectionMatrix();
+  };
 
   // Run ESLint on code changes
   useEffect(() => {
@@ -293,6 +430,14 @@ export default function ThreeCodeEditor() {
           },
         };
 
+        // Add GLTFLoader to the THREE namespace for easier access in setup
+        const ExtendedTHREE = { ...THREE } as typeof THREE & {
+          GLTFLoader?: typeof GLTFLoader;
+        };
+        if (threeRef.current.gltfLoader) {
+          ExtendedTHREE.GLTFLoader = GLTFLoader;
+        }
+
         // Use try-catch for Function creation
         let getSetupFn;
         try {
@@ -302,6 +447,7 @@ export default function ThreeCodeEditor() {
             "renderer",
             "THREE",
             "OrbitControls",
+            "GLTFLoader",
             functionBody
           );
         } catch (syntaxError) {
@@ -318,7 +464,14 @@ export default function ThreeCodeEditor() {
         // Use try-catch for setup function execution
         let setupFn;
         try {
-          setupFn = getSetupFn(null, null, null, THREE, OrbitControlsWrapper);
+          setupFn = getSetupFn(
+            null,
+            null,
+            null,
+            ExtendedTHREE,
+            OrbitControlsWrapper,
+            GLTFLoader
+          );
         } catch (execError) {
           console.error("Setup函数执行错误:", execError);
           setError(
@@ -336,7 +489,14 @@ export default function ThreeCodeEditor() {
 
         // Execute the setup function
         try {
-          setupFn(scene, camera, renderer, THREE, OrbitControlsWrapper);
+          setupFn(
+            scene,
+            camera,
+            renderer,
+            ExtendedTHREE,
+            OrbitControlsWrapper,
+            GLTFLoader
+          );
           renderer.render(scene, camera);
           addToHistory(code);
 
@@ -465,6 +625,14 @@ export default function ThreeCodeEditor() {
         }
 
         const data: ApiResponse = await response.json();
+
+        // Handle model URL if present
+        if (data.modelUrl) {
+          console.log("Model URL received:", data.modelUrl);
+          // Load the model
+          await loadModel(data.modelUrl);
+        }
+
         if (data.directCode) {
           setPreviousCode(code);
           setCode(data.directCode);
@@ -503,6 +671,179 @@ export default function ThreeCodeEditor() {
     }
   };
 
+  // 直接从远程URL生成并加载3D模型
+  const handleGenerateModel = async () => {
+    if (!prompt || prompt.trim() === "") {
+      setError("请输入模型描述");
+      return;
+    }
+
+    try {
+      setIsModelLoading(true);
+      setError("");
+
+      console.log("Generating model with prompt:", prompt);
+
+      // 调用agent API的模型生成功能
+      const response = await fetch("/api/agent", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          action: "generate-model",
+          modelPrompt: prompt.trim(),
+          options: {
+            quality: "medium",
+            material: "pbr",
+            useHyper: false,
+          },
+        }),
+      });
+
+      console.log("API response status:", response.status);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error("API error response:", errorText);
+        throw new Error(
+          `API responded with status: ${response.status} - ${errorText}`
+        );
+      }
+
+      const data = await response.json();
+      console.log("API response data:", data);
+
+      if (data.success && data.modelUrl) {
+        console.log("Model URL received:", data.modelUrl);
+
+        // 直接从远程URL加载模型
+        const modelLoaded = await loadModel(data.modelUrl);
+
+        if (!modelLoaded) {
+          throw new Error("Failed to load the generated model");
+        }
+
+        // 保存所有模型URL
+        const modelUrls = data.modelUrls || [
+          { name: "model.glb", url: data.modelUrl },
+        ];
+        console.log("All model URLs:", modelUrls);
+
+        // 更新代码以包含模型加载逻辑
+        const modelLoadingCode = `
+function setup(scene, camera, renderer, THREE, OrbitControls, GLTFLoader) {
+  // Add lights for better visualization
+  const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+  scene.add(ambientLight);
+  
+  const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+  directionalLight.position.set(5, 5, 5);
+  directionalLight.castShadow = true;
+  scene.add(directionalLight);
+  
+  // 从Hyper3D API生成的URL加载3D模型
+  const loader = new GLTFLoader();
+  const modelUrl = '${data.modelUrl}';
+  
+  console.log('正在加载AI生成的模型，URL:', modelUrl);
+  
+  loader.load(
+    modelUrl,
+    (gltf) => {
+      const model = gltf.scene;
+      
+      // 适当缩放和定位模型
+      model.scale.set(1, 1, 1);
+      model.position.set(0, 0, 0);
+      
+      // 为所有网格添加阴影支持
+      model.traverse((node) => {
+        if (node.isMesh) {
+          node.castShadow = true;
+          node.receiveShadow = true;
+        }
+      });
+      
+      scene.add(model);
+      console.log('AI生成的模型已成功加载到场景中');
+      
+      // 适配相机视角
+      fitCameraToObject(camera, model, 1.5);
+      
+      return model;
+    },
+    (xhr) => {
+      console.log((xhr.loaded / xhr.total * 100) + '% loaded');
+    },
+    (error) => {
+      console.error('Error loading model:', error);
+    }
+  );
+  
+  // 辅助函数：将相机适配到对象大小
+  function fitCameraToObject(camera, object, offset = 1.25) {
+    const boundingBox = new THREE.Box3();
+    boundingBox.setFromObject(object);
+    
+    const center = boundingBox.getCenter(new THREE.Vector3());
+    const size = boundingBox.getSize(new THREE.Vector3());
+    
+    const maxDim = Math.max(size.x, size.y, size.z);
+    const fov = camera.fov * (Math.PI / 180);
+    const cameraDistance = (maxDim / 2) / Math.tan(fov / 2) * offset;
+    
+    camera.position.copy(center);
+    camera.position.z += cameraDistance;
+    camera.lookAt(center);
+  }
+  
+  return scene;
+}
+// AI生成的模型URL: ${data.modelUrl}`;
+
+        setPreviousCode(code);
+        setCode(modelLoadingCode);
+      } else {
+        console.error("Model generation failed:", data);
+        throw new Error(data.error || "Model generation failed");
+      }
+    } catch (error) {
+      console.error("模型生成错误:", error);
+      setError(
+        `模型生成错误: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    } finally {
+      setIsModelLoading(false);
+    }
+  };
+
+  // 测试模型加载功能
+  const handleTestModel = async () => {
+    // 使用一个公开可用的测试模型
+    const testModelUrl =
+      "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/BoxTextured/glTF/BoxTextured.gltf";
+
+    setError("");
+    console.log("正在加载测试模型:", testModelUrl);
+
+    try {
+      const success = await loadModel(testModelUrl);
+      if (success) {
+        console.log("测试模型加载成功!");
+      } else {
+        setError("测试模型加载失败");
+      }
+    } catch (err) {
+      console.error("测试模型加载出错:", err);
+      setError(
+        `测试模型加载错误: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  };
+
   const handleEditorDidMount: OnMount = (editor) => {
     editorRef.current = editor;
   };
@@ -514,13 +855,38 @@ export default function ThreeCodeEditor() {
         <textarea
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
-          placeholder="例如: 添加一个旋转的红色球体"
+          placeholder="例如: 添加一个旋转的红色球体 或 生成一只红色的猫"
           rows={4}
         />
-        <button onClick={handleGenerate} disabled={isLoading}>
-          {isLoading ? "生成中..." : "生成增量修改"}
-        </button>
+        <div className="button-group">
+          <button
+            onClick={handleGenerate}
+            disabled={isLoading || isModelLoading}
+          >
+            {isLoading ? "生成中..." : "生成场景代码"}
+          </button>
+          <button
+            onClick={handleGenerateModel}
+            disabled={isLoading || isModelLoading}
+            className="model-btn"
+          >
+            生成3D模型
+          </button>
+          <button
+            onClick={handleTestModel}
+            disabled={isLoading || isModelLoading}
+            className="test-model-btn"
+          >
+            测试模型加载
+          </button>
+        </div>
         {error && <div className="error">{error}</div>}
+        {isModelLoading && (
+          <div className="loading-model">
+            <span className="loading-spinner"></span>
+            <span>加载3D模型中...</span>
+          </div>
+        )}
         {previousCode && code !== previousCode && (
           <div className="diff-toggle">
             <button onClick={() => setShowDiff(!showDiff)}>

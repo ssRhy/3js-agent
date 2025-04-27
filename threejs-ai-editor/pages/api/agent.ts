@@ -16,6 +16,7 @@ import {
   PatchRecord,
 } from "@/lib/tools/applyPatchTool";
 import { codeGenTool } from "@/lib/tools/codeGenTool";
+import { modelGenTool } from "@/lib/tools/modelGenTool";
 import { NextApiRequest, NextApiResponse } from "next";
 
 import { StructuredTool } from "@langchain/core/tools";
@@ -395,7 +396,7 @@ export async function runAgentLoop(
   }
 
   // 工具集合现在使用包装后的diffTool
-  const loopTools = [applyPatchTool, codeGenTool];
+  const loopTools = [applyPatchTool, codeGenTool, modelGenTool];
 
   // 创建系统消息，使用普通的SystemMessage而非模板
   const systemMessage = new SystemMessage(
@@ -403,6 +404,7 @@ export async function runAgentLoop(
       "# 工具说明\n" +
       "- **generate_fix_code**：生成或修复代码\n" +
       "- **apply_patch**：应用代码更新\n" +
+      "- **generate_3d_model**：生成复杂3D模型并返回加载URL\n" +
       "# 工作循环\n" +
       "请遵循以下增量迭代步骤进行代码优化：\n" +
       "1. **分析**：理解当前代码、截图分析的建议、用户需求\n" +
@@ -415,6 +417,7 @@ export async function runAgentLoop(
       "- **迭代控制**：最多循环3次，或在无法进一步优化时提前结束\n" +
       "- **需求优先**：所有代码改进必须优先实现用户需求，然后才考虑其他优化\n" +
       "- **结构保持**：保持setup函数结构不变\n" +
+      "- **模型生成**：当需要复杂3D模型（如人物、动物、物品等）时，使用generate_3d_model工具生成模型，然后将其加载到场景中\n" +
       "- **控件创建**：永远不要直接使用new OrbitControls()，必须通过OrbitControls.create(camera, renderer.domElement)创建或获取控制器\n\n" +
       (lintErrorsMessage ? lintErrorsMessage + "\n\n" : "") +
       (patchHistoryText ? patchHistoryText + "\n\n" : "") +
@@ -629,39 +632,139 @@ export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+
+  // Process the request for different types of operations
+  const { action, code, prompt, screenshot, modelPrompt, lintErrors } =
+    req.body;
+
+  console.log(
+    `Agent API called with action: ${action}, prompt: ${
+      typeof prompt === "string" ? prompt.substring(0, 50) + "..." : "N/A"
+    }`
+  );
+
   try {
-    // 添加prompt和historyContext参数提取
-    const { currentCode, image, prompt, historyContext, lintErrors } = req.body;
+    switch (action) {
+      case "analyze-screenshot":
+        // Screenshot analysis and code improvement
+        if (screenshot && code) {
+          // 修改提示词，将用户需求添加到分析提示中
+          const suggestion = await analyzeScreenshotDirectly(
+            screenshot,
+            code,
+            prompt,
+            lintErrors
+          );
 
-    // Screenshot analysis and code improvement
-    if (image && currentCode) {
-      // 修改提示词，将用户需求添加到分析提示中
-      const suggestion = await analyzeScreenshotDirectly(
-        image,
-        currentCode,
-        prompt,
-        lintErrors
-      );
+          // 将用户需求和历史上下文也传入到agent循环中
+          const improvedCode = await runAgentLoop(
+            suggestion,
+            code,
+            5,
+            prompt,
+            "",
+            lintErrors
+          );
 
-      // 将用户需求和历史上下文也传入到agent循环中
-      const improvedCode = await runAgentLoop(
-        suggestion,
-        currentCode,
-        5,
-        prompt,
-        historyContext,
-        lintErrors
-      );
+          // Check if the agent's output includes model URL info
+          let modelUrl = null;
+          const modelUrls = null;
 
-      return res.status(200).json({
-        directCode: improvedCode,
-        suggestion,
-      });
+          // Simple detection for model URL in the agent's response
+          if (typeof improvedCode === "string") {
+            // Extract model URL if present in a comment pattern like: // MODEL_URL: http://example.com/model.glb
+            const modelUrlMatch = improvedCode.match(
+              /\/\/\s*MODEL_URL:\s*(\S+)/
+            );
+            if (modelUrlMatch && modelUrlMatch[1]) {
+              modelUrl = modelUrlMatch[1];
+              console.log("Found model URL in code comment:", modelUrl);
+            }
+          }
+
+          return res.status(200).json({
+            directCode: improvedCode,
+            suggestion,
+            modelUrl,
+            modelUrls: modelUrls || (modelUrl ? [modelUrl] : null),
+          });
+        }
+        return res.status(400).json({ error: "Missing required parameters" });
+
+      case "generate-model":
+        // Handle 3D model generation request
+        if (!modelPrompt) {
+          return res
+            .status(400)
+            .json({ error: "Model prompt is required for model generation" });
+        }
+
+        console.log("Generating 3D model with prompt:", modelPrompt);
+
+        // Prepare input for the modelGenTool
+        let modelInput: string;
+
+        if (typeof modelPrompt === "string") {
+          // If it's just a string prompt
+          modelInput = modelPrompt;
+        } else {
+          // If it's an object with additional parameters
+          modelInput = JSON.stringify({
+            prompt: modelPrompt,
+            ...req.body.options, // Additional options like quality, material, etc.
+          });
+        }
+
+        try {
+          // Direct invocation of the modelGenTool
+          const result = await modelGenTool.invoke(modelInput);
+
+          // Parse the result
+          let parsedResult;
+          try {
+            parsedResult = JSON.parse(result);
+          } catch (e) {
+            console.error("Failed to parse model generation result:", e);
+            parsedResult = { success: false, error: "Failed to parse result" };
+          }
+
+          if (parsedResult.success && parsedResult.modelUrl) {
+            console.log("Model generated successfully:", parsedResult.modelUrl);
+
+            // Return the result directly
+            return res.status(200).json({
+              success: true,
+              modelUrl: parsedResult.modelUrl,
+              modelUrls: parsedResult.modelUrls || [
+                { url: parsedResult.modelUrl, name: "model.glb" },
+              ],
+              message: "3D model generated successfully",
+            });
+          } else {
+            console.error("Model generation failed:", parsedResult);
+            return res.status(500).json({
+              success: false,
+              error: parsedResult.error || "Unknown error generating model",
+            });
+          }
+        } catch (error) {
+          console.error("Error invoking modelGenTool:", error);
+          return res.status(500).json({
+            success: false,
+            error: error instanceof Error ? error.message : "Unknown error",
+          });
+        }
+
+      default:
+        return res.status(400).json({ error: "Invalid action" });
     }
-
-    return res.status(400).json({ error: "Missing required parameters" });
   } catch (error) {
-    console.error("Error handling API request:", error);
-    return res.status(500).json({ error: "Internal server error" });
+    console.error("Error in agent handler:", error);
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
   }
 }

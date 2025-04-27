@@ -1,5 +1,6 @@
-import { applyPatchTool } from "./applyPatchTool";
-import { codeGenTool } from "./codeGenTool";
+import { applyPatchTool } from "@/lib/tools/applyPatchTool";
+import { codeGenTool } from "@/lib/tools/codeGenTool";
+import { modelGenTool } from "@/lib/tools/modelGenTool";
 // 工具结果类型
 export interface ToolResult {
   [key: string]:
@@ -16,6 +17,7 @@ export interface ToolResult {
 const tools = {
   apply_patch: applyPatchTool,
   generate_code: codeGenTool,
+  generate_3d_model: modelGenTool,
 };
 
 // 工具执行函数

@@ -279,3 +279,70 @@ textarea {
   color: #5c6370;
   align-self: flex-end;
 }
+
+/* Add the loading model indicator styles */
+.loading-model {
+  background-color: rgba(0, 0, 0, 0.7);
+  color: white;
+  padding: 8px 12px;
+  border-radius: 4px;
+  margin: 8px 0;
+  display: flex;
+  align-items: center;
+  font-size: 14px;
+}
+
+.loading-spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-radius: 50%;
+  border-top-color: white;
+  animation: spin 1s ease-in-out infinite;
+  margin-right: 8px;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Button group styles */
+.button-group {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.button-group button {
+  flex: 1;
+  min-width: 120px;
+}
+
+.model-btn {
+  background-color: #6a3df8;
+}
+
+.model-btn:hover {
+  background-color: #5a30d8;
+}
+
+.model-btn:disabled {
+  background-color: #9e87e6;
+}
+
+.test-model-btn {
+  background-color: #34c759;
+  margin-top: 8px;
+  width: 100%;
+}
+
+.test-model-btn:hover {
+  background-color: #28a745;
+}
+
+.test-model-btn:disabled {
+  background-color: #7bdb94;
+}
