@@ -12,7 +12,7 @@ Memory 在 LangChain 里确实可以用来帮助记录上下文的变化，从�
 
 
 memmory功能加入agent
-如果 memory 里保存：最新一次的 latestCode,或者最近的 patch 列表（差量历史） 那么，当 Agent 要继续生成 patch 时，就可以直接基于 memory 里的最新状态生成 针对性很强的增量更新。
+如果 memory 里保存：最新一次的 （比如latestCode,或者最近的 patch 列表（差量历史） 那么，当 Agent 要继续生成 patch 时，就可以直接基于 memory 里的最新状态生成 针对性很强的增量更新。
 Agent 在运行时，会从 Memory 里取出当前状态，比如拿到 latestCode。
 然后根据用户的需求或者 LLM推理，生成新的 patch。
 应用 patch，更新 Memory 中的 latestCode，继续下一轮。

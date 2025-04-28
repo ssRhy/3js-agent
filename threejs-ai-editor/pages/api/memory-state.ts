@@ -1,8 +1,8 @@
 import { NextApiRequest, NextApiResponse } from "next";
-import { getPatchHistory, loadFromMemory } from "@/lib/tools/applyPatchTool";
+import { getCachedCode } from "@/lib/tools/applyPatchTool";
 
 /**
- * API endpoint to fetch the current memory state and patch history
+ * API endpoint to fetch the current memory state
  * Used for debugging and monitoring the agent's memory
  */
 export default async function handler(
@@ -14,20 +14,14 @@ export default async function handler(
   }
 
   try {
-    // Get current patch history
-    const patchHistory = getPatchHistory();
-
-    // Load state from memory
-    const memoryState = await loadFromMemory();
+    // Get current cached code
+    const cachedCode = getCachedCode();
 
     return res.status(200).json({
       success: true,
-      patchHistory,
       memoryState: {
-        latestCode: memoryState.latestCode
-          ? `${memoryState.latestCode.substring(0, 150)}...`
-          : null,
-        patchHistoryCount: memoryState.patchHistory.length,
+        latestCode: cachedCode ? `${cachedCode.substring(0, 150)}...` : null,
+        codeLength: cachedCode ? cachedCode.length : 0,
       },
     });
   } catch (error) {

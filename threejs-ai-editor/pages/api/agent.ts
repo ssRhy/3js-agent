@@ -4,37 +4,21 @@ import {
   MessagesPlaceholder,
   HumanMessagePromptTemplate,
   ChatPromptTemplate,
+  SystemMessagePromptTemplate,
 } from "@langchain/core/prompts";
-import { SystemMessage, HumanMessage } from "@langchain/core/messages";
+import { CallbackManager } from "@langchain/core/callbacks/manager";
+import { BaseCallbackHandler } from "@langchain/core/callbacks/base";
 import { BufferMemory } from "langchain/memory";
 import { createPatch } from "diff";
-
-import {
-  applyPatchTool,
-  loadFromMemory,
-  getPatchHistory,
-  PatchRecord,
-} from "@/lib/tools/applyPatchTool";
+import { HumanMessage } from "@langchain/core/messages";
+import { applyPatchTool, getCachedCode } from "@/lib/tools/applyPatchTool";
 import { codeGenTool } from "@/lib/tools/codeGenTool";
 import { modelGenTool } from "@/lib/tools/modelGenTool";
 import { NextApiRequest, NextApiResponse } from "next";
 
-import { StructuredTool } from "@langchain/core/tools";
-
-// 创建内存实例，用于存储agent的工作状态
-const agentMemory = new BufferMemory({
-  memoryKey: "codeState",
-  inputKey: "userPrompt",
-  returnMessages: false,
-  outputKey: "codeStateContext",
-});
-
-// Define custom interface for AgentExecutor with callbacks
-interface CustomAgentExecutor extends AgentExecutor {
-  onToolStart?: (tool: StructuredTool, input: string) => Promise<void>;
-  onToolEnd?: (output: { tool: string; result: string }) => Promise<void>;
-  onToolError?: (tool: StructuredTool, error: Error) => Promise<string | null>;
-}
+// Store constants for better maintainability
+// Maximum characters to store in memory
+const MAX_ITERATIONS = 10; // Default max iterations for agent loop
 
 // Interface for ESLint errors
 interface LintError {
@@ -45,6 +29,233 @@ interface LintError {
   column: number;
 }
 
+// Custom callback handler for agent execution
+class AgentCallbackHandler extends BaseCallbackHandler {
+  currentCodeState: string;
+  agentMemory: BufferMemory;
+  userPrompt: string;
+  name = "AgentCallbackHandler"; // Implement the abstract name property
+
+  constructor(initialCode: string, memory: BufferMemory, userPrompt: string) {
+    super();
+    this.currentCodeState = initialCode;
+    this.agentMemory = memory;
+    this.userPrompt = userPrompt;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  async handleToolStart(data: any) {
+    const normalizedInput = this.prepareToolInput(data.name, data.input);
+    console.log(`Starting tool ${data.name} with input:`, normalizedInput);
+    return normalizedInput;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  async handleToolEnd(data: any) {
+    if (data.name === "apply_patch") {
+      await this.processApplyPatchResult(data.output);
+    } else if (data.name === "generate_3d_model") {
+      await this.processModelGenResult(data.output);
+    }
+  }
+
+  async handleToolError(data: { name: string; error: Error }) {
+    console.error(`Error in tool ${data.name}:`, data.error);
+
+    if (data.name === "apply_patch") {
+      return JSON.stringify({
+        success: false,
+        message: `Apply patch failed: ${data.error.message}`,
+        suggestion:
+          'Please try using {"input":{"originalCode":"...","improvedCode":"..."}} format',
+      });
+    } else if (data.name === "generate_fix_code") {
+      return JSON.stringify({
+        status: "error",
+        message: `Code generation failed: ${data.error.message}`,
+        suggestion:
+          "Please simplify instructions or implement improvements step by step",
+      });
+    }
+    return null;
+  }
+
+  // Process apply_patch tool results and update memory
+  async processApplyPatchResult(resultStr: string) {
+    try {
+      const result = JSON.parse(resultStr);
+      if (result.success && result.updatedCode) {
+        this.currentCodeState = result.updatedCode;
+
+        // Save a summary to memory - no long strings
+        await this.agentMemory.saveContext(
+          { userPrompt: this.userPrompt },
+          {
+            codeStateContext: {
+              lastUpdateTimestamp: new Date().toISOString(),
+              codeSize: this.currentCodeState.length,
+              codeDigest: this.getCodeDigest(this.currentCodeState),
+            },
+          }
+        );
+      }
+    } catch (e) {
+      console.error("Failed to parse apply_patch result:", e);
+    }
+  }
+
+  // Process model generation results and update memory
+  async processModelGenResult(resultStr: string) {
+    try {
+      const result = JSON.parse(resultStr);
+      if (result.success && result.modelUrl) {
+        const memoryVars = await this.agentMemory.loadMemoryVariables({});
+        const ctx = memoryVars.codeStateContext || {};
+
+        // Initialize or update model history
+        const modelHistory = ctx.modelHistory || [];
+        modelHistory.push({
+          modelUrl: result.modelUrl,
+          timestamp: new Date().toISOString(),
+          prompt: this.userPrompt,
+        });
+
+        // Only keep the last 5 models in history
+        const trimmedHistory = modelHistory.slice(-5);
+
+        await this.agentMemory.saveContext(
+          { userPrompt: this.userPrompt },
+          {
+            codeStateContext: {
+              ...ctx,
+              modelHistory: trimmedHistory,
+              lastModelUrl: result.modelUrl,
+              lastModelTimestamp: new Date().toISOString(),
+            },
+          }
+        );
+      }
+    } catch (e) {
+      console.error("Failed to process model generation result:", e);
+    }
+  }
+
+  // Generate a short digest of code for reference
+  getCodeDigest(code: string) {
+    // Get first 40 chars and last 40 chars with length in the middle
+    return `${code.substring(0, 40)}...[${
+      code.length
+    } chars]...${code.substring(code.length - 40)}`;
+  }
+
+  // Prepare and normalize tool inputs
+  prepareToolInput(toolName: string, input: unknown) {
+    if (toolName !== "apply_patch") {
+      return input;
+    }
+
+    try {
+      // Handle JSON
+      const inputObj = typeof input === "string" ? JSON.parse(input) : input;
+
+      // Handle nested input field
+      if (inputObj.input && typeof inputObj.input === "string") {
+        try {
+          const innerObj = JSON.parse(inputObj.input);
+
+          // Handle originalCode/improvedCode format
+          if (innerObj.originalCode && innerObj.improvedCode) {
+            return this.handleCodeComparison(
+              innerObj.originalCode,
+              innerObj.improvedCode
+            );
+          }
+
+          return JSON.stringify(innerObj);
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        } catch (_e) {
+          // Not JSON, check if it looks like a patch
+          if (
+            typeof inputObj.input === "string" &&
+            inputObj.input.includes("---") &&
+            inputObj.input.includes("+++")
+          ) {
+            return JSON.stringify({
+              patch: inputObj.input
+                .replace(/\\n/g, "\n")
+                .replace(/\\\\/g, "\\"),
+              description: "Extracted patch data",
+            });
+          }
+        }
+      }
+
+      // Direct originalCode/improvedCode format
+      if (inputObj.originalCode && inputObj.improvedCode) {
+        return this.handleCodeComparison(
+          inputObj.originalCode,
+          inputObj.improvedCode
+        );
+      }
+
+      // Already in correct format
+      if (inputObj.code || inputObj.patch) {
+        if (!inputObj.description) {
+          inputObj.description = `Update: ${new Date()
+            .toISOString()
+            .slice(0, 19)}`;
+        }
+        return JSON.stringify(inputObj);
+      }
+
+      return input;
+    } catch (e) {
+      // Trying to handle non-JSON input
+      if (typeof input === "string") {
+        // Look for patch data
+        if (input.includes("---") && input.includes("+++")) {
+          return JSON.stringify({
+            patch: input.replace(/\\n/g, "\n").replace(/\\\\/g, "\\"),
+            description: "Direct patch extraction",
+          });
+        }
+      }
+
+      console.error("Failed to parse input for apply_patch:", e);
+      return input;
+    }
+  }
+
+  // Handle code comparison and generate patch if needed
+  handleCodeComparison(originalCode: string, improvedCode: string) {
+    // First-time call or empty state - use full code
+    if (!this.currentCodeState || this.currentCodeState === "") {
+      return JSON.stringify({
+        code: improvedCode,
+        description: `Initial code based on prompt: ${this.userPrompt.substring(
+          0,
+          50
+        )}...`,
+      });
+    }
+
+    // Subsequent call - generate a patch
+    const patch = createPatch("code.js", this.currentCodeState, improvedCode);
+    return JSON.stringify({
+      patch,
+      description: `Patch for: ${this.userPrompt.substring(0, 50)}...`,
+    });
+  }
+}
+
+// Create a memory instance for storing agent work state
+const agentMemory = new BufferMemory({
+  memoryKey: "codeState",
+  inputKey: "userPrompt",
+  returnMessages: false,
+  outputKey: "codeStateContext",
+});
+
 // Initialize Azure OpenAI client
 const model = new AzureChatOpenAI({
   modelName: "gpt-4.1",
@@ -53,17 +264,174 @@ const model = new AzureChatOpenAI({
   azureOpenAIApiDeploymentName: process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME,
   azureOpenAIApiVersion: "2024-12-01-preview",
   azureOpenAIApiInstanceName: process.env.AZURE_OPENAI_API_INSTANCE_NAME,
-  azureOpenAIEndpoint: process.env.AZURE_OPENAI_API_ENDPOINT,
 });
 
 /**
- * Generate initial code based on user instructions
- * Only called once during the first interaction
+ * Extract model URLs from generated code
+ * @param code The generated code to analyze
+ * @returns Object containing model URL information
  */
+function extractModelUrls(code: string) {
+  const modelUrls: Array<{ url: string; name: string }> = [];
+  let primaryModelUrl: string | null = null;
+
+  // Check for MODEL_URL comment format
+  const modelUrlMatch = code.match(/\/\/\s*MODEL_URL:\s*(\S+)/);
+  if (modelUrlMatch && modelUrlMatch[1]) {
+    primaryModelUrl = modelUrlMatch[1];
+    modelUrls.push({ url: primaryModelUrl, name: "model.glb" });
+  }
+
+  // Check for embedded Hyper3D URLs in the code
+  const hyper3dMatches = code.match(
+    /['"]https:\/\/hyperhuman-file\.deemos\.com\/[^'"]+\.glb[^'"]*['"]/g
+  );
+  if (hyper3dMatches && hyper3dMatches.length > 0) {
+    hyper3dMatches.forEach((match: string, index: number) => {
+      const url = match.replace(/^['"]|['"]$/g, "");
+      if (!primaryModelUrl) {
+        primaryModelUrl = url;
+      }
+      modelUrls.push({ url, name: `model_${index}.glb` });
+    });
+  }
+
+  return {
+    modelUrl: primaryModelUrl,
+    modelUrls: modelUrls.length > 0 ? modelUrls : null,
+  };
+}
 
 /**
- * Directly analyze screenshot using LLM without the agent loop
- * Used for subsequent interactions
+ * Clean up and extract valid code from raw output
+ * @param output Raw output from agent
+ * @returns Cleaned code
+ */
+function cleanCodeOutput(output: unknown): string {
+  if (typeof output !== "string") {
+    return "";
+  }
+
+  let codeOutput = output;
+
+  // Extract code from HTML if present
+  if (codeOutput.includes("<!DOCTYPE html>") || codeOutput.includes("<html>")) {
+    const scriptMatch = codeOutput.match(/<script>([\s\S]*?)<\/script>/);
+    if (scriptMatch && scriptMatch[1]) {
+      codeOutput = scriptMatch[1].trim();
+    }
+  }
+
+  // Remove Markdown code blocks
+  if (codeOutput.includes("```")) {
+    const codeBlockMatch = codeOutput.match(
+      /```(?:js|javascript)?([\s\S]*?)```/
+    );
+    if (codeBlockMatch && codeBlockMatch[1]) {
+      codeOutput = codeBlockMatch[1].trim();
+    }
+  }
+
+  // Ensure code is a setup function
+  if (!codeOutput.includes("function setup")) {
+    codeOutput = `function setup(scene, camera, renderer, THREE, OrbitControls) {
+      /* Add the output here */
+      ${codeOutput}
+      return scene.children.find(child => child instanceof THREE.Mesh) || scene;
+    }`;
+  }
+
+  return codeOutput;
+}
+
+/**
+ * Create a system prompt with the required context
+ * @param lintErrors ESLint errors to include
+ * @param historyContext Historical context to include
+ * @param modelRequired Whether 3D model generation is required
+ * @param modelHistory 最近生成的模型历史
+ * @returns Formatted system prompt template
+ */
+function createSystemPrompt(
+  lintErrors?: LintError[],
+  historyContext?: string,
+  modelRequired?: boolean,
+  modelHistory?: { modelUrl: string; timestamp: string; prompt: string }[]
+) {
+  // Format lint errors
+  let lintErrorsMessage = "";
+  if (lintErrors && lintErrors.length > 0) {
+    lintErrorsMessage =
+      "# 当前代码存在的问题\n" +
+      lintErrors
+        .map(
+          (err: LintError) =>
+            `- 行 ${err.line}:${err.column} - ${err.message} (${
+              err.ruleId || "未知规则"
+            })`
+        )
+        .join("\n");
+  }
+
+  const modelGenSection = modelRequired
+    ? "\n当用户需求明确表示需要生成3D模型(如人物、动物、物品等)时，调用generate_3d_model工具。模型生成后，确保在代码中正确加载并展示该模型。"
+    : "\n如果你判断实现用户需求需要复杂3D模型(如人物、动物、物品等)，调用generate_3d_model工具生成。";
+
+  const historyContextSection = historyContext
+    ? "# 历史上下文\n" +
+      historyContext +
+      "\n\n请参考上述历史编辑记录，保持代码风格和功能一致性。\n"
+    : "";
+
+  // 新增：拼接最近模型url
+  let modelHistorySection = "";
+  if (modelHistory && modelHistory.length > 0) {
+    modelHistorySection =
+      "\n# 最近生成的3D模型\n" +
+      modelHistory
+        .map(
+          (m, i) =>
+            `- [${i + 1}] ${m.timestamp}: ${
+              m.modelUrl
+            }（需求: ${m.prompt?.slice(0, 20)}...）`
+        )
+        .join("\n") +
+      "\n如需复用3D模型，请直接加载上述url。";
+  }
+
+  return SystemMessagePromptTemplate.fromTemplate(
+    "你是专业的Three.js代码优化AI助手。以下是你的工作指南：\n\n" +
+      "# 工具说明\n" +
+      "- **generate_fix_code**：生成或修复代码\n" +
+      "- **不使用apply_patch**：应用代码更新\n" +
+      "- **generate_3d_model**：生成复杂3D模型并返回加载URL\n" +
+      "# 工作循环\n" +
+      "请遵循以下增量迭代步骤进行代码优化：\n" +
+      "1. **分析**：理解当前代码、截图分析的建议、用户需求\n" +
+      "2. **改进**：使用generate_fix_code工具和generate_3d_model工具生成优化后的完整代码\n" +
+      "3. **应用更新**：不使用apply_patch工具将改进后的代码应用到当前代码\n" +
+      "4. **实时检查**：根据ESLint反馈，修复代码质量问题，确保无语法错误\n" +
+      "5. **迭代优化**：如需要进步一步改进，返回第2步\n\n" +
+      "# 3D模型生成集成" +
+      modelGenSection +
+      "\n记住，你拥有内存功能，能够记住之前生成的模型和代码上下文,在之前代码的基础上增加或者修改，不要重新写代码" +
+      "\n记住，模型不要重复放在同一个地方" +
+      "\n记住，场景可以保留多个模型，不要generate_3d_model生成的模型重叠在一起。" +
+      "\n\n# 重要规则\n" +
+      "- **直接返回可完整（有上下文）执行代码**：无论任何情况，最终必须只返回可执行的threejs代码，不要返回思考过程、解释或列表\n" +
+      +(lintErrorsMessage ? lintErrorsMessage + "\n\n" : "") +
+      historyContextSection +
+      (modelHistorySection ? modelHistorySection + "\n\n" : "")
+  );
+}
+
+/**
+ * Analyze screenshot directly using LLM without agent loop
+ * @param screenshotBase64 Base64 encoded screenshot
+ * @param currentCode Current code to analyze
+ * @param userPrompt User's requirements
+ * @param lintErrors ESLint errors if available
+ * @returns Analysis result as string
  */
 export async function analyzeScreenshotDirectly(
   screenshotBase64: string,
@@ -74,43 +442,9 @@ export async function analyzeScreenshotDirectly(
   try {
     console.log("Analyzing screenshot directly...");
 
-    // Format lint errors for the prompt if available
-    let lintErrorsText = "";
-    if (lintErrors && lintErrors.length > 0) {
-      lintErrorsText = `\n\nESLint errors found in current code:\n${lintErrors
-        .map(
-          (err) =>
-            `Line ${err.line}:${err.column} - ${err.message} (${
-              err.ruleId || "unknown rule"
-            })`
-        )
-        .join("\n")}`;
-    }
-
-    // 从内存中获取历史上下文
-    let historyContext = "";
-    try {
-      const memoryVariables = await agentMemory.loadMemoryVariables({});
-      if (memoryVariables.codeState) {
-        historyContext = `\n\n历史上下文:\n${memoryVariables.codeState}\n`;
-      }
-    } catch (memoryError) {
-      console.warn("Failed to load memory:", memoryError);
-    }
-
-    // 获取patch历史
-    const patchHistoryItems = getPatchHistory();
-    let patchHistoryText = "";
-    if (patchHistoryItems.length > 0) {
-      patchHistoryText =
-        "\n\n最近的代码修改历史:\n" +
-        patchHistoryItems
-          .map(
-            (item: PatchRecord) =>
-              `- ${item.timestamp}: ${item.description || "应用补丁"}`
-          )
-          .join("\n");
-    }
+    // Prepare context sections
+    const lintErrorsSection = prepareLintErrorsText(lintErrors);
+    const historyContext = await prepareHistoryContext();
 
     const prompt = `Analyze this Three.js scene screenshot and suggest code improvements:
     
@@ -122,60 +456,34 @@ ${currentCode}
 User requirements:
 ${
   userPrompt || "No specific requirements provided"
-}${lintErrorsText}${historyContext}${patchHistoryText}
+}${lintErrorsSection}${historyContext}
 
 Based on the screenshot (provided as base64), the ESLint errors, and the user requirements, suggest specific Three.js code changes to improve the scene.
 Focus on implementing the user requirements while also fixing any code quality issues highlighted by ESLint.
-If there are ESLint errors, make sure to address them in your solution.`;
+If there are ESLint errors, make sure to address them in your solution.
 
-    // Create a message with multimodal content (text + image)
+IMPORTANT: RESPOND ONLY WITH VALID JAVASCRIPT CODE, NO EXPLANATIONS OR COMMENTS ABOUT YOUR THOUGHT PROCESS. 
+The code must be complete and directly executable in the browser. 
+Use 'function setup(scene, camera, renderer, THREE, OrbitControls) { ... }' format. 
+DO NOT include phrases like "Here's the improved code" or numbered explanations.`;
+
+    // Create image message
+    const imageUrl = screenshotBase64.startsWith("data:")
+      ? screenshotBase64
+      : `data:image/png;base64,${screenshotBase64}`;
+
     const message = new HumanMessage({
       content: [
         { type: "text", text: prompt },
-        {
-          type: "image_url",
-          image_url: {
-            url: screenshotBase64.startsWith("data:")
-              ? screenshotBase64
-              : `data:image/png;base64,${screenshotBase64}`,
-          },
-        },
+        { type: "image_url", image_url: { url: imageUrl } },
       ],
     });
 
     const result = await model.invoke([message]);
+    const contentText = extractTextContent(result.content);
 
-    // Handle different types of content responses
-    let contentText = "";
-    if (typeof result.content === "string") {
-      contentText = result.content;
-    } else if (Array.isArray(result.content)) {
-      contentText = result.content
-        .filter(
-          (item) =>
-            typeof item === "object" && "type" in item && item.type === "text"
-        )
-        .map((item) => {
-          if ("text" in item) {
-            return item.text as string;
-          }
-          return "";
-        })
-        .join("\n");
-    } else {
-      contentText = JSON.stringify(result.content);
-    }
-
-    // 保存分析结果到内存
-    await agentMemory.saveContext(
-      { userPrompt },
-      {
-        codeStateContext: {
-          codeState: `分析图像后的建议: ${contentText.substring(0, 200)}...`,
-          lastAnalysisTimestamp: new Date().toISOString(),
-        },
-      }
-    );
+    // Save a summary of the analysis to memory
+    await saveAnalysisToMemory(userPrompt, contentText);
 
     return contentText;
   } catch (error) {
@@ -185,328 +493,148 @@ If there are ESLint errors, make sure to address them in your solution.`;
 }
 
 /**
- * Main agent function that handles the optimization loop
- * This creates an agent that uses the tools to improve the code
+ * Extract text content from LLM response
+ * @param content Response content
+ * @returns Extracted text
+ */
+function extractTextContent(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+
+  if (Array.isArray(content)) {
+    return content
+      .filter((item) => typeof item === "object" && item?.type === "text")
+      .map((item) => item.text || "")
+      .join("\n");
+  }
+
+  return JSON.stringify(content);
+}
+
+/**
+ * Format lint errors for inclusion in prompts
+ * @param lintErrors Array of lint errors
+ * @returns Formatted text
+ */
+function prepareLintErrorsText(lintErrors?: LintError[]): string {
+  if (!lintErrors || lintErrors.length === 0) {
+    return "";
+  }
+
+  return (
+    "\n\nESLint errors found in current code:\n" +
+    lintErrors
+      .map(
+        (err: LintError) =>
+          `Line ${err.line}:${err.column} - ${err.message} (${
+            err.ruleId || "unknown rule"
+          })`
+      )
+      .join("\n")
+  );
+}
+
+/**
+ * Load and prepare history context from memory
+ * @returns Formatted history context
+ */
+async function prepareHistoryContext() {
+  try {
+    const memoryVariables = await agentMemory.loadMemoryVariables({});
+    if (memoryVariables.codeState) {
+      return `\n\n历史上下文:\n${memoryVariables.codeState}\n`;
+    }
+  } catch (memoryError) {
+    console.warn("Failed to load memory:", memoryError);
+  }
+  return "";
+}
+
+/**
+ * Save analysis results to agent memory
+ * @param userPrompt User's requirements
+ * @param contentText Analysis content
+ */
+async function saveAnalysisToMemory(userPrompt: string, contentText: string) {
+  const summary =
+    contentText.length > 200
+      ? contentText.substring(0, 200) + "..."
+      : contentText;
+
+  await agentMemory.saveContext(
+    { userPrompt },
+    {
+      codeStateContext: {
+        analysisTimestamp: new Date().toISOString(),
+        analysisSummary: summary,
+      },
+    }
+  );
+}
+
+/**
+ * Run the agent optimization loop
+ * @param suggestion Suggestion from screenshot analysis
+ * @param currentCode Current code to optimize
+ * @param maxIterations Maximum iterations for optimization
+ * @param userPrompt User's requirements
+ * @param historyContext Historical context
+ * @param lintErrors ESLint errors if available
+ * @param modelRequired Whether 3D model generation is required
+ * @param res Response object for direct response handling
+ * @returns Optimized code or void if response handled directly
  */
 export async function runAgentLoop(
   suggestion: string,
   currentCode: string,
-  maxIterations = 5,
+  maxIterations = MAX_ITERATIONS,
   userPrompt: string = "",
   historyContext: string = "",
   lintErrors?: LintError[],
   modelRequired?: boolean,
   res?: NextApiResponse
 ): Promise<string | void> {
-  // 保存当前代码状态
-  let currentCodeState = currentCode;
+  // Load latest code state from memory if available
+  const currentCodeState = await loadLatestCodeState(currentCode);
 
-  // 尝试从内存加载最新状态
+  // 新增：读取模型历史
+  let modelHistory: { modelUrl: string; timestamp: string; prompt: string }[] =
+    [];
   try {
-    const memoryState = await loadFromMemory();
-    if (memoryState.latestCode) {
-      console.log("从内存加载最新代码状态");
-      // 只有当内存中的代码和当前代码不同时才更新
-      if (memoryState.latestCode !== currentCode) {
-        console.log("内存中的代码与当前代码不同，使用最新状态");
-        currentCodeState = memoryState.latestCode;
-      }
+    const memoryVars = await agentMemory.loadMemoryVariables({});
+    const ctx = memoryVars.codeStateContext || {};
+    if (ctx.modelHistory) {
+      modelHistory = ctx.modelHistory;
     }
-  } catch (memoryError) {
-    console.warn("Failed to load from memory:", memoryError);
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  } catch (e) {
+    // ignore
   }
 
-  // 在函数内部定义处理工具输入的函数
-  function prepareToolInput(toolName: string, input: string): string {
-    if (toolName === "apply_patch") {
-      try {
-        // Clean input: replace escaped newlines with actual newlines
-        const cleanedInput = input
-          .replace(/\\n/g, "\n")
-          .replace(/\\t/g, "\t")
-          .replace(/\\\\/g, "\\");
-
-        // Try to parse the cleaned input as JSON
-        try {
-          const inputObj = JSON.parse(cleanedInput);
-          if (inputObj.patch) {
-            // If it already contains a patch property, return it as is
-            return cleanedInput;
-          }
-          // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        } catch (parseError) {
-          // Not valid JSON after cleaning, continue with original logic
-        }
-
-        // Try to parse the original input
-        const inputObj = JSON.parse(input);
-
-        // 如果是嵌套的input字段，提取出来
-        if (inputObj.input && typeof inputObj.input === "string") {
-          let innerInput = inputObj.input;
-
-          // Clean up possible double-escaped quotes in the inner input
-          innerInput = innerInput.replace(/\\"/g, '"');
-
-          // Check if it's a JSON string
-          if (innerInput.startsWith("{") && innerInput.endsWith("}")) {
-            try {
-              // Try to parse inner JSON
-              const innerObj = JSON.parse(innerInput);
-
-              // 如果包含originalCode和improvedCode，转换为正确的格式
-              if (innerObj.originalCode && innerObj.improvedCode) {
-                // 首次调用，使用code参数传递完整代码
-                if (!currentCodeState || currentCodeState === "") {
-                  console.log("First-time call, using full code");
-                  return JSON.stringify({
-                    code: innerObj.improvedCode,
-                    description: `Initial code based on user prompt: ${userPrompt.substring(
-                      0,
-                      50
-                    )}...`,
-                  });
-                } else {
-                  // 后续调用，生成并使用patch
-                  console.log("Subsequent call, generating patch");
-                  const patch = createPatch(
-                    "code.js",
-                    currentCodeState,
-                    innerObj.improvedCode
-                  );
-
-                  return JSON.stringify({
-                    patch,
-                    description: `Patch generated for: ${userPrompt.substring(
-                      0,
-                      50
-                    )}...`,
-                  });
-                }
-              }
-
-              return JSON.stringify(innerObj);
-              // eslint-disable-next-line @typescript-eslint/no-unused-vars
-            } catch (e) {
-              // 如果无法解析，尝试作为原始文本处理
-              if (
-                innerInput.includes("patch") &&
-                innerInput.includes("---") &&
-                innerInput.includes("+++")
-              ) {
-                // 如果看起来像一个patch，直接返回
-                return JSON.stringify({
-                  patch: innerInput
-                    .replace(/\\n/g, "\n")
-                    .replace(/\\\\/g, "\\"),
-                  description: `Extracted patch data`,
-                });
-              }
-
-              // 否则返回原始输入
-              return input;
-            }
-          }
-        }
-
-        // 如果直接包含originalCode和improvedCode，转换为正确的格式
-        if (inputObj.originalCode && inputObj.improvedCode) {
-          // 首次调用，使用code参数传递完整代码
-          if (!currentCodeState || currentCodeState === "") {
-            console.log("First-time direct call, using full code");
-            return JSON.stringify({
-              code: inputObj.improvedCode,
-              description: `Initial full code: ${userPrompt.substring(
-                0,
-                50
-              )}...`,
-            });
-          } else {
-            // 后续调用，生成patch
-            console.log("Subsequent direct call, generating patch");
-            const patch = createPatch(
-              "code.js",
-              currentCodeState,
-              inputObj.improvedCode
-            );
-
-            return JSON.stringify({
-              patch,
-              description: `Incremental patch: ${userPrompt.substring(
-                0,
-                50
-              )}...`,
-            });
-          }
-        }
-
-        // 如果已经是正确格式，直接返回
-        if (inputObj.code || inputObj.patch) {
-          // 如果没有description，添加一个
-          if (!inputObj.description) {
-            inputObj.description = `Update at ${new Date().toISOString()} - ${userPrompt.substring(
-              0,
-              30
-            )}...`;
-            return JSON.stringify(inputObj);
-          }
-          return input;
-        }
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      } catch (e) {
-        // 解析失败，尝试检查是否包含原始代码和改进代码的字符串
-        try {
-          // 处理可能包含在字符串中的patch数据
-          if (
-            input.includes("patch") &&
-            input.includes("---") &&
-            input.includes("+++")
-          ) {
-            // 这可能是一个直接包含在字符串中的patch，尝试提取
-            const cleanedInput = input
-              .replace(/\\n/g, "\n")
-              .replace(/\\\\/g, "\\");
-
-            // 使用正则表达式提取patch部分
-            const patchMatch = cleanedInput.match(
-              /patch[\"']?\s*:\s*[\"']?([\s\S]*?)(?:[\"'],|$)/
-            );
-            if (patchMatch && patchMatch[1]) {
-              const extractedPatch = patchMatch[1]
-                .replace(/\\n/g, "\n")
-                .replace(/\\\\/g, "\\");
-
-              return JSON.stringify({
-                patch: extractedPatch,
-                description: "直接从文本提取的patch",
-              });
-            }
-          }
-
-          // 简单处理，如果字符串中包含明显的关键词，尝试解析
-          if (
-            input.includes("originalCode") &&
-            input.includes("improvedCode")
-          ) {
-            const cleanedInput = input
-              .replace(/\\"/g, '"')
-              .replace(/^"|"$/g, "");
-            const matches = cleanedInput.match(
-              /"improvedCode"\s*:\s*"([^"]*)"/
-            );
-
-            if (matches && matches[1]) {
-              console.log("Extracted improved code from string");
-
-              // 首次调用使用完整代码，后续使用patch
-              if (!currentCodeState || currentCodeState === "") {
-                return JSON.stringify({
-                  code: matches[1].replace(/\\n/g, "\n"),
-                  description: `Extracted initial code`,
-                });
-              } else {
-                const improvedCode = matches[1].replace(/\\n/g, "\n");
-                const patch = createPatch(
-                  "code.js",
-                  currentCodeState,
-                  improvedCode
-                );
-
-                return JSON.stringify({
-                  patch,
-                  description: `Extracted patch from improvedCode`,
-                });
-              }
-            }
-          }
-        } catch (extractError) {
-          console.error("Failed to extract code from string:", extractError);
-        }
-
-        console.error("Failed to parse input for apply_patch:", e);
-        // 完全处理失败，返回简化的错误信息
-        return JSON.stringify({
-          error: "无法解析输入数据",
-          originalInput: input.substring(0, 100) + "...",
-        });
-      }
-    }
-
-    return input;
-  }
-
-  // Prepare lint errors message for the system prompt
-  let lintErrorsMessage = "";
-  if (lintErrors && lintErrors.length > 0) {
-    lintErrorsMessage =
-      "\n\n# ESLint 检查结果\n" +
-      "在当前代码中发现以下 ESLint 错误：\n" +
-      lintErrors
-        .map(
-          (err) =>
-            `- 行 ${err.line}:${err.column} - ${err.message} (${
-              err.ruleId || "未知规则"
-            })`
-        )
-        .join("\n") +
-      "\n\n请优先修复这些代码质量问题。";
-  }
-
-  // 加载补丁历史
-  const patchHistoryItems = getPatchHistory();
-  let patchHistoryText = "";
-  if (patchHistoryItems.length > 0) {
-    patchHistoryText =
-      "\n\n# 补丁历史\n" +
-      patchHistoryItems
-        .map(
-          (item: PatchRecord) =>
-            `- ${item.timestamp}: ${item.description || "应用补丁"}`
-        )
-        .join("\n") +
-      "\n\n请参考这些历史变更，确保新改动与之前的修改方向一致。";
-  }
-
+  // Create tool array for agent
   const loopTools = [applyPatchTool, codeGenTool, modelGenTool];
 
-  // 创建系统消息，使用普通的SystemMessage而非模板
-  const systemMessage = new SystemMessage(
-    "你是专业的Three.js代码优化AI助手。以下是你的工作指南：\n\n" +
-      "# 工具说明\n" +
-      "- **generate_fix_code**：生成或修复代码\n" +
-      "- **apply_patch**：应用代码更新\n" +
-      "- **generate_3d_model**：生成复杂3D模型并返回加载URL\n" +
-      "# 工作循环\n" +
-      "请遵循以下增量迭代步骤进行代码优化：\n" +
-      "1. **分析**：理解当前代码、截图分析的建议、用户需求\n" +
-      "2. **改进**：使用generate_fix_code工具生成优化后的完整代码，传入明确的用户需求\n" +
-      "3. **应用更新**：使用apply_patch工具将改进后的代码应用到当前代码\n" +
-      "4. **实时检查**：根据ESLint反馈，修复代码质量问题，确保无语法错误\n" +
-      "5. **迭代优化**：如需要进一步改进，返回第1步\n\n" +
-      "# 3D模型生成集成" +
-      (modelRequired
-        ? "\n当用户需求明确表示需要生成3D模型(如人物、动物、物品等)时，你应优先调用generate_3d_model工具。模型生成后，确保在代码中正确加载并展示该模型。"
-        : "\n如果你判断实现用户需求需要复杂3D模型(如人物、动物、物品等)，可以主动调用generate_3d_model工具生成。") +
-      "\n记住，你拥有内存功能，能够记住之前生成的模型和代码上下文，以避免重复生成或在相同位置添加多个模型。" +
-      "\n\n# 重要规则\n" +
-      "- **ESLint优先**：优先修复ESLint报告的代码问题，确保代码质量\n" +
-      "- **迭代控制**：最多循环3次，或在无法进一步优化时提前结束\n" +
-      "- **需求优先**：所有代码改进必须优先实现用户需求，然后才考虑其他优化\n" +
-      "- **结构保持**：保持setup函数结构不变\n" +
-      "- **3D模型位置管理**：当场景中已有模型时，新模型应放置在不同位置，避免重叠，同一位置不要重复生成模型\n" +
-      "- **控件创建**：永远不要直接使用new OrbitControls()，必须通过OrbitControls.create(camera, renderer.domElement)创建或获取控制器\n\n" +
-      (lintErrorsMessage ? lintErrorsMessage + "\n\n" : "") +
-      (patchHistoryText ? patchHistoryText + "\n\n" : "") +
-      (historyContext
-        ? "# 历史上下文\n" +
-          historyContext +
-          "\n\n请参考上述历史编辑记录，保持代码风格和功能一致性。\n"
-        : "")
+  // Create prompt templates
+  const systemMessage = createSystemPrompt(
+    lintErrors,
+    historyContext,
+    modelRequired,
+    modelHistory
   );
-
-  // 创建人类消息模板
   const humanPromptTemplate = HumanMessagePromptTemplate.fromTemplate(
-    "生成生动精细的3d场景.Three.js代码：\n\n```js\n{currentCode}\n```\n\n分析建议：\n{suggestion}\n\n用户需求：\n{userPrompt}"
+    [
+      "请在以下Three.js代码基础上增量优化，不要重写全部代码：",
+      "```js",
+      "{currentCode}",
+      "```",
+      modelHistory && modelHistory.length > 0
+        ? "\n最近生成的3D模型URL（复用）:\n" +
+          modelHistory.map((m, i) => `- [${i + 1}] ${m.modelUrl}`).join("\n")
+        : "",
+      "\n分析建议：\n{suggestion}",
+      "\n用户需求：\n{userPrompt}",
+    ].join("\n")
   );
 
   // Create the prompt template
@@ -517,6 +645,17 @@ export async function runAgentLoop(
   ]);
 
   try {
+    // Create custom callback handler for agent
+    const callbackHandler = new AgentCallbackHandler(
+      currentCodeState,
+      agentMemory,
+      userPrompt
+    );
+
+    // Setup callback manager
+    const callbackManager = new CallbackManager();
+    callbackManager.addHandler(callbackHandler);
+
     // Create the agent
     const agent = await createOpenAIFunctionsAgent({
       llm: model,
@@ -524,7 +663,7 @@ export async function runAgentLoop(
       prompt: promptTemplate,
     });
 
-    // Create executor
+    // Create the executor
     const executor = AgentExecutor.fromAgentAndTools({
       agent,
       tools: loopTools,
@@ -532,104 +671,11 @@ export async function runAgentLoop(
       verbose: true,
       handleParsingErrors: true,
       returnIntermediateSteps: true,
-    }) as CustomAgentExecutor;
+      callbacks: [callbackHandler],
+    });
 
-    // 修改 onToolStart 函数来使用 prepareToolInput
-    executor.onToolStart = async (tool, input) => {
-      const normalizedInput = prepareToolInput(tool.name, input);
-      console.log(`Starting tool ${tool.name} with input:`, normalizedInput);
-    };
-
-    // 跟踪执行中的代码更新
-    executor.onToolEnd = async (output) => {
-      if (output.tool === "apply_patch") {
-        try {
-          const result = JSON.parse(output.result);
-          if (result.success && result.updatedCode) {
-            currentCodeState = result.updatedCode;
-
-            // 更新agent的内存状态 - 将多个键值合并为一个对象
-            await agentMemory.saveContext(
-              { userPrompt },
-              {
-                codeStateContext: {
-                  codeState: currentCodeState.substring(0, 200) + "...",
-                  lastUpdateTimestamp: new Date().toISOString(),
-                },
-              }
-            );
-          }
-        } catch (e) {
-          console.error("Failed to parse apply_patch result:", e);
-        }
-      } else if (output.tool === "generate_3d_model") {
-        try {
-          const result = JSON.parse(output.result);
-          if (result.success && result.modelUrl) {
-            // 将模型URL和相关信息保存到内存中
-            const existingMemory = await agentMemory.loadMemoryVariables({});
-            const existingContext = existingMemory.codeStateContext || {};
-
-            // 更新或初始化模型记录数组
-            const modelHistory = existingContext.modelHistory || [];
-
-            // 添加新模型到历史记录
-            modelHistory.push({
-              modelUrl: result.modelUrl,
-              timestamp: new Date().toISOString(),
-              prompt: userPrompt,
-              position: modelHistory.length, // 用索引作为简单的位置标识
-            });
-
-            // 保存更新后的内存状态
-            await agentMemory.saveContext(
-              { userPrompt },
-              {
-                codeStateContext: {
-                  ...existingContext,
-                  modelHistory,
-                  lastModelTimestamp: new Date().toISOString(),
-                  lastModelUrl: result.modelUrl,
-                },
-              }
-            );
-
-            console.log(
-              `Model generated and saved to memory: ${result.modelUrl}`
-            );
-          }
-        } catch (e) {
-          console.error("Failed to process model generation result:", e);
-        }
-      }
-    };
-
-    // 原始检查逻辑保持不变
-    executor.onToolError = async (tool, error) => {
-      console.error(`Error in tool ${tool.name}:`, error);
-
-      if (tool.name === "apply_patch") {
-        // 为apply_patch提供错误恢复信息
-        return JSON.stringify({
-          success: false,
-          message: `应用补丁失败: ${error.message}`,
-          suggestion:
-            '请尝试直接使用{"input":{"originalCode":"...","improvedCode":"..."}}格式',
-        });
-      } else if (tool.name === "generate_fix_code") {
-        // 为generate_fix_code提供错误恢复信息
-        return JSON.stringify({
-          status: "error",
-          message: `代码生成失败: ${error.message}`,
-          suggestion: "请简化指令，或分步骤实现改进",
-        });
-      }
-
-      return null; // 其他工具错误由 AgentExecutor 处理
-    };
-
-    // 执行agent
     try {
+      // Execute the agent
       const result = await executor.invoke({
         suggestion,
         currentCode: currentCodeState,
@@ -638,144 +684,174 @@ export async function runAgentLoop(
         lintErrors: lintErrors || [],
       });
 
-      // Extract and clean the output
-      let output = result.output as string;
+      // Clean and process the output
+      const cleanedOutput = cleanCodeOutput(result.output);
 
-      // Clean code - remove HTML structure if present
-      if (output.includes("<!DOCTYPE html>") || output.includes("<html>")) {
-        const scriptMatch = output.match(/<script>([\s\S]*?)<\/script>/);
-        if (scriptMatch && scriptMatch[1]) {
-          output = scriptMatch[1].trim();
-        }
-      }
-
-      // Remove Markdown code blocks
-      if (output.includes("```")) {
-        const codeBlockMatch = output.match(
-          /```(?:js|javascript)?([\s\S]*?)```/
-        );
-        if (codeBlockMatch && codeBlockMatch[1]) {
-          output = codeBlockMatch[1].trim();
-        }
-      }
-
-      // Ensure code is a setup function
-      if (!output.includes("function setup")) {
-        output = `function setup(scene, camera, renderer, THREE, OrbitControls) {
-          ${output}
-          return scene.children.find(child => child instanceof THREE.Mesh) || scene;
-        }`;
-      }
-
-      // 最终更新agent的内存，存储完整的最终结果
+      // Update final state in memory
       await agentMemory.saveContext(
         { userPrompt },
         {
           codeStateContext: {
-            codeState: output,
+            codeDigest: callbackHandler.getCodeDigest(cleanedOutput),
             lastCompletionTimestamp: new Date().toISOString(),
             lastRequest: userPrompt,
           },
         }
       );
 
-      // Check if the agent's output includes model URL info
-      let modelUrl: string | null = null;
-      const modelUrls: Array<{ url: string; name: string }> = [];
+      // Extract model URLs from code
+      const modelInfo = extractModelUrls(cleanedOutput);
 
-      // Enhanced model URL detection in the agent's response
-      if (typeof output === "string") {
-        // 1. Check for MODEL_URL comment format
-        const modelUrlMatch = output.match(/\/\/\s*MODEL_URL:\s*(\S+)/);
-        if (modelUrlMatch && modelUrlMatch[1]) {
-          modelUrl = modelUrlMatch[1];
-          modelUrls.push({ url: modelUrl, name: "model.glb" });
-          console.log("Found model URL in code comment:", modelUrl);
-        }
-
-        // 2. Check for embedded Hyper3D URLs in the code
-        const hyper3dMatches = output.match(
-          /['"]https:\/\/hyperhuman-file\.deemos\.com\/[^'"]+\.glb[^'"]*['"]/g
-        );
-        if (hyper3dMatches && hyper3dMatches.length > 0) {
-          hyper3dMatches.forEach((match, index) => {
-            const url = match.replace(/^['"]|['"]$/g, "");
-            if (!modelUrl) {
-              modelUrl = url; // Set the primary URL if none found yet
-            }
-            modelUrls.push({ url, name: `model_${index}.glb` });
-            console.log(`Found embedded Hyper3D URL (${index + 1}):`, url);
-          });
-        }
-      }
-
+      // Handle response if response object provided
       if (res) {
         return res.status(200).json({
-          directCode: output,
+          directCode: cleanedOutput,
           suggestion,
-          modelUrl,
-          modelUrls: modelUrls.length > 0 ? modelUrls : null,
+          ...modelInfo,
         });
       }
 
-      return output;
+      return cleanedOutput;
     } catch (agentError) {
-      console.error("Agent execution error:", agentError);
-
-      // 当agent执行失败时，直接使用suggestion进行改进
-      console.log("Falling back to direct code improvement...");
-
-      // 尝试从suggestion中提取代码
-      let improvedCode = "";
-      if (suggestion.includes("```")) {
-        const codeMatch = suggestion.match(
-          /```(?:js|javascript)?\s*([\s\S]*?)```/
-        );
-        if (codeMatch && codeMatch[1]) {
-          improvedCode = codeMatch[1].trim();
-        }
-      }
-
-      // 如果没有提取到代码，尝试使用codeGenTool直接生成
-      if (!improvedCode) {
-        try {
-          console.log("Using codeGenTool to generate improved code...");
-          const instruction = `改进以下Three.js代码，实现用户需求: ${
-            userPrompt || "无特定需求"
-          }\n\n${currentCode}`;
-          const codeGenResult = await codeGenTool.invoke({ instruction });
-          const parsedResult = JSON.parse(codeGenResult);
-          if (parsedResult.code) {
-            improvedCode = parsedResult.code;
-          }
-        } catch (codeGenError) {
-          console.error("codeGenTool failed:", codeGenError);
-        }
-      }
-
-      // 如果还是没有代码，返回原始代码
-      if (!improvedCode) {
-        return currentCode;
-      }
-
-      // 记录回退结果到内存
-      await agentMemory.saveContext(
-        { userPrompt },
-        {
-          codeStateContext: {
-            codeState: improvedCode,
-            lastFallbackTimestamp: new Date().toISOString(),
-            error: "Agent execution failed, used fallback",
-          },
-        }
+      // Fall back to direct improvement when agent fails
+      return handleAgentFailure(
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore - agentError is likely an Error but TypeScript sees it as unknown
+        agentError,
+        suggestion,
+        currentCode,
+        userPrompt,
+        res
       );
-
-      return improvedCode;
     }
   } catch (error) {
     console.error("Error running agent loop:", error);
-    return currentCode; // 出错时返回原始代码
+    return currentCode; // Return original code on error
   }
+}
+
+/**
+ * Load the latest code state from memory
+ * @param currentCode Default code to use if memory load fails
+ * @returns Latest code state
+ */
+async function loadLatestCodeState(currentCode: string): Promise<string> {
+  try {
+    // Try to get the cached code directly
+    const cachedCode = getCachedCode();
+    if (cachedCode && cachedCode !== currentCode) {
+      console.log("Loading latest code state from cached code");
+      return cachedCode;
+    }
+  } catch (memoryError) {
+    console.warn("Failed to load cached code:", memoryError);
+  }
+  return currentCode;
+}
+
+/**
+ * Handle agent execution failure
+ * @param error Error that occurred
+ * @param suggestion Original suggestion
+ * @param currentCode Current code
+ * @param userPrompt User requirements
+ * @param res Response object if available
+ * @returns Fallback code or void if response handled directly
+ */
+async function handleAgentFailure(
+  error: Error,
+  suggestion: string,
+  currentCode: string,
+  userPrompt: string,
+  res?: NextApiResponse
+) {
+  console.error("Agent execution error:", error);
+  console.log("Falling back to direct code improvement...");
+
+  // Try to extract code from suggestion
+  let improvedCode = extractCodeFromSuggestion(suggestion);
+
+  // If no code extracted, try using codeGenTool directly
+  if (!improvedCode) {
+    improvedCode = await generateCodeWithFallback(currentCode, userPrompt);
+  }
+
+  // If still no code, return original
+  if (!improvedCode) {
+    improvedCode = currentCode;
+  }
+
+  // Record fallback to memory
+  await agentMemory.saveContext(
+    { userPrompt },
+    {
+      codeStateContext: {
+        codeDigest:
+          improvedCode.length > 100
+            ? improvedCode.substring(0, 50) +
+              "..." +
+              improvedCode.substring(improvedCode.length - 50)
+            : improvedCode,
+        lastFallbackTimestamp: new Date().toISOString(),
+        error: "Agent execution failed, used fallback",
+      },
+    }
+  );
+
+  // Handle response if response object provided
+  if (res) {
+    const modelInfo = extractModelUrls(improvedCode);
+    return res.status(200).json({
+      directCode: improvedCode,
+      suggestion,
+      ...modelInfo,
+    });
+  }
+
+  return improvedCode;
+}
+
+/**
+ * Extract code from a suggestion string
+ * @param suggestion Suggestion string
+ * @returns Extracted code or empty string
+ */
+function extractCodeFromSuggestion(suggestion: string): string {
+  if (suggestion.includes("```")) {
+    const codeMatch = suggestion.match(/```(?:js|javascript)?\s*([\s\S]*?)```/);
+    if (codeMatch && codeMatch[1]) {
+      return codeMatch[1].trim();
+    }
+  }
+  return "";
+}
+
+/**
+ * Generate code using codeGenTool as fallback
+ * @param currentCode Current code
+ * @param userPrompt User requirements
+ * @returns Generated code or empty string
+ */
+async function generateCodeWithFallback(
+  currentCode: string,
+  userPrompt: string
+): Promise<string> {
+  try {
+    console.log("Using codeGenTool to generate improved code...");
+    const instruction = `改进以下Three.js代码，实现用户需求: ${
+      userPrompt || "无特定需求"
+    }\n\n${currentCode}`;
+
+    const codeGenResult = await codeGenTool.invoke({ instruction });
+    const parsedResult = JSON.parse(codeGenResult);
+
+    if (parsedResult.code) {
+      return parsedResult.code;
+    }
+  } catch (codeGenError) {
+    console.error("codeGenTool failed:", codeGenError);
+  }
+  return "";
 }
 
 /**
@@ -790,7 +866,7 @@ export default async function handler(
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  // Process the request for different types of operations
+  // Process the request based on the action type
   const { action, code, prompt, screenshot, lintErrors, modelRequired } =
     req.body;
 
@@ -803,85 +879,46 @@ export default async function handler(
   try {
     switch (action) {
       case "analyze-screenshot":
-        // Screenshot analysis and code improvement
-        if (screenshot && code) {
-          // 修改提示词，将用户需求添加到分析提示中
-          const suggestion = await analyzeScreenshotDirectly(
-            screenshot,
-            code,
-            prompt,
-            lintErrors
-          );
-
-          // 将用户需求和历史上下文也传入到agent循环中
-          const improvedCode = await runAgentLoop(
-            suggestion,
-            code,
-            5,
-            prompt,
-            "",
-            lintErrors,
-            modelRequired,
-            res
-          );
-
-          // Only process return value if function didn't handle response directly
-          if (typeof improvedCode === "string") {
-            // Check if the agent's output includes model URL info
-            let modelUrl: string | null = null;
-            const modelUrls: Array<{ url: string; name: string }> = [];
-
-            // Enhanced model URL detection in the agent's response
-            if (typeof improvedCode === "string") {
-              // 1. Check for MODEL_URL comment format
-              const modelUrlMatch = improvedCode.match(
-                /\/\/\s*MODEL_URL:\s*(\S+)/
-              );
-              if (modelUrlMatch && modelUrlMatch[1]) {
-                modelUrl = modelUrlMatch[1];
-                modelUrls.push({ url: modelUrl, name: "model.glb" });
-                console.log("Found model URL in code comment:", modelUrl);
-              }
-
-              // 2. Check for embedded Hyper3D URLs in the code
-              const hyper3dMatches = improvedCode.match(
-                /['"]https:\/\/hyperhuman-file\.deemos\.com\/[^'"]+\.glb[^'"]*['"]/g
-              );
-              if (hyper3dMatches && hyper3dMatches.length > 0) {
-                hyper3dMatches.forEach((match, index) => {
-                  const url = match.replace(/^['"]|['"]$/g, "");
-                  if (!modelUrl) {
-                    modelUrl = url; // Set the primary URL if none found yet
-                  }
-                  modelUrls.push({ url, name: `model_${index}.glb` });
-                  console.log(
-                    `Found embedded Hyper3D URL (${index + 1}):`,
-                    url
-                  );
-                });
-              }
-            }
-
-            return res.status(200).json({
-              directCode: improvedCode,
-              suggestion,
-              modelUrl,
-              modelUrls: modelUrls.length > 0 ? modelUrls : null,
-            });
-          }
-
-          // If we reached here, response was already sent
-          return;
+        // Validate required parameters
+        if (!screenshot || !code) {
+          return res.status(400).json({
+            error: "Missing required parameters: screenshot and code",
+          });
         }
-        return res.status(400).json({ error: "Missing required parameters" });
+
+        // Execute screenshot analysis
+        const suggestion = await analyzeScreenshotDirectly(
+          screenshot,
+          code,
+          prompt,
+          lintErrors
+        );
+
+        // Run the agent loop with user requirements
+        return runAgentLoop(
+          suggestion,
+          code,
+          MAX_ITERATIONS,
+          prompt,
+          "",
+          lintErrors,
+          modelRequired,
+          res
+        );
 
       default:
-        return res.status(400).json({ error: "Invalid action" });
+        return res.status(400).json({ error: "Invalid action: " + action });
     }
   } catch (error) {
     console.error("Error in agent handler:", error);
     return res.status(500).json({
       error: error instanceof Error ? error.message : "Unknown error",
+      stack:
+        process.env.NODE_ENV === "development"
+          ? error instanceof Error
+            ? error.stack
+            : null
+          : null,
     });
   }
 }

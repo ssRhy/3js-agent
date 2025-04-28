@@ -11,7 +11,6 @@ const codeGenModel = new AzureChatOpenAI({
   azureOpenAIApiDeploymentName: process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME,
   azureOpenAIApiVersion: "2024-12-01-preview",
   azureOpenAIApiInstanceName: process.env.AZURE_OPENAI_API_INSTANCE_NAME,
-  azureOpenAIEndpoint: process.env.AZURE_OPENAI_API_ENDPOINT,
 });
 
 /**
@@ -44,64 +43,29 @@ function handleLLMResponseContent(content: unknown): string {
  */
 export const codeGenTool = new DynamicStructuredTool({
   name: "generate_fix_code",
-  description: "Generate or modify Three.js code based on instruction",
+  description:
+    "生成或修复基于用户提示的Three.js代码。提供完整的setup函数代码。",
   schema: z.object({
-    instruction: z.string().describe("用户指令或代码修复要求"),
-    code: z
-      .string()
-      .optional()
-      .describe("当前代码，如不提供则使用系统缓存中的代码"),
+    instruction: z.string().describe("要实现的功能或需要修复的问题描述"),
   }),
-  func: async ({ instruction, code }) => {
+  func: async ({ instruction }) => {
     try {
-      console.log("Processing Three.js code request...");
+      const prompt = `作为Three.js专家，请根据以下指令生成或修复代码：
 
-      // 确定当前代码：优先使用传入的code，否则使用缓存的代码
-      const currentCode = code || getCachedCode();
-      const isInitialGeneration = !currentCode;
+${instruction}
 
-      // 根据情况生成提示语
-      let prompt: string;
+要求：
+1. 代码必须是可直接执行的JavaScript代码，使用Three.js库
+2. 使用function setup(scene, camera, renderer, THREE, OrbitControls) { ... } 函数格式
+3. 所有交互控制器只能用OrbitControls.create(camera, renderer.domElement)方式创建
+4. 返回scene.children.find(child => child instanceof THREE.Mesh) || scene;
+6.永远不要直接使用new OrbitControls()，必须通过OrbitControls.create(camera, renderer.domElement)创建或获取控制器
+7.结构保持**：保持setup函数结构不变
+8.调整模型位置，不要generate_3d_model生成的模型重叠在一起。
+9. 确保功能完整、代码规范
 
-      if (isInitialGeneration) {
-        // 首次生成代码
-        prompt = `You are a Three.js expert. Generate complete, functional Three.js code 
-based on the following user instructions:
 
-"${instruction}"
-
-Requirements for generation:
-1. Create a complete "function setup(scene, camera, renderer, THREE, OrbitControls) { ... }" function
-2. The function must properly use the provided scene, camera, and renderer parameters
-3. Add appropriate lighting, materials, and objects as required by the instructions
-4. Include any necessary animation or interaction logic
-5. Return the main object/scene at the end of the function
-6. Do not include imports or other code outside the function
-7. Ensure the code follows Three.js best practices
-8. Ensure the code is clean, optimized, and well-structured
-
-Return ONLY the complete code without explanations or markdown formatting.
-The code should be ready to run immediately.`;
-      } else {
-        // 修复或改进现有代码
-        prompt = `You are a Three.js expert. Fix or improve the Three.js code based on the following requirement:
-
-"${instruction}"
-
-Here is the current code:
-\`\`\`javascript
-${currentCode}
-\`\`\`
-
-Requirements for fixing/improving:
-1. Maintain the setup function structure: "function setup(scene, camera, renderer, THREE, OrbitControls) { ... }"
-2. Address the specific requirement or issue mentioned
-3. Keep all existing functionality that is working correctly
-4. Ensure the code is clean, optimized, and follows Three.js best practices
-5. Return the complete improved function, ready to run immediately
-
-Return ONLY the complete code without explanations or markdown formatting.`;
-      }
+注意：你的回答必须只包含可执行的JavaScript代码，不要包含任何解释或描述性文本。不要使用markdown代码块标记。`;
 
       // 调用LLM生成或修改代码
       const result = await codeGenModel.invoke(prompt);
@@ -132,12 +96,10 @@ Return ONLY the complete code without explanations or markdown formatting.`;
       // 返回生成的代码
       return JSON.stringify({
         code: improvedCode,
-        originalCode: currentCode,
+        originalCode: getCachedCode(),
         status: "success",
-        message: isInitialGeneration
-          ? "Successfully generated Three.js code"
-          : "Successfully improved Three.js code",
-        isFirstGeneration: isInitialGeneration,
+        message: "Successfully generated Three.js code",
+        isFirstGeneration: true,
       });
     } catch (error) {
       console.error("Failed to generate or modify Three.js code:", error);

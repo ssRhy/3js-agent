@@ -11,9 +11,8 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@langchain/community": "^0.3.41",
-    "@langchain/core": "^0.2.10",
-    "@langchain/openai": "^0.0.14",
+    "@langchain/core": "^0.3.49",
+    "@langchain/openai": "^0.5.7",
     "@monaco-editor/react": "^4.6.0",
     "@react-three/drei": "^9.122.0",
     "@react-three/fiber": "^8.18.0",
@@ -21,7 +20,7 @@
     "diff": "^5.2.0",
     "eslint": "^8.57.0",
     "html2canvas": "^1.4.1",
-    "langchain": "^0.1.21",
+    "langchain": "^0.3.24",
     "monaco-editor": "^0.46.0",
     "next": "14.1.0",
     "react": "^18",

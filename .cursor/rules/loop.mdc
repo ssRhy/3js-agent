@@ -14,8 +14,8 @@ generate_code和analyzeScreenshotDirectly直接使用llm，不放入agent循环�
 
 ##
 注意：
-根据每轮 Diff 生成的补丁，将修改落地到现有代码，然后再进入下次 lint 校验
-diffTool 只专注于生成补丁， applyPatchTool 只负责应用补丁,JSON格式数据传输
+将修改落地到现有代码，然后再进入下次 lint 校验
+，applyPatchTool 只负责应用补丁,JSON格式数据传输
 调用时机：只要有修复建议（semantic diff），就会多次调用lintTool，直至 ESLint 无错误或达到迭代上限，这样就形成一个agent调用工具集，循环优化的 Three.js 代码修复流程。
 
 

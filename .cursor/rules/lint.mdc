@@ -13,11 +13,9 @@ alwaysApply: false
 前端：lintAndOverlay(code)
 ESLint 检查 → 返回给“agent中心”
 POST /api/....
-后端：runAgentWithLintReport(file, messages)
-Agent 接收到 lint 报告 → 规划下一步（修复、patch 或反馈）
+后端：Agent 接收到 lint 报告 → 规划下一步（修复、patch 或反馈）
 
 
-用的是 Next.js，默认已经支持大多数 npm 包。只需确保在 next.config.js 里没有将 eslint4b 标记为外部模块即可。
 
 
 
