@@ -113,8 +113,10 @@ const createModelGenTool = () => {
           success: true,
           modelUrl,
           modelUrls: result.downloadUrls,
-          message: "3D model generated successfully",
-          modelComment: `// MODEL_URL: ${modelUrl}`, // Add model URL as a comment for agent.ts to extract
+          message:
+            "3D model generated successfully. Now generate code that uses this model URL.",
+          modelComment: `// MODEL_URL: ${modelUrl}`,
+          nextStep: "generate_code_with_model_url",
         };
 
         console.log("Returning success response:", successResponse);

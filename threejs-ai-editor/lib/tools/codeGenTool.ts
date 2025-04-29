@@ -61,7 +61,13 @@ ${instruction}
 4. 返回scene.children.find(child => child instanceof THREE.Mesh) || scene;
 6.永远不要直接使用new OrbitControls()，必须通过OrbitControls.create(camera, renderer.domElement)创建或获取控制器
 7.结构保持**：保持setup函数结构不变
-8.调整模型位置，不要generate_3d_model生成的模型重叠在一起。
+8.
+"\n记住，模型不要重复放在同一个地方" +
+      "\n记住，场景可以保留多个模型，不要generate_3d_model生成的模型重叠在一起。" +
+      "\n\n# 重要规则\n" +
+      记住，模型不要重复放在同一个地方，为每个新模型设置唯一的位置坐标
+8. 场景可以保留多个模型，确保generate_3d_model生成的模型不会重叠在一起
+      "- **直接返回可完整（有上下文）执行代码**：无论任何情况，最终必须只返回可执行的threejs代码，不要返回思考过程、解释或列表\n" +
 9. 确保功能完整、代码规范
 
 

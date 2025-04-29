@@ -12,6 +12,20 @@ interface ApiResponse {
   patch?: string;
   modelUrl?: string;
   modelUrls?: string[];
+  sceneHistory?: {
+    history: Array<{
+      timestamp: string;
+      prompt: string;
+      objectCount: number;
+      objects: Array<{
+        id: string;
+        type: string;
+        name: string;
+        position?: number[];
+      }>;
+    }>;
+    lastUpdateTimestamp?: string;
+  };
   // Add other fields you expect from the API
 }
 
@@ -23,6 +37,7 @@ export default function ThreeCodeEditor() {
     renderer: THREE.WebGLRenderer;
     controls?: OrbitControls;
     gltfLoader?: GLTFLoader;
+    dynamicGroup?: THREE.Group;
   } | null>(null);
 
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
@@ -67,7 +82,13 @@ export default function ThreeCodeEditor() {
   >([]);
   const [isModelLoading, setIsModelLoading] = useState(false);
 
-  const { addToHistory } = useSceneStore();
+  const {
+    addToHistory,
+    setScene,
+    setDynamicGroup,
+    addHistoryEntry,
+    serializeSceneState,
+  } = useSceneStore();
 
   useEffect(() => {
     const container = containerRef.current;
@@ -80,6 +101,10 @@ export default function ThreeCodeEditor() {
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0xf0f0f0);
+
+    const dynamicGroup = new THREE.Group();
+    dynamicGroup.name = "ai-generated-objects";
+    scene.add(dynamicGroup);
 
     const camera = new THREE.PerspectiveCamera(
       75,
@@ -111,7 +136,6 @@ export default function ThreeCodeEditor() {
     controls.screenSpacePanning = false;
     controls.maxPolarAngle = Math.PI / 2;
 
-    // Initialize GLTF loader
     const gltfLoader = new GLTFLoader();
 
     const animate = () => {
@@ -127,7 +151,17 @@ export default function ThreeCodeEditor() {
     };
     animate();
 
-    threeRef.current = { scene, camera, renderer, controls, gltfLoader };
+    threeRef.current = {
+      scene,
+      camera,
+      renderer,
+      controls,
+      gltfLoader,
+      dynamicGroup,
+    };
+
+    setScene(scene);
+    setDynamicGroup(dynamicGroup);
 
     const handleResize = () => {
       if (!threeRef.current || !container) return;
@@ -143,9 +177,8 @@ export default function ThreeCodeEditor() {
       window.removeEventListener("resize", handleResize);
       renderer.dispose();
     };
-  }, []);
+  }, [setScene, setDynamicGroup]);
 
-  // Function to load 3D model
   const loadModel = async (modelUrl: string) => {
     if (!threeRef.current || !threeRef.current.gltfLoader) {
       setError("Three.js scene not initialized");
@@ -155,7 +188,6 @@ export default function ThreeCodeEditor() {
     try {
       setIsModelLoading(true);
 
-      // Check if model already loaded
       if (loadedModels.some((model) => model.url === modelUrl)) {
         console.log("Model already loaded:", modelUrl);
         setIsModelLoading(false);
@@ -167,10 +199,8 @@ export default function ThreeCodeEditor() {
       const { scene, camera } = threeRef.current;
       const loader = threeRef.current.gltfLoader;
 
-      // Set crossOrigin to anonymous
       loader.setCrossOrigin("anonymous");
 
-      // Always use the proxy for model loading
       return new Promise<boolean>((resolve) => {
         fetch("/api/proxy-model", {
           method: "POST",
@@ -199,11 +229,28 @@ export default function ThreeCodeEditor() {
                   console.log("Model parsed successfully:", gltf);
                   const model = gltf.scene;
 
-                  // Scale and position model
-                  model.scale.set(1, 1, 1);
-                  model.position.set(0, 0, 0);
+                  // 为每个新模型计算唯一位置
+                  const existingModels = scene.children.filter(
+                    (child) => child.userData.modelId
+                  );
 
-                  // Apply materials and shadows
+                  // 默认位置
+                  let position = { x: 0, y: 0, z: 0 };
+
+                  // 如果已有模型，计算新位置
+                  if (existingModels.length > 0) {
+                    // 在半径为3的圆上放置模型
+                    const angle = Math.random() * Math.PI * 2;
+                    const radius = 3 + Math.random() * 2; // 半径3-5之间随机
+                    position = {
+                      x: Math.cos(angle) * radius,
+                      y: 0, // 保持y=0使模型在同一平面
+                      z: Math.sin(angle) * radius,
+                    };
+                  }
+
+                  model.position.set(position.x, position.y, position.z);
+
                   model.traverse((node: THREE.Object3D) => {
                     if ((node as THREE.Mesh).isMesh) {
                       console.log(
@@ -215,14 +262,12 @@ export default function ThreeCodeEditor() {
                     }
                   });
 
-                  // Add to scene
                   scene.add(model);
                   console.log(
                     "Model added to scene with position:",
                     model.position
                   );
 
-                  // Add bounding box helper for debugging
                   const box = new THREE.Box3().setFromObject(model);
                   const helper = new THREE.Box3Helper(
                     box,
@@ -231,10 +276,8 @@ export default function ThreeCodeEditor() {
                   scene.add(helper);
                   console.log("Added bounding box helper to model");
 
-                  // Auto-fit camera to model
                   fitCameraToModel(camera, model);
 
-                  // Save loaded model reference
                   const modelId = `model_${Date.now()}`;
                   model.userData.modelId = modelId;
                   setLoadedModels((prev) => [
@@ -291,7 +334,6 @@ export default function ThreeCodeEditor() {
     }
   };
 
-  // Helper function to fit camera to model
   const fitCameraToModel = (
     camera: THREE.PerspectiveCamera,
     model: THREE.Object3D
@@ -300,12 +342,10 @@ export default function ThreeCodeEditor() {
     const size = box.getSize(new THREE.Vector3());
     const center = box.getCenter(new THREE.Vector3());
 
-    // Adjust camera position to fit model
     const maxDim = Math.max(size.x, size.y, size.z);
     const fov = camera.fov * (Math.PI / 180);
     let cameraZ = Math.abs(maxDim / Math.sin(fov / 2));
 
-    // Add some padding
     cameraZ *= 1.5;
 
     const oldPosition = { ...camera.position };
@@ -320,11 +360,9 @@ export default function ThreeCodeEditor() {
     camera.updateProjectionMatrix();
   };
 
-  // Run ESLint on code changes
   useEffect(() => {
     if (!code) return;
 
-    // Run lint and send results to agent
     const lintCode = async () => {
       try {
         const response = await fetch("/api/lint", {
@@ -337,12 +375,9 @@ export default function ThreeCodeEditor() {
           const lintResult = await response.json();
           setLintErrors(lintResult.errors || []);
 
-          // Only send lint errors to agent if there are any
           if (lintResult.errors && lintResult.errors.length > 0) {
-            // Add visual indicator on the Three.js canvas
             renderLintErrorsIndicator(lintResult.errors);
           } else {
-            // Clear visual indicator if no errors
             clearLintErrorsIndicator();
           }
         }
@@ -351,7 +386,6 @@ export default function ThreeCodeEditor() {
       }
     };
 
-    // Debounce lint checking
     const debounceTimeout = setTimeout(() => {
       lintCode();
     }, 1000);
@@ -372,10 +406,8 @@ export default function ThreeCodeEditor() {
 
     const { scene, renderer } = threeRef.current;
 
-    // Clear any previous lint error indicators
     clearLintErrorsIndicator();
 
-    // Create the error indicator in the corner of the canvas
     const canvas = renderer.domElement;
     const errorIndicator = document.createElement("div");
     errorIndicator.id = "lint-error-indicator";
@@ -393,17 +425,14 @@ export default function ThreeCodeEditor() {
       errors.length === 1 ? "error" : "errors"
     }`;
 
-    // Add click handler to toggle detailed view
     errorIndicator.onclick = () => setLintOverlayVisible(!lintOverlayVisible);
 
-    // Add to canvas container
     const container = canvas.parentElement;
     if (container) {
       container.style.position = "relative";
       container.appendChild(errorIndicator);
     }
 
-    // Render the scene to show the indicator
     renderer.render(scene, threeRef.current.camera);
   };
 
@@ -419,16 +448,14 @@ export default function ThreeCodeEditor() {
     if (code === "") return;
 
     try {
-      // Check if we have a valid scene to work with
-      const { scene, camera, renderer } = threeRef.current;
-      if (!scene || !camera || !renderer) {
-        console.warn("Scene, camera or renderer not available");
+      const { scene, camera, renderer, dynamicGroup } = threeRef.current;
+      if (!scene || !camera || !renderer || !dynamicGroup) {
+        console.warn("Scene, camera, renderer or dynamicGroup not available");
         return;
       }
 
       let customControlsCreated = false;
 
-      // Clean up previous objects
       const objectsToRemove: THREE.Mesh[] = [];
       scene.children.forEach((child) => {
         if (
@@ -451,14 +478,12 @@ export default function ThreeCodeEditor() {
         }
       });
 
-      // Validate code using our enhanced validation function
       if (!validateCode(code)) {
         setError("代码不完整或包含语法错误，请检查代码");
         return;
       }
 
       try {
-        // Sanitize the code before evaluation
         const sanitizedCode = code.trim();
 
         const functionBody = `
@@ -475,7 +500,6 @@ export default function ThreeCodeEditor() {
           }
         `;
 
-        // Create a wrapper for OrbitControls to prevent direct instantiation
         const OrbitControlsWrapper = {
           create: function (cam: THREE.Camera, domElement: HTMLElement) {
             if (threeRef.current && threeRef.current.controls) {
@@ -486,7 +510,6 @@ export default function ThreeCodeEditor() {
           },
         };
 
-        // Add GLTFLoader to the THREE namespace for easier access in setup
         const ExtendedTHREE = { ...THREE } as typeof THREE & {
           GLTFLoader?: typeof GLTFLoader;
         };
@@ -494,7 +517,6 @@ export default function ThreeCodeEditor() {
           ExtendedTHREE.GLTFLoader = GLTFLoader;
         }
 
-        // Use try-catch for Function creation
         let getSetupFn;
         try {
           getSetupFn = Function(
@@ -517,7 +539,6 @@ export default function ThreeCodeEditor() {
           return;
         }
 
-        // Use try-catch for setup function execution
         let setupFn;
         try {
           setupFn = getSetupFn(
@@ -543,10 +564,9 @@ export default function ThreeCodeEditor() {
           throw new Error("setup function not found in code");
         }
 
-        // Execute the setup function
         try {
           setupFn(
-            scene,
+            dynamicGroup,
             camera,
             renderer,
             ExtendedTHREE,
@@ -585,44 +605,58 @@ export default function ThreeCodeEditor() {
   }, [code, addToHistory, error]);
 
   const captureScreenshot = async () => {
+    console.log("[Screenshot] Starting screenshot capture process...");
     if (!threeRef.current) {
-      console.warn("无法捕获截图：Three.js场景未初始化");
+      console.warn("[Screenshot] Failed: Three.js scene not initialized");
       return null;
     }
 
     const { scene, camera, renderer } = threeRef.current;
     if (!scene || !camera || !renderer) {
-      console.warn("无法捕获截图：Three.js场景组件不完整");
+      console.warn("[Screenshot] Failed: Three.js components incomplete", {
+        hasScene: !!scene,
+        hasCamera: !!camera,
+        hasRenderer: !!renderer,
+      });
       return null;
     }
 
     try {
-      // 强制渲染一次当前场景状态
+      console.log("[Screenshot] Rendering scene before capture...");
       renderer.render(scene, camera);
 
-      // 获取画布并截图
       const canvas = renderer.domElement;
       if (!canvas) {
-        console.warn("无法捕获截图：canvas元素不存在");
+        console.warn("[Screenshot] Failed: Canvas element not found");
         return null;
       }
 
-      // 直接使用canvas的toDataURL方法
+      console.log("[Screenshot] Converting canvas to base64...");
       const imageBase64 = canvas.toDataURL("image/png");
-      console.log("获取到截图数据，长度:", imageBase64.length);
+      console.log(
+        "[Screenshot] Base64 data generated, length:",
+        imageBase64.length,
+        "bytes"
+      );
 
-      // 简单验证截图是否有效
       if (
         imageBase64 === "data:," ||
         !imageBase64.startsWith("data:image/png;base64,")
       ) {
-        console.error("截图为空白或格式无效");
+        console.error("[Screenshot] Invalid base64 data format", {
+          isEmpty: imageBase64 === "data:",
+          hasCorrectPrefix: imageBase64.startsWith("data:image/png;base64,"),
+        });
         return null;
       }
 
+      console.log("[Screenshot] Successfully captured scene");
       return imageBase64;
     } catch (err) {
-      console.error("截图失败:", err);
+      console.error("[Screenshot] Capture failed with error:", err, {
+        errorType: err instanceof Error ? err.constructor.name : typeof err,
+        errorMessage: err instanceof Error ? err.message : String(err),
+      });
       setError(
         "无法捕获场景截图: " +
           (err instanceof Error ? err.message : String(err))
@@ -632,19 +666,14 @@ export default function ThreeCodeEditor() {
   };
 
   const validateCode = (codeToValidate: string) => {
-    // Check if the code contains the setup function
     const hasSetupFn = codeToValidate.includes("function setup");
 
-    // Check if braces are balanced
     const openBraces = (codeToValidate.match(/\{/g) || []).length;
     const closeBraces = (codeToValidate.match(/\}/g) || []).length;
     const balancedBraces = openBraces === closeBraces;
 
-    // Basic check for invalid tokens that could cause issues
     const hasValidSyntax = (() => {
       try {
-        // Try to parse the code using Function constructor without executing it
-        // This will throw a SyntaxError if the code contains invalid syntax
         new Function(`"use strict"; ${codeToValidate}`);
         return true;
       } catch (e) {
@@ -666,30 +695,31 @@ export default function ThreeCodeEditor() {
       setIsLoading(true);
       setError("");
 
+      console.log(
+        "[Screenshot] Initiating screenshot capture for scene analysis..."
+      );
       const imageBase64 = await captureScreenshot();
-
-      // Check if prompt might require a 3D model
-      const modelKeywords = [
-        "生成",
-        "创建",
-        "添加",
-        "模型",
-        "3d",
-        "3D",
-        "model",
-        "character",
-        "animal",
-        "人物",
-        "动物",
-        "猫",
-        "狗",
-        "车",
-      ];
-      const mightNeedModel = modelKeywords.some((keyword) =>
-        prompt.toLowerCase().includes(keyword)
+      console.log(
+        "[Screenshot] Screenshot capture completed:",
+        imageBase64 ? "Success" : "Failed"
       );
 
-      // 调用分析截图API
+      const sceneState = serializeSceneState();
+
+      // 获取场景历史数据
+      let sceneHistory = null;
+      try {
+        const historyResponse = await fetch("/api/memory-state");
+        if (historyResponse.ok) {
+          const historyData = await historyResponse.json();
+          if (historyData.success && historyData.memoryState.sceneHistory) {
+            sceneHistory = historyData.memoryState.sceneHistory;
+          }
+        }
+      } catch (historyError) {
+        console.warn("Failed to fetch scene history:", historyError);
+      }
+
       try {
         const response = await fetch("/api/agent", {
           method: "POST",
@@ -699,7 +729,8 @@ export default function ThreeCodeEditor() {
             code,
             prompt,
             screenshot: imageBase64,
-            modelRequired: mightNeedModel, // 指示可能需要3D模型
+            sceneState,
+            sceneHistory, // 将场景历史传递给 API
             lintErrors: lintErrors.length > 0 ? lintErrors : undefined,
           }),
         });
@@ -711,25 +742,31 @@ export default function ThreeCodeEditor() {
         const data: ApiResponse = await response.json();
         console.log("API response data:", data);
 
-        // Handle model URL if present
+        const modelUrls: string[] = [];
+
         if (data.modelUrl) {
           console.log("Model URL received:", data.modelUrl);
           setIsModelLoading(true);
-          // Load the model
           const modelLoaded = await loadModel(data.modelUrl);
           console.log("Model loading result:", modelLoaded);
           setIsModelLoading(false);
+
+          modelUrls.push(data.modelUrl);
         }
 
         if (data.directCode) {
           setPreviousCode(code);
-          setCode(data.directCode);
 
-          // Generate simple diff for display
+          const newCode = `${code}\n\n/* AI 新增代码 - ${new Date().toLocaleString()} */\n${
+            data.directCode
+          }`;
+          setCode(newCode);
+
+          addHistoryEntry(newCode, modelUrls);
+
           if (data.patch) {
             setDiff(data.patch);
           } else {
-            // Simple diff calculation if patch not provided
             const diffLines = data.directCode
               .split("\n")
               .filter((line, i) => {
@@ -743,9 +780,7 @@ export default function ThreeCodeEditor() {
           throw new Error(data.error);
         }
 
-        // 检查代码中是否包含模型URL
         if (data.directCode && !data.modelUrl) {
-          // 尝试从代码中提取Hyper3D URL
           const hyper3dMatches = data.directCode.match(
             /['"]https:\/\/hyperhuman-file\.deemos\.com\/[^'"]+\.glb[^'"]*['"]/g
           );
@@ -755,13 +790,18 @@ export default function ThreeCodeEditor() {
             console.log("从代码中提取到模型URL:", modelUrl);
 
             setIsModelLoading(true);
-            // 加载模型
             const modelLoaded = await loadModel(modelUrl);
             console.log(
               "Model loading result from code extraction:",
               modelLoaded
             );
             setIsModelLoading(false);
+
+            modelUrls.push(modelUrl);
+
+            if (modelLoaded) {
+              addHistoryEntry(code, modelUrls);
+            }
           }
         }
       } catch (error) {
@@ -838,7 +878,6 @@ export default function ThreeCodeEditor() {
 
       <div className="preview" ref={containerRef}></div>
 
-      {/* ESLint errors overlay */}
       {lintOverlayVisible && lintErrors.length > 0 && (
         <div className="lint-overlay">
           <div className="lint-overlay-content">
@@ -863,6 +902,14 @@ export default function ThreeCodeEditor() {
           </div>
         </div>
       )}
+
+      <style jsx>{`
+        .button-group {
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+        }
+      `}</style>
     </div>
   );
 }

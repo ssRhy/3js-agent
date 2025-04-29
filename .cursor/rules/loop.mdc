@@ -3,20 +3,37 @@ description:
 globs: 
 alwaysApply: false
 ---
-
-agent.ts 负责调用工具
-TOOLS:applyPatchTool.ts,codeGenTool.ts,diffTool.ts,lintTool.ts分别写入各自文件，不要写进agent.ts。
-generate_code和analyzeScreenshotDirectly直接使用llm，不放入agent循环。
-
-
-1.一开始：根据用户自然语言指令，generate_code生成第一版可运行的完整代码（generate_code——只在「初始阶段」调用一次）
-2.首次请求之后的每一次请求：直接使用analyzeScreenshotDirectly的llm分析图像并且给出threejs代码建议，difftool接收分析图像给出的建议，完善代码，并且生成差异代码，之后lintTool检查代码(首先使用 ESLint 检查代码：修复所有能通过规则自动修复的问题（如语法错误、格式问题）将剩余的代码和问题传递给 LLM：将 ESLint 输出的错误、警告和原始代码输入到 LLM 中，要求它根据上下文修复逻辑错误或优化结构。)然后把lintTool生成的代码用diffTool生成差异，然后applyPatchTool直接应用补丁（没有llm）。
-
+主要目的是通过AI agent:用户创建和编辑Three.js场景。项目采用Next.js框架开发，结合了三维可视化(Three.js)、代码编辑器(Monaco)和AI生成能力(LangChainjs0.3)。
 ##
-注意：
-将修改落地到现有代码，然后再进入下次 lint 校验
-，applyPatchTool 只负责应用补丁,JSON格式数据传输
-调用时机：只要有修复建议（semantic diff），就会多次调用lintTool，直至 ESLint 无错误或达到迭代上限，这样就形成一个agent调用工具集，循环优化的 Three.js 代码修复流程。
-
-
-
+核心功能和结构：
+三维场景编辑：通过Three.js实现3D场景的可视化和交互，支持模型加载、渲染和操作。
+代码编辑：集成Monaco编辑器，允许用户直接编写和修改Three.js代码，实现对场景的编程控制。
+##
+AI助手系统：
+使用LangChain 0.3版本构建Agent系统
+支持代码生成和优化(codeGenTool)
+支持3D模型生成(modelGenTool)
+支持代码修改和应用(applyPatchTool)
+##
+状态管理：
+使用Zustand管理全局状态，包括场景对象、执行历史和用户意图
+实现对象注册表和状态缓存系统
+##
+API设计：
+/api/agent：核心AI代理接口，处理用户指令，调用工具链
+/api/hyper3d：3D模型生成接口
+/api/proxy-model：模型文件代理加载接口
+/api/lint：代码检查接口
+##
+工具链：
+codeGenTool：基于用户提示生成或修复Three.js代码
+modelGenTool：基于文本提示或图像生成3D模型
+applyPatchTool：应用代码补丁，管理代码状态
+##
+交互流程：
+用户输入自然语言提示
+AI代理分析请求并选择适当工具
+生成或修改代码
+可能生成新的3D模型
+更新场景并实时渲染结果
+项目使用了Azure OpenAI服务作为后端AI能力，采用React + NextJS构建前端，通过Zustand维护状态。代码结构清晰，实现了AI和3D创作的无缝结合，特别关注错误处理和代码质量，支持复杂的Three.js场景生成和编辑。

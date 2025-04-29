@@ -3,6 +3,21 @@ import { create } from "zustand";
 import { Scene, Object3D, Mesh, Group, Light } from "three";
 import { v4 as uuidv4 } from "uuid";
 
+// 场景快照接口，用于历史记录
+export interface SceneSnapshot {
+  objectStates: Record<string, ObjectState>;
+  objectTypes: Record<string, string>;
+  createdAt: string;
+}
+
+// 历史记录条目接口
+export interface HistoryEntry {
+  code: string;
+  sceneState: SceneSnapshot;
+  timestamp: string;
+  modelUrls?: string[];
+}
+
 // 对象注册表接口
 interface ObjectRegistryEntry {
   object: Object3D;
@@ -11,7 +26,7 @@ interface ObjectRegistryEntry {
   createdAt: Date;
   lastUpdated: Date;
   isVisible: boolean;
-  metadata?: Record<string, any>; // 任意元数据
+  metadata?: Record<string, unknown>; // 任意元数据
 }
 
 // 对象状态接口
@@ -24,9 +39,11 @@ interface ObjectState {
 
 interface SceneState {
   scene: Scene | null;
+  dynamicGroup: Group | null; // 动态组，用于管理AI生成的对象
   historyCode: string[];
   selectedObject: Object3D | null;
   errors: string[]; // 添加错误跟踪数组
+  history: HistoryEntry[]; // 历史记录数组
 
   // 对象注册表 - UUID到对象的映射
   objectRegistry: Map<string, ObjectRegistryEntry>;
@@ -37,8 +54,12 @@ interface SceneState {
 
   // 场景管理
   setScene: (scene: Scene) => void;
+  setDynamicGroup: (group: Group) => void;
   addToHistory: (code: string) => void;
   selectObject: (object: Object3D | null) => void;
+
+  // 历史记录管理
+  addHistoryEntry: (code: string, modelUrls?: string[]) => void;
 
   // 错误处理方法
   addError: (error: string) => void; // 添加错误
@@ -49,7 +70,7 @@ interface SceneState {
   registerObject: (
     object: Object3D,
     type?: string,
-    metadata?: Record<string, any>
+    metadata?: Record<string, unknown>
   ) => string;
   unregisterObject: (uuid: string) => void;
   getObjectByUuid: (uuid: string) => Object3D | null;
@@ -64,24 +85,15 @@ interface SceneState {
   getObjectsByCode: (codeSnippet: string) => string[];
 
   // 场景差异管理
-  getSceneSnapshot: () => Record<string, ObjectState>;
-  applySceneSnapshot: (snapshot: Record<string, ObjectState>) => void;
+  getSceneSnapshot: () => SceneSnapshot;
+  applySceneSnapshot: (snapshot: SceneSnapshot) => void;
+  serializeSceneState: () => Record<string, unknown>[];
 
   // 场景查询功能
   findObjectsByType: (type: string) => string[];
   getAllObjects: () => Map<string, ObjectRegistryEntry>;
   getVisibleObjects: () => string[];
 }
-
-type SetState = {
-  (
-    partial:
-      | SceneState
-      | Partial<SceneState>
-      | ((state: SceneState) => SceneState | Partial<SceneState>),
-    replace?: boolean
-  ): void;
-};
 
 // 确定对象类型的辅助函数
 const determineObjectType = (object: Object3D): string => {
@@ -120,9 +132,11 @@ const extractObjectState = (object: Object3D): ObjectState => {
 
 export const useSceneStore = create<SceneState>((set, get) => ({
   scene: null,
+  dynamicGroup: null,
   historyCode: [],
   selectedObject: null,
   errors: [], // 初始化为空数组
+  history: [], // 初始化历史记录数组
 
   // 初始化对象注册表和状态映射
   objectRegistry: new Map(),
@@ -131,6 +145,7 @@ export const useSceneStore = create<SceneState>((set, get) => ({
 
   // 原有方法
   setScene: (scene: Scene) => set({ scene }),
+  setDynamicGroup: (group: Group) => set({ dynamicGroup: group }),
   addToHistory: (code: string) =>
     set((state: SceneState) => ({
       historyCode: [...state.historyCode, code],
@@ -145,11 +160,31 @@ export const useSceneStore = create<SceneState>((set, get) => ({
   setErrors: (errors: string[]) => set({ errors }),
   clearErrors: () => set({ errors: [] }),
 
+  // 简化的历史记录管理方法
+  addHistoryEntry: (code: string, modelUrls?: string[]) => {
+    const state = get();
+    const sceneSnapshot = state.getSceneSnapshot();
+
+    const newEntry: HistoryEntry = {
+      code,
+      sceneState: sceneSnapshot,
+      timestamp: new Date().toISOString(),
+      modelUrls,
+    };
+
+    // 简单地追加历史记录
+    set({
+      history: [...state.history, newEntry],
+    });
+
+    return newEntry;
+  },
+
   // 对象注册方法
   registerObject: (
     object: Object3D,
     type?: string,
-    metadata?: Record<string, any>
+    metadata?: Record<string, unknown>
   ) => {
     // 使用对象自身的UUID或生成新的
     const uuid = object.uuid || uuidv4();
@@ -268,17 +303,92 @@ export const useSceneStore = create<SceneState>((set, get) => ({
 
   // 场景差异管理
   getSceneSnapshot: () => {
-    const snapshot: Record<string, ObjectState> = {};
-    get().objectStates.forEach((state, uuid) => {
-      snapshot[uuid] = { ...state };
+    const state = get();
+    const objectStates: Record<string, ObjectState> = {};
+    const objectTypes: Record<string, string> = {};
+
+    state.objectRegistry.forEach((entry, uuid) => {
+      objectStates[uuid] = extractObjectState(entry.object);
+      objectTypes[uuid] = entry.type;
     });
-    return snapshot;
+
+    return {
+      objectStates,
+      objectTypes,
+      createdAt: new Date().toISOString(),
+    };
   },
 
-  applySceneSnapshot: (snapshot: Record<string, ObjectState>) => {
-    Object.entries(snapshot).forEach(([uuid, state]) => {
-      get().applyObjectState(uuid, state);
+  applySceneSnapshot: (snapshot: SceneSnapshot) => {
+    const state = get();
+
+    // 应用状态到所有存在的对象
+    Object.entries(snapshot.objectStates).forEach(([uuid, objState]) => {
+      const obj = state.getObjectByUuid(uuid);
+      if (obj) {
+        state.applyObjectState(uuid, objState);
+      }
     });
+  },
+
+  // 序列化场景状态，用于API调用
+  serializeSceneState: () => {
+    const state = get();
+    const dynamicGroup = state.dynamicGroup;
+
+    if (!dynamicGroup) {
+      return [];
+    }
+
+    const serializedObjects:
+      | Record<string, unknown>[]
+      | {
+          id: string;
+          name: string;
+          type: string;
+          position: number[];
+          rotation: number[];
+          scale: number[];
+          isVisible: boolean;
+          metadata: Record<string, unknown> | undefined;
+        }[] = [];
+
+    // 递归处理组中的所有对象
+    const processObject = (obj: Object3D) => {
+      const registry = state.getRegistryEntry(obj.uuid);
+
+      if (registry) {
+        const objState =
+          state.objectStates.get(obj.uuid) || extractObjectState(obj);
+
+        serializedObjects.push({
+          id: obj.uuid,
+          name: registry.name,
+          type: registry.type,
+          position: [
+            objState.position.x,
+            objState.position.y,
+            objState.position.z,
+          ],
+          rotation: [
+            objState.rotation.x,
+            objState.rotation.y,
+            objState.rotation.z,
+          ],
+          scale: [objState.scale.x, objState.scale.y, objState.scale.z],
+          isVisible: registry.isVisible,
+          metadata: registry.metadata,
+        });
+      }
+
+      // 递归处理子对象
+      obj.children.forEach((child) => processObject(child));
+    };
+
+    // 从动态组开始处理
+    dynamicGroup.children.forEach((child) => processObject(child));
+
+    return serializedObjects;
   },
 
   // 场景查询功能
@@ -293,7 +403,7 @@ export const useSceneStore = create<SceneState>((set, get) => ({
   },
 
   getAllObjects: () => {
-    return new Map(get().objectRegistry);
+    return get().objectRegistry;
   },
 
   getVisibleObjects: () => {

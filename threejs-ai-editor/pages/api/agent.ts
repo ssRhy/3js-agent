@@ -29,6 +29,18 @@ interface LintError {
   column: number;
 }
 
+// Add interface for scene state object
+interface SceneStateObject {
+  id: string;
+  name?: string;
+  type: string;
+  position?: number[];
+  rotation?: number[];
+  scale?: number[];
+  isVisible?: boolean;
+  metadata?: Record<string, unknown>;
+}
+
 // Custom callback handler for agent execution
 class AgentCallbackHandler extends BaseCallbackHandler {
   currentCodeState: string;
@@ -256,6 +268,14 @@ const agentMemory = new BufferMemory({
   outputKey: "codeStateContext",
 });
 
+// Create a separate memory instance for storing scene history
+const sceneHistoryMemory = new BufferMemory({
+  memoryKey: "scene_history",
+  inputKey: "userPrompt",
+  returnMessages: false,
+  outputKey: "sceneHistoryContext",
+});
+
 // Initialize Azure OpenAI client
 const model = new AzureChatOpenAI({
   modelName: "gpt-4.1",
@@ -350,13 +370,17 @@ function cleanCodeOutput(output: unknown): string {
  * @param historyContext Historical context to include
  * @param modelRequired Whether 3D model generation is required
  * @param modelHistory 最近生成的模型历史
+ * @param sceneState 当前场景状态
+ * @param sceneHistory 场景历史记录
  * @returns Formatted system prompt template
  */
 function createSystemPrompt(
   lintErrors?: LintError[],
   historyContext?: string,
   modelRequired?: boolean,
-  modelHistory?: { modelUrl: string; timestamp: string; prompt: string }[]
+  modelHistory?: { modelUrl: string; timestamp: string; prompt: string }[],
+  sceneState?: SceneStateObject[],
+  sceneHistory?: string
 ) {
   // Format lint errors
   let lintErrorsMessage = "";
@@ -373,9 +397,15 @@ function createSystemPrompt(
         .join("\n");
   }
 
-  const modelGenSection = modelRequired
-    ? "\n当用户需求明确表示需要生成3D模型(如人物、动物、物品等)时，调用generate_3d_model工具。模型生成后，确保在代码中正确加载并展示该模型。"
-    : "\n如果你判断实现用户需求需要复杂3D模型(如人物、动物、物品等)，调用generate_3d_model工具生成。";
+  const modelGenSection =
+    "\n# 工作流程\n" +
+    "为确保3D模型能正确渲染，请按以下顺序执行：\n" +
+    "1. 首先判断是否需要生成新的3D模型\n" +
+    "2. 如果需要，调用generate_3d_model工具生成3D模型\n" +
+    "3. 获得模型URL后，再调用generate_fix_code工具生成包含该URL的代码\n" +
+    "4. 最后使用apply_patch工具应用代码\n" +
+    "5. 重要: 为每个模型指定不同的位置，不要让模型堆叠在(0,0,0)\n" +
+    "此工作流确保生成的代码始终能正确引用已生成的模型，并且模型不会堆叠在一起。";
 
   const historyContextSection = historyContext
     ? "# 历史上下文\n" +
@@ -399,29 +429,59 @@ function createSystemPrompt(
       "\n如需复用3D模型，请直接加载上述url。";
   }
 
+  // 新增：场景状态信息
+  let sceneStateSection = "";
+  if (sceneState && sceneState.length > 0) {
+    sceneStateSection =
+      "\n# 当前场景状态\n" +
+      "场景中已有以下对象，在生成代码时考虑它们的位置和属性，避免重叠或覆盖：\n" +
+      sceneState
+        .map(
+          (obj, i) =>
+            `- 对象[${i + 1}]: 类型=${obj.type}, 名称=${
+              obj.name || "未命名"
+            }, ` +
+            `位置=(${obj.position?.join(", ") || "0,0,0"}), ` +
+            `旋转=(${obj.rotation?.join(", ") || "0,0,0"}), ` +
+            `缩放=(${obj.scale?.join(", ") || "1,1,1"})`
+        )
+        .join("\n") +
+      "\n\n请在生成新代码时考虑上述场景状态，不要移除已有对象，添加新对象时选择合适的位置。";
+  }
+
+  // 新增：场景历史信息
+  let sceneHistorySection = "";
+  if (sceneHistory && sceneHistory.length > 0) {
+    sceneHistorySection =
+      "\n# 场景历史记录\n" +
+      sceneHistory +
+      "\n\n请参考以上场景历史，理解场景的演变过程，保持场景的连续性。添加新内容时避免与历史冲突。";
+  }
+
   return SystemMessagePromptTemplate.fromTemplate(
     "你是专业的Three.js代码优化AI助手。以下是你的工作指南：\n\n" +
       "# 工具说明\n" +
       "- **generate_fix_code**：生成或修复代码\n" +
-      "- **不使用apply_patch**：应用代码更新\n" +
-      "- **generate_3d_model**：生成复杂3D模型并返回加载URL\n" +
-      "# 工作循环\n" +
-      "请遵循以下增量迭代步骤进行代码优化：\n" +
-      "1. **分析**：理解当前代码、截图分析的建议、用户需求\n" +
-      "2. **改进**：使用generate_fix_code工具和generate_3d_model工具生成优化后的完整代码\n" +
-      "3. **应用更新**：不使用apply_patch工具将改进后的代码应用到当前代码\n" +
-      "4. **实时检查**：根据ESLint反馈，修复代码质量问题，确保无语法错误\n" +
-      "5. **迭代优化**：如需要进步一步改进，返回第2步\n\n" +
-      "# 3D模型生成集成" +
+      "- **apply_patch**：应用补丁到已有代码\n" +
+      "- **generate_3d_model**：生成3D模型\n\n" +
       modelGenSection +
-      "\n记住，你拥有内存功能，能够记住之前生成的模型和代码上下文,在之前代码的基础上增加或者修改，不要重新写代码" +
-      "\n记住，模型不要重复放在同一个地方" +
-      "\n记住，场景可以保留多个模型，不要generate_3d_model生成的模型重叠在一起。" +
-      "\n\n# 重要规则\n" +
-      "- **直接返回可完整（有上下文）执行代码**：无论任何情况，最终必须只返回可执行的threejs代码，不要返回思考过程、解释或列表\n" +
-      +(lintErrorsMessage ? lintErrorsMessage + "\n\n" : "") +
+      "\n\n" +
+      lintErrorsMessage +
       historyContextSection +
-      (modelHistorySection ? modelHistorySection + "\n\n" : "")
+      modelHistorySection +
+      sceneStateSection +
+      sceneHistorySection +
+      "\n\n" +
+      "1. 分析需求，优化代码，添加新功能\n" +
+      "2. 根据需要生成或加载3D模型\n" +
+      "3. 保持setup函数格式，返回主要对象\n" +
+      "4. 优化代码可读性，确保函数命名合理\n\n" +
+      "## 注意事项\n" +
+      "- 只使用OrbitControls.create(camera, renderer.domElement)创建控制器\n" +
+      "- 返回scene对象或主要mesh\n" +
+      "- 代码必须使用标准THREE.js，任何额外import都要添加相应代码\n" +
+      "- 场景中保留已有对象，确保它们仍然可见\n" +
+      "- 避免冗余代码生成，保持代码精简高效，不要包含任何解释或描述性文本。不要使用markdown代码块标记。"
   );
 }
 
@@ -574,6 +634,110 @@ async function saveAnalysisToMemory(userPrompt: string, contentText: string) {
 }
 
 /**
+ * Save scene state to the scene history memory
+ * @param userPrompt User's prompt
+ * @param sceneState Current state of the scene
+ */
+async function saveSceneStateToMemory(
+  userPrompt: string,
+  sceneState?: SceneStateObject[]
+) {
+  if (!sceneState || sceneState.length === 0) {
+    return;
+  }
+
+  try {
+    // Get existing history
+    const memoryVars = await sceneHistoryMemory.loadMemoryVariables({});
+    const existingHistory = memoryVars.sceneHistoryContext || {};
+
+    // Get current history array or initialize it
+    const sceneHistory = existingHistory.history || [];
+
+    // Add new scene state with timestamp
+    sceneHistory.push({
+      timestamp: new Date().toISOString(),
+      prompt: userPrompt,
+      objectCount: sceneState.length,
+      objects: sceneState.map((obj) => ({
+        id: obj.id,
+        type: obj.type,
+        name: obj.name || "unnamed",
+        position: obj.position,
+      })),
+    });
+
+    // Keep only the last 5 scene states to avoid memory overflow
+    const trimmedHistory = sceneHistory.slice(-5);
+
+    // Save updated history
+    await sceneHistoryMemory.saveContext(
+      { userPrompt },
+      {
+        sceneHistoryContext: {
+          ...existingHistory,
+          history: trimmedHistory,
+          lastUpdateTimestamp: new Date().toISOString(),
+        },
+      }
+    );
+  } catch (error) {
+    console.error("Failed to save scene state to memory:", error);
+  }
+}
+
+/**
+ * Load scene history from memory
+ * @returns Formatted scene history for prompts
+ */
+async function loadSceneHistoryFromMemory(): Promise<string> {
+  try {
+    const memoryVars = await sceneHistoryMemory.loadMemoryVariables({});
+    const historyContext = memoryVars.sceneHistoryContext || {};
+
+    if (historyContext.history && historyContext.history.length > 0) {
+      const historyEntries = historyContext.history;
+
+      return historyEntries
+        .map(
+          (
+            entry: {
+              timestamp: string;
+              prompt: string;
+              objectCount: number;
+              objects: Array<{
+                id: string;
+                type: string;
+                name: string;
+                position?: number[];
+              }>;
+            },
+            index: number
+          ) =>
+            `场景历史 [${index + 1}] - ${new Date(
+              entry.timestamp
+            ).toLocaleString()}:\n` +
+            `- 用户需求: "${entry.prompt}"\n` +
+            `- 对象数量: ${entry.objectCount}\n` +
+            entry.objects
+              .map(
+                (obj) =>
+                  `  * ${obj.type}: ${obj.name} at position [${
+                    obj.position?.join(", ") || "0,0,0"
+                  }]`
+              )
+              .join("\n")
+        )
+        .join("\n\n");
+    }
+  } catch (error) {
+    console.error("Failed to load scene history from memory:", error);
+  }
+
+  return "";
+}
+
+/**
  * Run the agent optimization loop
  * @param suggestion Suggestion from screenshot analysis
  * @param currentCode Current code to optimize
@@ -582,6 +746,7 @@ async function saveAnalysisToMemory(userPrompt: string, contentText: string) {
  * @param historyContext Historical context
  * @param lintErrors ESLint errors if available
  * @param modelRequired Whether 3D model generation is required
+ * @param sceneState Current scene state for context
  * @param res Response object for direct response handling
  * @returns Optimized code or void if response handled directly
  */
@@ -593,10 +758,19 @@ export async function runAgentLoop(
   historyContext: string = "",
   lintErrors?: LintError[],
   modelRequired?: boolean,
+  sceneState?: SceneStateObject[],
   res?: NextApiResponse
 ): Promise<string | void> {
   // Load latest code state from memory if available
   const currentCodeState = await loadLatestCodeState(currentCode);
+
+  // 新增：加载场景历史
+  const sceneHistory = await loadSceneHistoryFromMemory();
+
+  // 保存当前场景状态到历史记录
+  if (sceneState && sceneState.length > 0) {
+    await saveSceneStateToMemory(userPrompt, sceneState);
+  }
 
   // 新增：读取模型历史
   let modelHistory: { modelUrl: string; timestamp: string; prompt: string }[] =
@@ -620,11 +794,13 @@ export async function runAgentLoop(
     lintErrors,
     historyContext,
     modelRequired,
-    modelHistory
+    modelHistory,
+    sceneState,
+    sceneHistory
   );
   const humanPromptTemplate = HumanMessagePromptTemplate.fromTemplate(
     [
-      "请在以下Three.js代码基础上增量优化，不要重写全部代码：",
+      "请基于以下Three.js代码生成新的功能：",
       "```js",
       "{currentCode}",
       "```",
@@ -634,6 +810,11 @@ export async function runAgentLoop(
         : "",
       "\n分析建议：\n{suggestion}",
       "\n用户需求：\n{userPrompt}",
+      sceneState && sceneState.length > 0
+        ? "\n当前场景状态：\n" +
+          JSON.stringify(sceneState, null, 2) +
+          "\n考虑场景已有对象，添加新对象时避免重叠或覆盖。"
+        : "",
     ].join("\n")
   );
 
@@ -869,11 +1050,16 @@ export default async function handler(
   // Process the request based on the action type
   const { action, code, prompt, screenshot, lintErrors, modelRequired } =
     req.body;
+  // Cast sceneState to the correct type
+  const sceneState = req.body.sceneState as SceneStateObject[] | undefined;
+  // Get scene history if provided
+  const sceneHistory = req.body.sceneHistory;
 
   console.log(
     `Agent API called with action: ${action}, prompt: ${
       typeof prompt === "string" ? prompt.substring(0, 50) + "..." : "N/A"
-    }`
+    }, sceneState: ${sceneState ? `${sceneState.length} objects` : "none"}, ` +
+      `sceneHistory: ${sceneHistory ? "provided" : "none"}`
   );
 
   try {
@@ -903,6 +1089,7 @@ export default async function handler(
           "",
           lintErrors,
           modelRequired,
+          sceneState,
           res
         );
 
