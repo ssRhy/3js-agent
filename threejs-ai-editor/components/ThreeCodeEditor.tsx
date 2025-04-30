@@ -4,6 +4,7 @@ import { useSceneStore } from "../stores/useSceneStore";
 import { Editor, OnMount } from "@monaco-editor/react";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
+import { applyPatch } from "diff";
 
 interface ApiResponse {
   error?: string;
@@ -44,24 +45,15 @@ export default function ThreeCodeEditor() {
   const [prompt, setPrompt] = useState("添加一个旋转的红色立方体");
   const [code, setCode] =
     useState(`function setup(scene, camera, renderer, THREE, OrbitControls) {
-  // Create a red cube
-  const geometry = new THREE.BoxGeometry(1, 1, 1);
-  const material = new THREE.MeshStandardMaterial({ color: 0xff0000 });
-  const cube = new THREE.Mesh(geometry, material);
-  
-  // Set auto rotation
-  cube.userData.autoRotate = true;
-  
-  // Add to scene
-  scene.add(cube);
-  
-  // Create OrbitControls properly
+  // Create OrbitControls
   const controls = OrbitControls.create(camera, renderer.domElement);
   controls.enableDamping = true;
   controls.dampingFactor = 0.25;
   
-  return cube;
+  // Return the scene so that all future objects added to it will be rendered
+  return scene;
 }`);
+  // ... existing code ...
   const [previousCode, setPreviousCode] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
@@ -234,8 +226,12 @@ export default function ThreeCodeEditor() {
                     (child) => child.userData.modelId
                   );
 
-                  // 默认位置
-                  let position = { x: 0, y: 0, z: 0 };
+                  // 计算模型的包围盒以确定其高度
+                  const boundingBox = new THREE.Box3().setFromObject(model);
+                  const modelHeight = boundingBox.max.y - boundingBox.min.y;
+
+                  // 将模型上移高度的一半，使其垂直居中
+                  let position = { x: 0, y: modelHeight / 2, z: 0 };
 
                   // 如果已有模型，计算新位置
                   if (existingModels.length > 0) {
@@ -244,7 +240,7 @@ export default function ThreeCodeEditor() {
                     const radius = 3 + Math.random() * 2; // 半径3-5之间随机
                     position = {
                       x: Math.cos(angle) * radius,
-                      y: 0, // 保持y=0使模型在同一平面
+                      y: modelHeight / 2, // 保持垂直居中
                       z: Math.sin(angle) * radius,
                     };
                   }
@@ -565,6 +561,8 @@ export default function ThreeCodeEditor() {
         }
 
         try {
+          // Note: We execute the setup function but we ignore its return value
+          // Instead, we will continue to use the existing scene/dynamicGroup which is already part of the render loop
           setupFn(
             dynamicGroup,
             camera,
@@ -573,6 +571,8 @@ export default function ThreeCodeEditor() {
             OrbitControlsWrapper,
             GLTFLoader
           );
+
+          // This ensures we render whatever was added to the scene or dynamicGroup
           renderer.render(scene, camera);
           addToHistory(code);
 
@@ -757,16 +757,37 @@ export default function ThreeCodeEditor() {
         if (data.directCode) {
           setPreviousCode(code);
 
-          const newCode = `${code}\n\n/* AI 新增代码 - ${new Date().toLocaleString()} */\n${
-            data.directCode
-          }`;
-          setCode(newCode);
-
-          addHistoryEntry(newCode, modelUrls);
+          // Update the code based on the response
+          let newCode;
 
           if (data.patch) {
-            setDiff(data.patch);
+            try {
+              // Apply the patch to the current code if available
+              // @ts-expect-error - applyPatch function accepts string but type definition requires ParsedDiff
+              const result = applyPatch(code, data.patch);
+
+              // Handle the result based on its type
+              if (typeof result === "boolean") {
+                console.error(
+                  "Failed to apply patch: Patch and code don't match"
+                );
+                newCode = data.directCode;
+              } else {
+                // Successfully applied the patch
+                newCode = result as string;
+                console.log("Applied patch to code");
+              }
+              setDiff(data.patch);
+            } catch (patchError) {
+              console.error("Failed to apply patch:", patchError);
+              // If patch application fails, use directCode directly
+              newCode = data.directCode;
+            }
           } else {
+            // If no patch is provided, use the directCode as is
+            newCode = data.directCode;
+
+            // Generate a diff for display purposes
             const diffLines = data.directCode
               .split("\n")
               .filter((line, i) => {
@@ -776,6 +797,9 @@ export default function ThreeCodeEditor() {
               .join("\n");
             setDiff(diffLines);
           }
+
+          setCode(newCode);
+          addHistoryEntry(newCode, modelUrls);
         } else if (data.error) {
           throw new Error(data.error);
         }

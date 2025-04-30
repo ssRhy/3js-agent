@@ -1,3 +1,4 @@
+// Main Agent Implementation
 import { AzureChatOpenAI } from "@langchain/openai";
 import { createOpenAIFunctionsAgent, AgentExecutor } from "langchain/agents";
 import {
@@ -7,18 +8,60 @@ import {
   SystemMessagePromptTemplate,
 } from "@langchain/core/prompts";
 import { CallbackManager } from "@langchain/core/callbacks/manager";
-import { BaseCallbackHandler } from "@langchain/core/callbacks/base";
-import { BufferMemory } from "langchain/memory";
-import { createPatch } from "diff";
-import { HumanMessage } from "@langchain/core/messages";
-import { applyPatchTool, getCachedCode } from "@/lib/tools/applyPatchTool";
+import { HumanMessage, AIMessage } from "@langchain/core/messages";
+import { NextApiRequest, NextApiResponse } from "next";
+import { RunnableWithMessageHistory } from "@langchain/core/runnables";
+import { BufferWindowMemory } from "langchain/memory";
+import {
+  BaseChatMessageHistory,
+  InMemoryChatMessageHistory,
+} from "@langchain/core/chat_history";
+
+// Import memory management functions
+import {
+  loadLatestCodeState,
+  saveAnalysisToMemory,
+  saveSceneStateToMemory,
+  loadSceneHistoryFromMemory,
+  loadModelHistoryFromMemory,
+  prepareHistoryContext,
+  createMemoryCallbackHandler,
+  getCodeDigest,
+} from "@/lib/memory/memoryManager";
+
+// Import tools
+import { applyPatchTool } from "@/lib/tools/applyPatchTool";
 import { codeGenTool } from "@/lib/tools/codeGenTool";
 import { modelGenTool } from "@/lib/tools/modelGenTool";
-import { NextApiRequest, NextApiResponse } from "next";
 
 // Store constants for better maintainability
 // Maximum characters to store in memory
 const MAX_ITERATIONS = 10; // Default max iterations for agent loop
+
+// 保存会话窗口内存的存储
+const sessionStore: Record<string, BufferWindowMemory> = {};
+
+// 保存消息历史记录的存储
+const chatHistoryStore: Record<string, InMemoryChatMessageHistory> = {};
+
+// 获取或创建会话窗口内存
+function getMessageHistory(sessionId: string): BaseChatMessageHistory {
+  if (!chatHistoryStore[sessionId]) {
+    // 创建新的聊天历史记录
+    const chatHistory = new InMemoryChatMessageHistory();
+    chatHistoryStore[sessionId] = chatHistory;
+
+    // 创建BufferWindowMemory并关联到这个聊天历史
+    sessionStore[sessionId] = new BufferWindowMemory({
+      k: 1, // 只保留上一轮交互
+      memoryKey: "chat_history", // 历史消息的键
+      returnMessages: true, // 返回消息对象而非字符串
+      chatHistory: chatHistory,
+    });
+  }
+
+  return chatHistoryStore[sessionId];
+}
 
 // Interface for ESLint errors
 interface LintError {
@@ -41,240 +84,12 @@ interface SceneStateObject {
   metadata?: Record<string, unknown>;
 }
 
-// Custom callback handler for agent execution
-class AgentCallbackHandler extends BaseCallbackHandler {
-  currentCodeState: string;
-  agentMemory: BufferMemory;
-  userPrompt: string;
-  name = "AgentCallbackHandler"; // Implement the abstract name property
-
-  constructor(initialCode: string, memory: BufferMemory, userPrompt: string) {
-    super();
-    this.currentCodeState = initialCode;
-    this.agentMemory = memory;
-    this.userPrompt = userPrompt;
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  async handleToolStart(data: any) {
-    const normalizedInput = this.prepareToolInput(data.name, data.input);
-    console.log(`Starting tool ${data.name} with input:`, normalizedInput);
-    return normalizedInput;
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  async handleToolEnd(data: any) {
-    if (data.name === "apply_patch") {
-      await this.processApplyPatchResult(data.output);
-    } else if (data.name === "generate_3d_model") {
-      await this.processModelGenResult(data.output);
-    }
-  }
-
-  async handleToolError(data: { name: string; error: Error }) {
-    console.error(`Error in tool ${data.name}:`, data.error);
-
-    if (data.name === "apply_patch") {
-      return JSON.stringify({
-        success: false,
-        message: `Apply patch failed: ${data.error.message}`,
-        suggestion:
-          'Please try using {"input":{"originalCode":"...","improvedCode":"..."}} format',
-      });
-    } else if (data.name === "generate_fix_code") {
-      return JSON.stringify({
-        status: "error",
-        message: `Code generation failed: ${data.error.message}`,
-        suggestion:
-          "Please simplify instructions or implement improvements step by step",
-      });
-    }
-    return null;
-  }
-
-  // Process apply_patch tool results and update memory
-  async processApplyPatchResult(resultStr: string) {
-    try {
-      const result = JSON.parse(resultStr);
-      if (result.success && result.updatedCode) {
-        this.currentCodeState = result.updatedCode;
-
-        // Save a summary to memory - no long strings
-        await this.agentMemory.saveContext(
-          { userPrompt: this.userPrompt },
-          {
-            codeStateContext: {
-              lastUpdateTimestamp: new Date().toISOString(),
-              codeSize: this.currentCodeState.length,
-              codeDigest: this.getCodeDigest(this.currentCodeState),
-            },
-          }
-        );
-      }
-    } catch (e) {
-      console.error("Failed to parse apply_patch result:", e);
-    }
-  }
-
-  // Process model generation results and update memory
-  async processModelGenResult(resultStr: string) {
-    try {
-      const result = JSON.parse(resultStr);
-      if (result.success && result.modelUrl) {
-        const memoryVars = await this.agentMemory.loadMemoryVariables({});
-        const ctx = memoryVars.codeStateContext || {};
-
-        // Initialize or update model history
-        const modelHistory = ctx.modelHistory || [];
-        modelHistory.push({
-          modelUrl: result.modelUrl,
-          timestamp: new Date().toISOString(),
-          prompt: this.userPrompt,
-        });
-
-        // Only keep the last 5 models in history
-        const trimmedHistory = modelHistory.slice(-5);
-
-        await this.agentMemory.saveContext(
-          { userPrompt: this.userPrompt },
-          {
-            codeStateContext: {
-              ...ctx,
-              modelHistory: trimmedHistory,
-              lastModelUrl: result.modelUrl,
-              lastModelTimestamp: new Date().toISOString(),
-            },
-          }
-        );
-      }
-    } catch (e) {
-      console.error("Failed to process model generation result:", e);
-    }
-  }
-
-  // Generate a short digest of code for reference
-  getCodeDigest(code: string) {
-    // Get first 40 chars and last 40 chars with length in the middle
-    return `${code.substring(0, 40)}...[${
-      code.length
-    } chars]...${code.substring(code.length - 40)}`;
-  }
-
-  // Prepare and normalize tool inputs
-  prepareToolInput(toolName: string, input: unknown) {
-    if (toolName !== "apply_patch") {
-      return input;
-    }
-
-    try {
-      // Handle JSON
-      const inputObj = typeof input === "string" ? JSON.parse(input) : input;
-
-      // Handle nested input field
-      if (inputObj.input && typeof inputObj.input === "string") {
-        try {
-          const innerObj = JSON.parse(inputObj.input);
-
-          // Handle originalCode/improvedCode format
-          if (innerObj.originalCode && innerObj.improvedCode) {
-            return this.handleCodeComparison(
-              innerObj.originalCode,
-              innerObj.improvedCode
-            );
-          }
-
-          return JSON.stringify(innerObj);
-          // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        } catch (_e) {
-          // Not JSON, check if it looks like a patch
-          if (
-            typeof inputObj.input === "string" &&
-            inputObj.input.includes("---") &&
-            inputObj.input.includes("+++")
-          ) {
-            return JSON.stringify({
-              patch: inputObj.input
-                .replace(/\\n/g, "\n")
-                .replace(/\\\\/g, "\\"),
-              description: "Extracted patch data",
-            });
-          }
-        }
-      }
-
-      // Direct originalCode/improvedCode format
-      if (inputObj.originalCode && inputObj.improvedCode) {
-        return this.handleCodeComparison(
-          inputObj.originalCode,
-          inputObj.improvedCode
-        );
-      }
-
-      // Already in correct format
-      if (inputObj.code || inputObj.patch) {
-        if (!inputObj.description) {
-          inputObj.description = `Update: ${new Date()
-            .toISOString()
-            .slice(0, 19)}`;
-        }
-        return JSON.stringify(inputObj);
-      }
-
-      return input;
-    } catch (e) {
-      // Trying to handle non-JSON input
-      if (typeof input === "string") {
-        // Look for patch data
-        if (input.includes("---") && input.includes("+++")) {
-          return JSON.stringify({
-            patch: input.replace(/\\n/g, "\n").replace(/\\\\/g, "\\"),
-            description: "Direct patch extraction",
-          });
-        }
-      }
-
-      console.error("Failed to parse input for apply_patch:", e);
-      return input;
-    }
-  }
-
-  // Handle code comparison and generate patch if needed
-  handleCodeComparison(originalCode: string, improvedCode: string) {
-    // First-time call or empty state - use full code
-    if (!this.currentCodeState || this.currentCodeState === "") {
-      return JSON.stringify({
-        code: improvedCode,
-        description: `Initial code based on prompt: ${this.userPrompt.substring(
-          0,
-          50
-        )}...`,
-      });
-    }
-
-    // Subsequent call - generate a patch
-    const patch = createPatch("code.js", this.currentCodeState, improvedCode);
-    return JSON.stringify({
-      patch,
-      description: `Patch for: ${this.userPrompt.substring(0, 50)}...`,
-    });
-  }
+// Define interface for model history entry
+interface ModelHistoryEntry {
+  modelUrl: string;
+  timestamp: string;
+  prompt: string;
 }
-
-// Create a memory instance for storing agent work state
-const agentMemory = new BufferMemory({
-  memoryKey: "codeState",
-  inputKey: "userPrompt",
-  returnMessages: false,
-  outputKey: "codeStateContext",
-});
-
-// Create a separate memory instance for storing scene history
-const sceneHistoryMemory = new BufferMemory({
-  memoryKey: "scene_history",
-  inputKey: "userPrompt",
-  returnMessages: false,
-  outputKey: "sceneHistoryContext",
-});
 
 // Initialize Azure OpenAI client
 const model = new AzureChatOpenAI({
@@ -285,6 +100,16 @@ const model = new AzureChatOpenAI({
   azureOpenAIApiVersion: "2024-12-01-preview",
   azureOpenAIApiInstanceName: process.env.AZURE_OPENAI_API_INSTANCE_NAME,
 });
+
+/**
+ * Helper function to generate a code digest for logging
+ * @param code Code to generate digest for
+ * @returns Formatted code digest
+ */
+function getCodeDigestForLogging(code: string): string {
+  // Get first 40 chars and last 40 chars with length in the middle
+  return getCodeDigest(code);
+}
 
 /**
  * Extract model URLs from generated code
@@ -378,7 +203,7 @@ function createSystemPrompt(
   lintErrors?: LintError[],
   historyContext?: string,
   modelRequired?: boolean,
-  modelHistory?: { modelUrl: string; timestamp: string; prompt: string }[],
+  modelHistory?: ModelHistoryEntry[],
   sceneState?: SceneStateObject[],
   sceneHistory?: string
 ) {
@@ -403,8 +228,9 @@ function createSystemPrompt(
     "1. 首先判断是否需要生成新的3D模型\n" +
     "2. 如果需要，调用generate_3d_model工具生成3D模型\n" +
     "3. 获得模型URL后，再调用generate_fix_code工具生成包含该URL的代码\n" +
-    "4. 最后使用apply_patch工具应用代码\n" +
-    "5. 重要: 为每个模型指定不同的位置，不要让模型堆叠在(0,0,0)\n" +
+    "4. 对于截图分析建议，直接调用generate_fix_code工具实现建议的功能\n" +
+    "5. 最后使用apply_patch工具应用代码\n" +
+    "6. 重要: 为每个模型指定不同的位置，不要让模型堆叠在(0,0,0)\n" +
     "此工作流确保生成的代码始终能正确引用已生成的模型，并且模型不会堆叠在一起。";
 
   const historyContextSection = historyContext
@@ -486,73 +312,6 @@ function createSystemPrompt(
 }
 
 /**
- * Analyze screenshot directly using LLM without agent loop
- * @param screenshotBase64 Base64 encoded screenshot
- * @param currentCode Current code to analyze
- * @param userPrompt User's requirements
- * @param lintErrors ESLint errors if available
- * @returns Analysis result as string
- */
-export async function analyzeScreenshotDirectly(
-  screenshotBase64: string,
-  currentCode: string,
-  userPrompt: string = "",
-  lintErrors?: LintError[]
-): Promise<string> {
-  try {
-    console.log("Analyzing screenshot directly...");
-
-    // Prepare context sections
-    const lintErrorsSection = prepareLintErrorsText(lintErrors);
-    const historyContext = await prepareHistoryContext();
-
-    const prompt = `Analyze this Three.js scene screenshot and suggest code improvements:
-    
-Current code:
-\`\`\`javascript
-${currentCode}
-\`\`\`
-
-User requirements:
-${
-  userPrompt || "No specific requirements provided"
-}${lintErrorsSection}${historyContext}
-
-Based on the screenshot (provided as base64), the ESLint errors, and the user requirements, suggest specific Three.js code changes to improve the scene.
-Focus on implementing the user requirements while also fixing any code quality issues highlighted by ESLint.
-If there are ESLint errors, make sure to address them in your solution.
-
-IMPORTANT: RESPOND ONLY WITH VALID JAVASCRIPT CODE, NO EXPLANATIONS OR COMMENTS ABOUT YOUR THOUGHT PROCESS. 
-The code must be complete and directly executable in the browser. 
-Use 'function setup(scene, camera, renderer, THREE, OrbitControls) { ... }' format. 
-DO NOT include phrases like "Here's the improved code" or numbered explanations.`;
-
-    // Create image message
-    const imageUrl = screenshotBase64.startsWith("data:")
-      ? screenshotBase64
-      : `data:image/png;base64,${screenshotBase64}`;
-
-    const message = new HumanMessage({
-      content: [
-        { type: "text", text: prompt },
-        { type: "image_url", image_url: { url: imageUrl } },
-      ],
-    });
-
-    const result = await model.invoke([message]);
-    const contentText = extractTextContent(result.content);
-
-    // Save a summary of the analysis to memory
-    await saveAnalysisToMemory(userPrompt, contentText);
-
-    return contentText;
-  } catch (error) {
-    console.error("Error analyzing screenshot:", error);
-    return "Could not analyze the screenshot. Please try again.";
-  }
-}
-
-/**
  * Extract text content from LLM response
  * @param content Response content
  * @returns Extracted text
@@ -596,145 +355,223 @@ function prepareLintErrorsText(lintErrors?: LintError[]): string {
 }
 
 /**
- * Load and prepare history context from memory
- * @returns Formatted history context
+ * Format code for detailed logging by adding line numbers and truncating if needed
+ * @param code Code to format for logging
+ * @param maxLines Maximum number of lines to show before truncating
+ * @returns Formatted code with line numbers
  */
-async function prepareHistoryContext() {
-  try {
-    const memoryVariables = await agentMemory.loadMemoryVariables({});
-    if (memoryVariables.codeState) {
-      return `\n\n历史上下文:\n${memoryVariables.codeState}\n`;
-    }
-  } catch (memoryError) {
-    console.warn("Failed to load memory:", memoryError);
+function formatCodeForLogging(code: string, maxLines: number = 50): string {
+  const lines = code.split("\n");
+
+  if (lines.length <= maxLines) {
+    // Add line numbers to all lines
+    return lines
+      .map((line, idx) => `${(idx + 1).toString().padStart(3, " ")}: ${line}`)
+      .join("\n");
   }
-  return "";
+
+  // If code is too long, show beginning and end with ellipsis
+  const halfMax = Math.floor(maxLines / 2);
+  const firstHalf = lines
+    .slice(0, halfMax)
+    .map((line, idx) => `${(idx + 1).toString().padStart(3, " ")}: ${line}`);
+
+  const secondHalf = lines
+    .slice(-halfMax)
+    .map(
+      (line, idx) =>
+        `${(lines.length - halfMax + idx + 1)
+          .toString()
+          .padStart(3, " ")}: ${line}`
+    );
+
+  return [
+    ...firstHalf,
+    `... [${lines.length - maxLines} more lines] ...`,
+    ...secondHalf,
+  ].join("\n");
 }
 
 /**
- * Save analysis results to agent memory
- * @param userPrompt User's requirements
- * @param contentText Analysis content
+ * Analyze differences between original code and LLM-suggested code
+ * @param originalCode Original code
+ * @param newCode New suggested code
+ * @returns Analysis of key changes
  */
-async function saveAnalysisToMemory(userPrompt: string, contentText: string) {
-  const summary =
-    contentText.length > 200
-      ? contentText.substring(0, 200) + "..."
-      : contentText;
+function analyzeCodeChanges(originalCode: string, newCode: string): string {
+  // Simple analysis based on line count and functions
+  const originalLines = originalCode.split("\n");
+  const newLines = newCode.split("\n");
 
-  await agentMemory.saveContext(
-    { userPrompt },
-    {
-      codeStateContext: {
-        analysisTimestamp: new Date().toISOString(),
-        analysisSummary: summary,
-      },
-    }
+  // Function to extract function names using regex
+  const extractFunctions = (code: string): string[] => {
+    const functionMatches = code.match(/function\s+(\w+)\s*\(/g) || [];
+    return functionMatches.map((match) =>
+      match.replace(/function\s+/, "").replace(/\s*\($/, "")
+    );
+  };
+
+  const originalFunctions = extractFunctions(originalCode);
+  const newFunctions = extractFunctions(newCode);
+
+  // Find added and removed functions
+  const addedFunctions = newFunctions.filter(
+    (fn) => !originalFunctions.includes(fn)
   );
+  const removedFunctions = originalFunctions.filter(
+    (fn) => !newFunctions.includes(fn)
+  );
+
+  const analysis = [
+    `Lines: ${originalLines.length} → ${newLines.length} (${
+      newLines.length - originalLines.length > 0 ? "+" : ""
+    }${newLines.length - originalLines.length})`,
+  ];
+
+  if (addedFunctions.length > 0) {
+    analysis.push(`Added functions: ${addedFunctions.join(", ")}`);
+  }
+
+  if (removedFunctions.length > 0) {
+    analysis.push(`Removed functions: ${removedFunctions.join(", ")}`);
+  }
+
+  return analysis.join("\n");
 }
 
 /**
- * Save scene state to the scene history memory
- * @param userPrompt User's prompt
- * @param sceneState Current state of the scene
+ * Analyze screenshot directly using LLM without agent loop
+ * @param screenshotBase64 Base64 encoded screenshot
+ * @param currentCode Current code to analyze
+ * @param userPrompt User's requirements
+ * @param lintErrors ESLint errors if available
+ * @returns Analysis result as string
  */
-async function saveSceneStateToMemory(
-  userPrompt: string,
-  sceneState?: SceneStateObject[]
-) {
-  if (!sceneState || sceneState.length === 0) {
-    return;
+export async function analyzeScreenshotDirectly(
+  screenshotBase64: string,
+  currentCode: string,
+  userPrompt: string = "",
+  lintErrors?: LintError[]
+): Promise<string> {
+  const analysisStartTime = new Date();
+  const requestId = `analysis_${Date.now()}`;
+
+  console.log(
+    `[${requestId}] [Screenshot Analysis] Started at ${analysisStartTime.toISOString()}`
+  );
+  console.log(
+    `[${requestId}] [Screenshot Analysis] User prompt: "${userPrompt}"`
+  );
+
+  if (lintErrors && lintErrors.length > 0) {
+    console.log(
+      `[${requestId}] [Screenshot Analysis] Processing ${lintErrors.length} lint errors`
+    );
   }
 
   try {
-    // Get existing history
-    const memoryVars = await sceneHistoryMemory.loadMemoryVariables({});
-    const existingHistory = memoryVars.sceneHistoryContext || {};
+    // Log image details
+    const imageDataSize = screenshotBase64.length;
+    console.log(
+      `[${requestId}] [Screenshot Analysis] Image data size: ${imageDataSize} bytes`
+    );
+    console.log(
+      `[${requestId}] [Screenshot Analysis] Original code size: ${currentCode.length} chars`
+    );
 
-    // Get current history array or initialize it
-    const sceneHistory = existingHistory.history || [];
+    // Prepare context sections
+    const lintErrorsSection = prepareLintErrorsText(lintErrors);
+    const historyContext = await prepareHistoryContext();
 
-    // Add new scene state with timestamp
-    sceneHistory.push({
-      timestamp: new Date().toISOString(),
-      prompt: userPrompt,
-      objectCount: sceneState.length,
-      objects: sceneState.map((obj) => ({
-        id: obj.id,
-        type: obj.type,
-        name: obj.name || "unnamed",
-        position: obj.position,
-      })),
+    console.log(
+      `[${requestId}] [Screenshot Analysis] Building prompt with history context: ${
+        historyContext ? "Available" : "Not available"
+      }`
+    );
+
+    const prompt = `Analyze this Three.js scene screenshot and suggest scene improvements:
+    
+Current code:
+\`\`\`javascript
+${currentCode}
+\`\`\`
+
+User requirements:
+${
+  userPrompt || "No specific requirements provided"
+}${lintErrorsSection}${historyContext}
+
+Provide specific scene suggestions based on the screenshot analysis. These suggestions will be sent directly to the generate_fix_code tool, so make them actionable and implementation-ready.
+`;
+
+    // Create image message
+    const imageUrl = screenshotBase64.startsWith("data:")
+      ? screenshotBase64
+      : `data:image/png;base64,${screenshotBase64}`;
+
+    console.log(
+      `[${requestId}] [Screenshot Analysis] Sending request to model at ${new Date().toISOString()}`
+    );
+
+    const message = new HumanMessage({
+      content: [
+        { type: "text", text: prompt },
+        { type: "image_url", image_url: { url: imageUrl } },
+      ],
     });
 
-    // Keep only the last 5 scene states to avoid memory overflow
-    const trimmedHistory = sceneHistory.slice(-5);
+    const result = await model.invoke([message]);
+    const contentText = extractTextContent(result.content);
 
-    // Save updated history
-    await sceneHistoryMemory.saveContext(
-      { userPrompt },
-      {
-        sceneHistoryContext: {
-          ...existingHistory,
-          history: trimmedHistory,
-          lastUpdateTimestamp: new Date().toISOString(),
-        },
-      }
+    const analysisEndTime = new Date();
+    const analysisTimeMs =
+      analysisEndTime.getTime() - analysisStartTime.getTime();
+
+    // Enhanced debugging for LLM analysis
+    console.log(
+      `[${requestId}] [Screenshot Analysis] Completed in ${analysisTimeMs}ms at ${analysisEndTime.toISOString()}`
     );
+    console.log(
+      `[${requestId}] [Screenshot Analysis] Suggestion length: ${contentText.length} chars`
+    );
+
+    // Enhanced debugging: Log code differences and analysis
+    console.log(
+      `[${requestId}] [Screenshot Analysis] Code diff analysis:\n${analyzeCodeChanges(
+        currentCode,
+        contentText
+      )}`
+    );
+
+    // Log detailed code with line numbers for better debugging
+    console.log(
+      `[${requestId}] [Screenshot Analysis] Detailed analysis result:\n${formatCodeForLogging(
+        contentText
+      )}`
+    );
+
+    // Log a summary/digest of the suggestion content
+    console.log(
+      `[${requestId}] [Screenshot Analysis] Suggestion digest: ${getCodeDigestForLogging(
+        contentText
+      )}`
+    );
+
+    // Save a summary of the analysis to memory
+    await saveAnalysisToMemory(userPrompt, contentText);
+    console.log(
+      `[${requestId}] [Screenshot Analysis] Analysis saved to memory`
+    );
+
+    return contentText;
   } catch (error) {
-    console.error("Failed to save scene state to memory:", error);
+    console.error(`[${requestId}] [Screenshot Analysis] Error:`, error);
+    console.log(
+      `[${requestId}] [Screenshot Analysis] Stack trace:`,
+      error instanceof Error ? error.stack : "No stack trace available"
+    );
+    return "Could not analyze the screenshot. Please try again.";
   }
-}
-
-/**
- * Load scene history from memory
- * @returns Formatted scene history for prompts
- */
-async function loadSceneHistoryFromMemory(): Promise<string> {
-  try {
-    const memoryVars = await sceneHistoryMemory.loadMemoryVariables({});
-    const historyContext = memoryVars.sceneHistoryContext || {};
-
-    if (historyContext.history && historyContext.history.length > 0) {
-      const historyEntries = historyContext.history;
-
-      return historyEntries
-        .map(
-          (
-            entry: {
-              timestamp: string;
-              prompt: string;
-              objectCount: number;
-              objects: Array<{
-                id: string;
-                type: string;
-                name: string;
-                position?: number[];
-              }>;
-            },
-            index: number
-          ) =>
-            `场景历史 [${index + 1}] - ${new Date(
-              entry.timestamp
-            ).toLocaleString()}:\n` +
-            `- 用户需求: "${entry.prompt}"\n` +
-            `- 对象数量: ${entry.objectCount}\n` +
-            entry.objects
-              .map(
-                (obj) =>
-                  `  * ${obj.type}: ${obj.name} at position [${
-                    obj.position?.join(", ") || "0,0,0"
-                  }]`
-              )
-              .join("\n")
-        )
-        .join("\n\n");
-    }
-  } catch (error) {
-    console.error("Failed to load scene history from memory:", error);
-  }
-
-  return "";
 }
 
 /**
@@ -761,6 +598,11 @@ export async function runAgentLoop(
   sceneState?: SceneStateObject[],
   res?: NextApiResponse
 ): Promise<string | void> {
+  // 生成会话ID（使用时间戳 + 用户提示的哈希值确保每次编辑是独特的）
+  const sessionId = `session_${Date.now()}_${userPrompt
+    .slice(0, 20)
+    .replace(/\s+/g, "_")}`;
+
   // Load latest code state from memory if available
   const currentCodeState = await loadLatestCodeState(currentCode);
 
@@ -773,18 +615,7 @@ export async function runAgentLoop(
   }
 
   // 新增：读取模型历史
-  let modelHistory: { modelUrl: string; timestamp: string; prompt: string }[] =
-    [];
-  try {
-    const memoryVars = await agentMemory.loadMemoryVariables({});
-    const ctx = memoryVars.codeStateContext || {};
-    if (ctx.modelHistory) {
-      modelHistory = ctx.modelHistory;
-    }
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  } catch (e) {
-    // ignore
-  }
+  const modelHistory = await loadModelHistoryFromMemory();
 
   // Create tool array for agent
   const loopTools = [applyPatchTool, codeGenTool, modelGenTool];
@@ -806,15 +637,21 @@ export async function runAgentLoop(
       "```",
       modelHistory && modelHistory.length > 0
         ? "\n最近生成的3D模型URL（复用）:\n" +
-          modelHistory.map((m, i) => `- [${i + 1}] ${m.modelUrl}`).join("\n")
+          modelHistory
+            .map(
+              (m: ModelHistoryEntry, i: number) => `- [${i + 1}] ${m.modelUrl}`
+            )
+            .join("\n")
         : "",
-      "\n分析建议：\n{suggestion}",
+      "\n截图分析建议：\n{suggestion}\n请使用generate_fix_code工具实现这些建议",
       "\n用户需求：\n{userPrompt}",
       sceneState && sceneState.length > 0
         ? "\n当前场景状态：\n" +
           JSON.stringify(sceneState, null, 2) +
           "\n考虑场景已有对象，添加新对象时避免重叠或覆盖。"
         : "",
+      "\n重要：必须重用所有历史模型URL，为每个模型指定不同位置坐标。",
+      "{chat_history}", // 添加对话历史占位符
     ].join("\n")
   );
 
@@ -827,9 +664,8 @@ export async function runAgentLoop(
 
   try {
     // Create custom callback handler for agent
-    const callbackHandler = new AgentCallbackHandler(
+    const callbackHandler = createMemoryCallbackHandler(
       currentCodeState,
-      agentMemory,
       userPrompt
     );
 
@@ -855,30 +691,95 @@ export async function runAgentLoop(
       callbacks: [callbackHandler],
     });
 
+    // 使用 RunnableWithMessageHistory 包装 executor
+    const executorWithMemory = new RunnableWithMessageHistory({
+      runnable: executor,
+      getMessageHistory: () => getMessageHistory(sessionId),
+      inputMessagesKey: "input", // 输入消息的键
+      historyMessagesKey: "chat_history", // 历史消息的键
+    });
+
+    // 为调用准备配置
+    const memoryConfig = {
+      configurable: {
+        sessionId: sessionId,
+      },
+    };
+
+    // 准备输入对象 - 包含当前用户请求和所有上下文
+    const inputForAgent = {
+      input: userPrompt,
+      suggestion,
+      currentCode: currentCodeState,
+      userPrompt: userPrompt || "无特定需求",
+      historyContext: historyContext || "",
+      lintErrors: lintErrors || [],
+    };
+
     try {
-      // Execute the agent
-      const result = await executor.invoke({
-        suggestion,
-        currentCode: currentCodeState,
-        userPrompt: userPrompt || "无特定需求",
-        historyContext: historyContext || "",
-        lintErrors: lintErrors || [],
-      });
+      // 添加模型历史内容到会话历史
+      if (modelHistory && modelHistory.length > 0) {
+        // 注意：调整为InMemoryChatMessageHistory的方式添加消息
+        const modelHistoryContent = `我们有以下模型URL，请在生成的代码中包含所有这些URL:\n${modelHistory
+          .map(
+            (m: ModelHistoryEntry, i: number) => `- 模型${i + 1}: ${m.modelUrl}`
+          )
+          .join("\n")}`;
+
+        // 使用InMemoryChatMessageHistory的addMessage方法添加到内存中
+        const chatHistory = chatHistoryStore[sessionId];
+        if (chatHistory) {
+          await chatHistory.addMessage(new HumanMessage(modelHistoryContent));
+          await chatHistory.addMessage(
+            new AIMessage(
+              "我将确保在生成的代码中包含所有这些模型URL，并为每个模型指定不同的位置坐标。"
+            )
+          );
+        }
+      }
+
+      // 执行带记忆功能的Agent
+      const result = await executorWithMemory.invoke(
+        inputForAgent,
+        memoryConfig
+      );
 
       // Clean and process the output
       const cleanedOutput = cleanCodeOutput(result.output);
 
-      // Update final state in memory
-      await agentMemory.saveContext(
-        { userPrompt },
-        {
-          codeStateContext: {
-            codeDigest: callbackHandler.getCodeDigest(cleanedOutput),
-            lastCompletionTimestamp: new Date().toISOString(),
-            lastRequest: userPrompt,
-          },
+      // 检查输出是否包含所有模型URL
+      if (modelHistory && modelHistory.length > 0) {
+        let hasAllModels = true;
+        const missingModels: ModelHistoryEntry[] = [];
+
+        // 检查哪些模型URL未被包含
+        for (const model of modelHistory) {
+          if (!cleanedOutput.includes(model.modelUrl)) {
+            hasAllModels = false;
+            missingModels.push(model);
+          }
         }
-      );
+
+        // 如果缺少某些模型URL，记录并尝试添加它们
+        if (!hasAllModels) {
+          console.log(
+            `输出中缺少 ${missingModels.length} 个模型URL，尝试修复...`
+          );
+
+          // 使用InMemoryChatMessageHistory的addMessage方法添加消息
+          const missingModelsContent = `输出中缺少以下模型URL，请确保包含它们:\n${missingModels
+            .map((m: ModelHistoryEntry) => `- ${m.modelUrl}`)
+            .join("\n")}`;
+
+          // 更新内存
+          const chatHistory = chatHistoryStore[sessionId];
+          if (chatHistory) {
+            await chatHistory.addMessage(
+              new HumanMessage(missingModelsContent)
+            );
+          }
+        }
+      }
 
       // Extract model URLs from code
       const modelInfo = extractModelUrls(cleanedOutput);
@@ -896,9 +797,7 @@ export async function runAgentLoop(
     } catch (agentError) {
       // Fall back to direct improvement when agent fails
       return handleAgentFailure(
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        // @ts-ignore - agentError is likely an Error but TypeScript sees it as unknown
-        agentError,
+        agentError as Error,
         suggestion,
         currentCode,
         userPrompt,
@@ -909,25 +808,6 @@ export async function runAgentLoop(
     console.error("Error running agent loop:", error);
     return currentCode; // Return original code on error
   }
-}
-
-/**
- * Load the latest code state from memory
- * @param currentCode Default code to use if memory load fails
- * @returns Latest code state
- */
-async function loadLatestCodeState(currentCode: string): Promise<string> {
-  try {
-    // Try to get the cached code directly
-    const cachedCode = getCachedCode();
-    if (cachedCode && cachedCode !== currentCode) {
-      console.log("Loading latest code state from cached code");
-      return cachedCode;
-    }
-  } catch (memoryError) {
-    console.warn("Failed to load cached code:", memoryError);
-  }
-  return currentCode;
 }
 
 /**
@@ -954,30 +834,24 @@ async function handleAgentFailure(
 
   // If no code extracted, try using codeGenTool directly
   if (!improvedCode) {
-    improvedCode = await generateCodeWithFallback(currentCode, userPrompt);
+    console.log("Directly passing screenshot analysis to codeGenTool...");
+
+    // Prepare instruction combining suggestion and user prompt
+    const instruction = `基于截图分析建议实现以下功能：
+${suggestion}
+
+用户需求：${userPrompt || "无特定需求"}
+
+当前代码：
+${currentCode}`;
+
+    improvedCode = await generateCodeWithFallback(currentCode, instruction);
   }
 
   // If still no code, return original
   if (!improvedCode) {
     improvedCode = currentCode;
   }
-
-  // Record fallback to memory
-  await agentMemory.saveContext(
-    { userPrompt },
-    {
-      codeStateContext: {
-        codeDigest:
-          improvedCode.length > 100
-            ? improvedCode.substring(0, 50) +
-              "..." +
-              improvedCode.substring(improvedCode.length - 50)
-            : improvedCode,
-        lastFallbackTimestamp: new Date().toISOString(),
-        error: "Agent execution failed, used fallback",
-      },
-    }
-  );
 
   // Handle response if response object provided
   if (res) {
@@ -1019,14 +893,25 @@ async function generateCodeWithFallback(
 ): Promise<string> {
   try {
     console.log("Using codeGenTool to generate improved code...");
-    const instruction = `改进以下Three.js代码，实现用户需求: ${
-      userPrompt || "无特定需求"
-    }\n\n${currentCode}`;
+
+    // Check if the userPrompt already contains suggestions or code
+    const instruction = userPrompt.includes("基于截图分析建议")
+      ? userPrompt // Use directly if it's already a formatted instruction
+      : `改进以下Three.js代码，实现用户需求: ${
+          userPrompt || "无特定需求"
+        }\n\n${currentCode}`;
+
+    console.log(
+      `Sending instruction to codeGenTool (${instruction.length} chars)`
+    );
 
     const codeGenResult = await codeGenTool.invoke({ instruction });
     const parsedResult = JSON.parse(codeGenResult);
 
     if (parsedResult.code) {
+      console.log(
+        `Successfully generated code (${parsedResult.code.length} chars)`
+      );
       return parsedResult.code;
     }
   } catch (codeGenError) {
@@ -1080,7 +965,58 @@ export default async function handler(
           lintErrors
         );
 
-        // Run the agent loop with user requirements
+        // Check if the response contains code guidance that should be sent directly to generate_fix_code
+        if (
+          suggestion &&
+          (suggestion.includes("```") || suggestion.includes("function setup"))
+        ) {
+          console.log(
+            "Screenshot analysis produced direct code suggestion, using direct code flow"
+          );
+
+          // Extract code from suggestion or use the suggestion directly
+          let directCode = extractCodeFromSuggestion(suggestion);
+
+          if (!directCode) {
+            // If no code block, use the codeGenTool directly
+            console.log(
+              "No code block found, sending suggestion to codeGenTool"
+            );
+            const instruction = `根据以下截图分析建议生成代码：
+${suggestion}
+
+用户需求：${prompt || "无特定需求"}
+
+当前代码：
+${code}`;
+
+            // Generate code using the tool directly
+            try {
+              const codeGenResult = await codeGenTool.invoke({ instruction });
+              const parsedResult = JSON.parse(codeGenResult);
+
+              if (parsedResult.code) {
+                directCode = parsedResult.code;
+                console.log(
+                  `Successfully generated code directly (${directCode.length} chars)`
+                );
+              }
+            } catch (codeGenError) {
+              console.error("Direct codeGenTool failed:", codeGenError);
+            }
+          }
+
+          if (directCode) {
+            const modelInfo = extractModelUrls(directCode);
+            return res.status(200).json({
+              directCode,
+              suggestion,
+              ...modelInfo,
+            });
+          }
+        }
+
+        // Default: Run the agent loop with user requirements
         return runAgentLoop(
           suggestion,
           code,

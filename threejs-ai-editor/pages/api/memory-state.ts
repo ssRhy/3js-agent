@@ -1,14 +1,7 @@
+// pages/api/memory.ts
 import { NextApiRequest, NextApiResponse } from "next";
 import { getCachedCode } from "@/lib/tools/applyPatchTool";
-import { BufferMemory } from "langchain/memory";
-
-// Create a memory instance for accessing scene history
-const sceneHistoryMemory = new BufferMemory({
-  memoryKey: "scene_history",
-  inputKey: "userPrompt",
-  returnMessages: false,
-  outputKey: "sceneHistoryContext",
-});
+import { getSceneMemory } from "@/lib/memory/memoryManager";
 
 /**
  * API endpoint to fetch the current memory state
@@ -29,7 +22,8 @@ export default async function handler(
     // Get scene history from memory
     let sceneHistory = null;
     try {
-      const memoryVars = await sceneHistoryMemory.loadMemoryVariables({});
+      const sceneMemory = getSceneMemory();
+      const memoryVars = await sceneMemory.loadMemoryVariables({});
       if (memoryVars.sceneHistoryContext) {
         sceneHistory = memoryVars.sceneHistoryContext;
       }
