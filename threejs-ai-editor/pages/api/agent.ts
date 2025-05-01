@@ -298,7 +298,7 @@ function createSystemPrompt(
       sceneStateSection +
       sceneHistorySection +
       "\n\n" +
-      "1. 分析需求，优化代码，添加新功能\n" +
+      "1. generate_3d_model和generate_fix_code工具结合使用，生成既有3d模型又有threejs代码搭建的完整场景\n" +
       "2. 根据需要生成或加载3D模型\n" +
       "3. 保持setup函数格式，返回主要对象\n" +
       "4. 优化代码可读性，确保函数命名合理\n\n" +
@@ -491,17 +491,13 @@ export async function analyzeScreenshotDirectly(
 
     const prompt = `Analyze this Three.js scene screenshot and suggest scene improvements:
     
-Current code:
-\`\`\`javascript
-${currentCode}
-\`\`\`
 
 User requirements:
 ${
   userPrompt || "No specific requirements provided"
 }${lintErrorsSection}${historyContext}
 
-Provide specific scene suggestions based on the screenshot analysis. These suggestions will be sent directly to the generate_fix_code tool, so make them actionable and implementation-ready.
+Provide brief scene suggestions based on the screenshot analysis. These suggestions will be sent directly to the generate_fix_code tool.
 `;
 
     // Create image message
