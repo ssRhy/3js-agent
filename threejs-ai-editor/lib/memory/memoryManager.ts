@@ -583,5 +583,103 @@ export const getCodeMemory = (): BufferWindowMemory => memoryManager.codeMemory;
 export const getSceneMemory = (): BufferWindowMemory =>
   memoryManager.sceneMemory;
 
+// Define ModelHistoryEntry type
+export interface ModelHistoryEntry {
+  modelUrl: string;
+  timestamp: string;
+  prompt: string;
+}
+
+// Generate a unique session ID based on user prompt and timestamp
+export const generateSessionId = (userPrompt: string): string => {
+  const timestamp = Date.now();
+  const promptHash = userPrompt.slice(0, 10).replace(/\s+/g, "_");
+  return `session_${timestamp}_${promptHash}`;
+};
+
+// Initialize session history with model history if provided
+export const initializeSessionHistory = async (
+  sessionId: string,
+  modelHistory?: ModelHistoryEntry[]
+): Promise<void> => {
+  if (!modelHistory || modelHistory.length === 0) {
+    return;
+  }
+
+  try {
+    const memory = getCodeMemory();
+    const memoryVars = await memory.loadMemoryVariables({});
+    const ctx = memoryVars.codeStateContext || {};
+
+    await memory.saveContext(
+      { userPrompt: "Session initialization" },
+      {
+        codeStateContext: {
+          ...ctx,
+          modelHistory,
+          lastUpdateTimestamp: new Date().toISOString(),
+        },
+      }
+    );
+  } catch (error) {
+    console.error(
+      `Failed to initialize session history for ${sessionId}:`,
+      error
+    );
+  }
+};
+
+// Validate that all model URLs in the output match those in history
+export const validateModelUrlsInOutput = async (
+  output: string,
+  modelHistory?: ModelHistoryEntry[],
+  sessionId?: string
+): Promise<boolean> => {
+  if (!modelHistory || modelHistory.length === 0) {
+    return true;
+  }
+
+  try {
+    const modelUrls = modelHistory.map((entry) => entry.modelUrl);
+    // Simple validation - just check if the URLs are included
+    const isValid = modelUrls.every((url) => output.includes(url));
+
+    if (!isValid) {
+      console.warn(
+        `[${sessionId || "unknown"}] Output missing expected model URLs`
+      );
+    }
+
+    return isValid;
+  } catch (error) {
+    console.error(`Error validating model URLs:`, error);
+    return false;
+  }
+};
+
+// Clear all session state for a given session ID
+export const clearSessionState = (sessionId: string): void => {
+  if (!sessionId) {
+    console.warn("Attempted to clear session state with invalid session ID");
+    return;
+  }
+
+  try {
+    // For now, we'll just reset the memory
+    // In a production implementation, this would clear specific session data
+    const codeMemory = getCodeMemory();
+    const sceneMemory = getSceneMemory();
+
+    // Clear memories
+    // Note: This is a simplified implementation
+    codeMemory.clear();
+    sceneMemory.clear();
+
+    console.log(`Session state cleared for ${sessionId}`);
+  } catch (error) {
+    console.error(`Failed to clear session state for ${sessionId}:`, error);
+  }
+};
+
 // Helper function that would be imported from elsewhere
 import { getCachedCode } from "@/lib/tools/applyPatchTool";

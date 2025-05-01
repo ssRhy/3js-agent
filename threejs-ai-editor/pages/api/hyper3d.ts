@@ -1,6 +1,6 @@
 // pages/api/hyper3d.ts
 import type { NextApiRequest, NextApiResponse } from "next";
-import { hyper3d } from "../../lib/hype3d";
+import { hyper3d } from "../../lib/hyper3d";
 
 type DownloadItem = { name: string; url: string };
 type ApiResponse = { downloadUrls?: DownloadItem[]; error?: string };
@@ -18,9 +18,9 @@ export default async function handler(
     do {
       await new Promise((r) => setTimeout(r, 3000));
       status = await hyper3d.checkStatus(jobs.subscription_key);
-    } while (status.jobs.some((j) => j.status !== "Done"));
+    } while (status.jobs.some((j: { status: string }) => j.status !== "Done"));
     const dl = await hyper3d.download(uuid, options.geometryFileFormat);
-    const downloadUrls = dl.list.map((item) => ({
+    const downloadUrls = dl.list.map((item: { name: string; url: string }) => ({
       name: item.name,
       url: item.url,
     }));

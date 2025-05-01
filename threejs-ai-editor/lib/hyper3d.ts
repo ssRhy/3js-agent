@@ -1,3 +1,6 @@
+// lib/hyper3d.ts
+// Interface for 3D model generation service
+
 // Type definitions
 export type MeshMode = "Raw" | "Quad" | "Ultra";
 export type QualityLevel = "high" | "medium" | "low" | "extra-low";
@@ -211,7 +214,7 @@ export const hyper3d = {
 
     // Process the response to handle different file formats
     return {
-      list: data.list.map((item: { name: string }) => {
+      list: data.list.map((item: { name: string; url: string }) => {
         const extension = item.name.split(".").pop();
         const format = extension?.toLowerCase() as FileFormat;
         return {

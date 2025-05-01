@@ -5,15 +5,81 @@ alwaysApply: false
 ---
 
 
-下面给出一个基于 LangChainJS0.3和Nextjs 的 “循环式（loop-based）LLM Agentic workflow” 实现思路与代码示例。Agent 能自动截图自检→多模态诊断→生成修正→前端增量更新，实现真正的 AI 驱动 threejs 的3D 场景自我优化闭环
+模块化设计：将代码按功能划分为明确的模块
+减少重复：消除提示词、代码处理和模型调用的重复逻辑
+统一接口：标准化各模块之间的接口
+单一职责原则：每个函数和模块只负责一项任务
+工具注册机制：引入工具注册表用于更灵活的工具管理
 
-前端使用的是monaco：，结合 Three.js 和 Monaco 编辑器
-后端搭建agent：
-使用AzureOpenAI和langchainjs0.3的api和函数，接口。
+集成步骤
+1. 创建新的目录结构
+首先，按照新的目录结构组织文件：
+/lib
+  /agents
+    agentFactory.ts
+    agentExecutor.ts
+  /prompts
+    systemPrompts.ts
+    humanPrompts.ts
+  /processors
+    codeProcessor.ts
+    modelExtractor.ts
+  /memory
+    memoryManager.ts (已有)
+  /tools
+    applyPatchTool.ts (已有)
+    codeGenTool.ts (已有)
+    modelGenTool.ts (已有)
+    toolRegistry.ts (新增)
+  /types
+    agentTypes.ts
+    codeTypes.ts
+    sceneTypes.ts
+    modelTypes.ts
+/pages/api
+  screenshotAnalyzer.ts
+  agentHandler.ts
+2. 类型定义迁移
+首先创建类型文件，将所有接口定义迁移到独立的类型文件中：
 
+从原始代码中提取所有接口定义
+将它们按照功能分类到各自的类型文件
+更新所有导入以使用新的类型文件
 
+3. 提示词模板迁移
+将所有提示词模板逻辑移动到专用模块：
 
+从原始代码中提取createSystemPrompt和相关提示词逻辑
+将其移动到lib/prompts/systemPrompts.ts
+从代码中提取人类消息模板并移动到lib/prompts/humanPrompts.ts
+更新所有导入以使用新的提示词模块
 
+4. 代码处理函数迁移
+将所有代码处理函数整合到专用模块：
 
+从原始代码中提取cleanCodeOutput、extractTextContent等函数
+将它们移动到lib/processors/codeProcessor.ts
+将模型URL提取逻辑移动到lib/processors/modelExtractor.ts
+更新所有导入以使用新的处理器模块
 
+5. 工具注册机制实现
+实现新的工具注册中心：
 
+创建lib/tools/toolRegistry.ts文件
+实现单例模式的ToolRegistry类，用于管理工具
+将所有现有工具注册到此注册表中
+更新代码以通过注册表获取工具，而不是直接导入
+
+6. Agent工厂和执行器实现
+拆分Agent创建和执行逻辑：
+
+将Agent创建逻辑移动到lib/agents/agentFactory.ts
+将执行循环逻辑移动到lib/agents/agentExecutor.ts
+确保执行器可以处理失败情况并提供回退机制
+更新API处理程序以使用新的Agent模块
+
+7. API端点更新
+重构API端点以使用新的模块化结构：
+创建pages/api/screenshotAnalyzer.ts专门处理截图分析
+创建pages/api/agentHandler.ts作为主要入口点
+更新请求处理逻辑以利用新的模块化结构

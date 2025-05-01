@@ -1,5 +1,11 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  api: {
+    responseLimit: "8mb", // Increase from default 4MB to 8MB
+    bodyParser: {
+      sizeLimit: "8mb",
+    },
+  },
   /* config options here */
   reactStrictMode: true,
   // 确保API路由正确处理

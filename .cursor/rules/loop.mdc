@@ -19,11 +19,7 @@ AI助手系统：
 使用Zustand管理全局状态，包括场景对象、执行历史和用户意图
 实现对象注册表和状态缓存系统
 ##
-API设计：
-/api/agent：核心AI代理接口，处理用户指令，调用工具链
-/api/hyper3d：3D模型生成接口
-/api/proxy-model：模型文件代理加载接口
-/api/lint：代码检查接口
+
 ##
 工具链：
 codeGenTool：基于用户提示生成或修复Three.js代码

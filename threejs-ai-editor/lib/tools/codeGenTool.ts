@@ -68,7 +68,7 @@ async function formatModelHistoryForPrompt(): Promise<string> {
 export const codeGenTool = new DynamicStructuredTool({
   name: "generate_fix_code",
   description:
-    "生成或修复基于用户提示的Three.js代码。提供完整的setup函数代码。接收截图分析建议并实现相应功能。",
+    "生成或修复基于用户提示的Three.js代码。提供完整的setup函数代码。",
   schema: z.object({
     instruction: z.string().describe("要实现的功能或需要修复的问题描述"),
   }),
@@ -88,16 +88,15 @@ ${modelHistorySection}
 2. 使用function setup(scene, camera, renderer, THREE, OrbitControls) { ... } 函数格式
 3. 所有交互控制器只能用OrbitControls.create(camera, renderer.domElement)方式创建
 4. 返回scene.children.find(child => child instanceof THREE.Mesh) || scene;
-5. 如果指令来自截图分析建议，请务必实现这些建议的核心功能
-6. 永远不要直接使用new OrbitControls()，必须通过OrbitControls.create(camera, renderer.domElement)创建或获取控制器
-7. 保持setup函数结构不变
-8. 记住，模型不要重复放在同一个地方，为每个新模型设置唯一的位置坐标
-9. 场景可以保留多个模型，确保generate_3d_model生成的模型不会重叠在一起
-10. 直接返回可完整（有上下文）执行代码，不要返回思考过程、解释或列表
-11. 确保功能完整、代码规范
-12. 确保代码中包含所有模型URL
+5. 永远不要直接使用new OrbitControls()，必须通过OrbitControls.create(camera, renderer.domElement)创建或获取控制器
+6. 保持setup函数结构不变
+7. 记住，模型不要重复放在同一个地方
+8. 场景可以保留多个模型，确保generate_3d_model生成的模型不会重叠在一起
+9. 返回scene对象或主要mesh
+10. 确保功能完整、代码规范
+11. 确保代码中包含所有模型URL
 
-注意：你的回答必须只包含可执行的JavaScript代码，不要包含任何解释或描述性文本。不要使用markdown代码块标记。`;
+⚠️ 注意：你的回答必须只包含可执行的threejs代码，不要包含任何解释、思考过程或描述性文本。不要使用markdown代码块标记。不要加任何前缀或后缀。直接返回可执行的setup函数代码。`;
 
       // 调用LLM生成或修改代码
       const result = await codeGenModel.invoke(prompt);

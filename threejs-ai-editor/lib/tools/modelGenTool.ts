@@ -87,6 +87,7 @@ const createModelGenTool = () => {
 
         if (!response.ok) {
           const errorText = await response.text();
+          console.error(`API error: ${response.status} - ${errorText}`);
           throw new Error(
             `API responded with status: ${response.status} - ${errorText}`
           );
@@ -97,10 +98,12 @@ const createModelGenTool = () => {
         console.log("API response:", result);
 
         if (result.error) {
+          console.error(`API returned error: ${result.error}`);
           throw new Error(result.error);
         }
 
         if (!result.downloadUrls || result.downloadUrls.length === 0) {
+          console.error("No download URLs returned from API");
           throw new Error("No model URLs returned from API");
         }
 
@@ -126,15 +129,17 @@ const createModelGenTool = () => {
       } catch (error: unknown) {
         console.error("Error generating 3D model:", error);
 
-        // 确保在出错时返回有效的JSON字符串
-        return JSON.stringify({
-          success: false,
-          error:
-            error instanceof Error ? error.message : "Unknown error occurred",
-          message: "Error generating 3D model",
-          modelUrl:
-            "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/BoxTextured/glTF/BoxTextured.gltf", // 提供一个后备模型
-        });
+        // Check if HYPER3D_API_URL and HYPER3D_API_KEY are set
+        const apiUrl = process.env.HYPER3D_API_URL;
+        const apiKey = process.env.HYPER3D_API_KEY;
+        let errorMessage =
+          error instanceof Error ? error.message : "Unknown error occurred";
+
+        if (!apiUrl || !apiKey) {
+          errorMessage =
+            "Hyper3D API configuration is missing. Please set HYPER3D_API_URL and HYPER3D_API_KEY environment variables.";
+          console.error(errorMessage);
+        }
       }
     },
   });
