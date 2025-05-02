@@ -299,10 +299,11 @@ function createSystemPrompt(
       sceneHistorySection +
       "\n\n" +
       "1. generate_3d_model和generate_fix_code工具结合使用，生成既有3d模型又有threejs代码搭建的完整场景\n" +
-      "2. 根据需要生成或加载3D模型\n" +
+      "2. 根据需要使用generate_3d_model生成3d模型\n" +
       "3. 保持setup函数格式，返回主要对象\n" +
       "4. 优化代码可读性，确保函数命名合理\n\n" +
       "## 注意事项\n" +
+      "- 你有记忆功能，在上一次代码的基础上修改代码\n" +
       "- 只使用OrbitControls.create(camera, renderer.domElement)创建控制器\n" +
       "- 返回scene对象或主要mesh\n" +
       "- 代码必须使用标准THREE.js，任何额外import都要添加相应代码\n" +

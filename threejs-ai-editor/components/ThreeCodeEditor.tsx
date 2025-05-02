@@ -119,7 +119,7 @@ export default function ThreeCodeEditor() {
     directionalLight.castShadow = true;
     scene.add(directionalLight);
 
-    const gridHelper = new THREE.GridHelper(10, 10);
+    const gridHelper = new THREE.GridHelper(50, 50);
     scene.add(gridHelper);
 
     const controls = new OrbitControls(camera, renderer.domElement);
@@ -263,14 +263,6 @@ export default function ThreeCodeEditor() {
                     "Model added to scene with position:",
                     model.position
                   );
-
-                  const box = new THREE.Box3().setFromObject(model);
-                  const helper = new THREE.Box3Helper(
-                    box,
-                    new THREE.Color(0xff0000)
-                  );
-                  scene.add(helper);
-                  console.log("Added bounding box helper to model");
 
                   fitCameraToModel(camera, model);
 

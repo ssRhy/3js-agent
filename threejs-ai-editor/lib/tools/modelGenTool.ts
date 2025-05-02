@@ -125,16 +125,6 @@ const createModelGenTool = () => {
         return JSON.stringify(successResponse);
       } catch (error: unknown) {
         console.error("Error generating 3D model:", error);
-
-        // 确保在出错时返回有效的JSON字符串
-        return JSON.stringify({
-          success: false,
-          error:
-            error instanceof Error ? error.message : "Unknown error occurred",
-          message: "Error generating 3D model",
-          modelUrl:
-            "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/BoxTextured/glTF/BoxTextured.gltf", // 提供一个后备模型
-        });
       }
     },
   });
