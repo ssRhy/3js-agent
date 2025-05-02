@@ -1,24 +1,34 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import fetch from "node-fetch";
 
+// Set a higher bodyParser limit for large models
+export const config = {
+  api: {
+    bodyParser: {
+      sizeLimit: "10mb", // Increase to handle larger models
+    },
+    responseLimit: "20mb", // Increase response size limit
+  },
+};
+
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
-  // 支持GET和POST请求
+  // Support GET and POST requests
   if (req.method !== "POST" && req.method !== "GET") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
   try {
-    // 获取模型URL (支持POST和GET两种方式)
+    // Get the model URL (support both POST and GET methods)
     let modelUrl;
 
     if (req.method === "POST") {
-      // 从POST请求体中获取URL
+      // Get URL from POST request body
       modelUrl = req.body.url;
     } else {
-      // 从GET请求查询参数中获取URL
+      // Get URL from GET query parameters
       modelUrl = req.query.url as string;
     }
 
@@ -26,37 +36,37 @@ export default async function handler(
       return res.status(400).json({ error: "Valid URL is required" });
     }
 
-    // 确保URL是绝对URL
+    // Ensure URL is absolute
     try {
-      // 判断如果modelUrl是以/api开头，说明是相对路径，需要转换为绝对路径
+      // Check if modelUrl starts with /api, meaning it's a relative path that needs conversion
       if (modelUrl.startsWith("/api/")) {
-        // 这种情况是客户端错误地传入了相对URL，需要转为绝对URL
+        // This is a client error where they passed a relative URL, try to convert to absolute
         console.warn(
           "Received relative URL, attempting to convert to absolute"
         );
 
-        // 尝试从URL中提取实际需要代理的URL
+        // Try to extract the actual URL to proxy from the URL
         const urlParam = new URLSearchParams(modelUrl.split("?")[1]).get("url");
         if (urlParam) {
           console.log(
             "Extracted actual target URL from query parameter:",
             urlParam
           );
-          // 将解码后的URL作为目标
+          // Use the decoded URL as the target
           modelUrl = decodeURIComponent(urlParam);
         } else {
           throw new Error("Cannot extract target URL from relative path");
         }
       }
 
-      // 确保URL有协议前缀
+      // Ensure URL has protocol prefix
       if (!modelUrl.startsWith("http://") && !modelUrl.startsWith("https://")) {
         throw new Error(
           `Invalid URL format - must be absolute URL with http/https protocol: ${modelUrl}`
         );
       }
 
-      // 验证URL格式
+      // Validate URL format
       new URL(modelUrl);
     } catch (urlError) {
       console.error("URL validation error:", urlError);
@@ -69,44 +79,82 @@ export default async function handler(
 
     console.log("Proxying model request for URL:", modelUrl);
 
-    // 获取模型文件
-    const modelResponse = await fetch(modelUrl, {
-      headers: {
-        // 添加必要的头部确保内容正确获取
-        Accept: "model/gltf-binary,*/*",
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-      },
-    });
+    // Fetch the model file with timeout and retry logic
+    let modelResponse;
+    let retries = 3;
 
-    if (!modelResponse.ok) {
-      console.error(
-        `Failed to fetch model: ${modelResponse.status} ${modelResponse.statusText}`
-      );
-      return res.status(modelResponse.status).json({
-        error: `Failed to fetch model: ${modelResponse.statusText}`,
+    while (retries > 0) {
+      try {
+        modelResponse = await fetch(modelUrl, {
+          headers: {
+            // Add necessary headers to ensure content is retrieved correctly
+            Accept: "model/gltf-binary,*/*",
+            "User-Agent":
+              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+          },
+          // Add timeout to prevent hanging requests
+          timeout: 30000, // 30 seconds timeout
+        });
+
+        if (modelResponse.ok) {
+          break; // Success, exit the retry loop
+        } else {
+          console.warn(
+            `Attempt ${4 - retries} failed with status: ${modelResponse.status}`
+          );
+          retries--;
+          if (retries === 0) {
+            throw new Error(
+              `Failed after 3 attempts: ${modelResponse.status} ${modelResponse.statusText}`
+            );
+          }
+          // Wait before retrying
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
+      } catch (fetchError) {
+        console.error("Fetch error:", fetchError);
+        retries--;
+        if (retries === 0) {
+          throw fetchError;
+        }
+        // Wait before retrying
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+    }
+
+    if (!modelResponse || !modelResponse.ok) {
+      const status = modelResponse ? modelResponse.status : 500;
+      const statusText = modelResponse
+        ? modelResponse.statusText
+        : "Network error";
+      console.error(`Failed to fetch model: ${status} ${statusText}`);
+      return res.status(status).json({
+        error: `Failed to fetch model: ${statusText}`,
       });
     }
 
-    // 获取二进制数据
+    // Get binary data
     const modelBuffer = await modelResponse.arrayBuffer();
+    console.log(
+      `Successfully fetched model, size: ${modelBuffer.byteLength} bytes`
+    );
 
-    // 获取Content-Type或默认为gltf-binary
+    // Get Content-Type or default to gltf-binary
     const contentType =
       modelResponse.headers.get("Content-Type") || "model/gltf-binary";
 
-    // 设置跨域头
+    // Set CORS headers
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-    // 返回数据
+    // Return data
     res.setHeader("Content-Type", contentType);
     res.setHeader("Content-Disposition", 'attachment; filename="model.glb"');
-    res.setHeader("Cache-Control", "public, max-age=31536000");
+    res.setHeader("Cache-Control", "public, max-age=31536000"); // Cache for a year
     res.status(200);
 
-    // 直接返回二进制数据
+    // Return binary data directly
     res.send(Buffer.from(modelBuffer));
   } catch (error) {
     console.error("Error proxying model:", error);

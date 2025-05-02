@@ -3,33 +3,10 @@ description:
 globs: 
 alwaysApply: false
 ---
-Memory 在 LangChain 里确实可以用来帮助记录上下文的变化，从而更高效地生成和应用 patch。
-##
-优势：
-更小的上下文：不需要每次传一整份代码，只要传补丁或者最新状态。
-更快的推理速度：LLM只处理必要的变化。
-更高的连贯性：保证 patch 一直是基于最新版本打的，避免冲突。
+BufferWindowMemory(k=1) ，都使上下文恒定大小（固定一轮的上下文），因此 Prompt 大小不会随轮次增加，也就不会带来多余的 token 花费或性能下降。
 
+如果你用普通的 BufferMemory（不裁剪），对话越多，Prompt 会越来越长，确实会越来越慢、成本也会攀升；但用「只保留一条」的策略，完全规避了这个问题。
 
-memmory功能加入agent
-如果 memory 里保存：最新一次的 （比如latestCode,或者最近的 patch 列表（差量历史） 那么，当 Agent 要继续生成 patch 时，就可以直接基于 memory 里的最新状态生成 针对性很强的增量更新。
-Agent 在运行时，会从 Memory 里取出当前状态，比如拿到 latestCode。
-然后根据用户的需求或者 LLM推理，生成新的 patch。
-应用 patch，更新 Memory 中的 latestCode，继续下一轮。
-Patch 只是操作数据，Memory 是保存数据。
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+保留「上一次生成代码」——BufferWindowMemory
+原理
+BufferWindowMemory 只保留最近 K 次交互。在这里，将 k 设为 1，即只保留“上一轮”用户输入和 AI 输出（即上次生成的代码） Agent 中同时实现「仅保留上一轮生成代码需求，保证多轮代码迭代的上下文连贯。这确保了Agent在多轮交互中能够记住之前的上下文，提供连贯的代码生成体验

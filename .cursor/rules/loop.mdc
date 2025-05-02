@@ -3,7 +3,7 @@ description:
 globs: 
 alwaysApply: false
 ---
-主要目的是通过AI agent:用户创建和编辑Three.js场景。项目采用Next.js框架开发，结合了三维可视化(Three.js)、代码编辑器(Monaco)和AI生成能力(LangChainjs0.3)。
+主要目的是通过AI agenttic workflow:用户创建和编辑Three.js场景。项目采用Next.js框架开发，结合了三维可视化(Three.js)、代码编辑器(Monaco)和AI生成能力(LangChainjs0.3)。
 ##
 核心功能和结构：
 三维场景编辑：通过Three.js实现3D场景的可视化和交互，支持模型加载、渲染和操作。
@@ -14,6 +14,7 @@ AI助手系统：
 支持代码生成和优化(codeGenTool)
 支持3D模型生成(modelGenTool)
 支持代码修改和应用(applyPatchTool)
+截图Tool
 ##
 状态管理：
 使用Zustand管理全局状态，包括场景对象、执行历史和用户意图
@@ -25,11 +26,14 @@ AI助手系统：
 codeGenTool：基于用户提示生成或修复Three.js代码
 modelGenTool：基于文本提示或图像生成3D模型
 applyPatchTool：应用代码补丁，管理代码状态
+screenshotTool:截图检查场景并且返回建议
 ##
 交互流程：
 用户输入自然语言提示
-AI代理分析请求并选择适当工具
-生成或修改代码
-可能生成新的3D模型
+AI代理分析请求并选择适当工具（直接threejs生成场景或者hyper3d生成，或者两个一起搭配使用）
+生成3d模型（只当请求modelGenTool）
+codeGenTool生成修改代码
+screenshotTool在前端截图检查场景并且返回建议给codeGenTool。如果符合标准，就可以直接渲染，不需要再改代码。注意：不是一开始就截图，而是等前端渲染完成之后，截图查看前端渲染情况，给出建议反馈
+codeGenTool接收建议然后修改
 更新场景并实时渲染结果
-项目使用了Azure OpenAI服务作为后端AI能力，采用React + NextJS构建前端，通过Zustand维护状态。代码结构清晰，实现了AI和3D创作的无缝结合，特别关注错误处理和代码质量，支持复杂的Three.js场景生成和编辑。
+项目使用了Azure OpenAI服务作为后端AI能力，采用React + NextJS构建前端，通过Zustand维护状态。代码结构清晰，实现了AI和3D创作的无缝结合，支持复杂的Three.js场景生成和编辑。

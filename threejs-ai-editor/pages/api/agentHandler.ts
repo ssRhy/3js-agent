@@ -17,9 +17,6 @@ import { analyzeScreenshotDirectly } from "../../pages/api/screenshotAnalyzer";
 import { LintError } from "../../lib/types/codeTypes";
 import { SceneStateObject } from "../../lib/types/sceneTypes";
 
-// 默认最大迭代次数
-const MAX_ITERATIONS = 10;
-
 /**
  * Agent API 的主要处理函数
  * 负责协调各种 AI 操作，包括截图分析、代码优化等
@@ -54,6 +51,14 @@ export default async function handler(
   // 获取场景历史（如果提供）
   const sceneHistory = req.body.sceneHistory;
 
+  // 获取渲染完成状态
+  const renderingComplete = req.body.renderingComplete as boolean | undefined;
+  console.log(
+    `[${requestId}] Rendering complete status: ${
+      renderingComplete === true ? "Complete" : "Not complete"
+    }`
+  );
+
   // 记录 API 调用详情
   console.log(
     `[${requestId}] Agent API called with action: ${action}, prompt: ${
@@ -76,7 +81,8 @@ export default async function handler(
           lintErrors,
           modelRequired,
           sceneState,
-          sceneHistory
+          sceneHistory,
+          renderingComplete
         );
 
       case "optimize-code":
@@ -137,7 +143,8 @@ async function handleScreenshotAnalysis(
   lintErrors?: LintError[],
   modelRequired?: boolean,
   sceneState?: SceneStateObject[],
-  sceneHistory?: string
+  sceneHistory?: string,
+  renderingComplete?: boolean
 ) {
   console.log(`[${requestId}] Processing screenshot analysis request`);
 
@@ -190,6 +197,7 @@ async function handleScreenshotAnalysis(
         sceneState,
         sceneHistory,
         modelSize: modelSizeParam,
+        renderingComplete,
       },
       res
     );
@@ -201,12 +209,25 @@ async function handleScreenshotAnalysis(
 
     // 如果整合流程失败，尝试分步执行
     try {
-      // 1. 先执行截图分析
-      const suggestion = await analyzeScreenshotDirectly(
-        screenshot,
-        code,
-        prompt
-      );
+      // 1. 先执行截图分析（只在渲染完成时）
+      let suggestion = "";
+      if (renderingComplete === true) {
+        console.log(
+          `[${requestId}] [FALLBACK] Performing screenshot analysis (rendering complete)`
+        );
+        suggestion = await analyzeScreenshotDirectly(
+          screenshot,
+          code,
+          prompt,
+          renderingComplete
+        );
+      } else {
+        console.log(
+          `[${requestId}] [FALLBACK] Skipping screenshot analysis as rendering is not complete`
+        );
+        suggestion =
+          "Generate initial Three.js code based on user requirements without screenshot analysis.";
+      }
 
       // 2. 加载上下文数据
       const currentCodeState = await loadLatestCodeState(code);
@@ -252,7 +273,6 @@ async function handleScreenshotAnalysis(
         suggestion,
         currentCodeState,
         tools,
-        MAX_ITERATIONS,
         prompt,
         historyContext,
         lintErrors,
@@ -260,7 +280,9 @@ async function handleScreenshotAnalysis(
         sceneState,
         modelHistory,
         sceneHistory || loadedSceneHistory,
-        res
+        res,
+        screenshot,
+        renderingComplete
       );
     } catch (fallbackError) {
       console.error(
@@ -350,7 +372,6 @@ async function handleCodeOptimization(
       "", // 无需截图分析，直接开始优化
       currentCodeState,
       tools,
-      MAX_ITERATIONS,
       prompt,
       historyContext,
       lintErrors,
@@ -426,7 +447,6 @@ async function handleModelGeneration(
       suggestion,
       currentCodeState,
       tools,
-      MAX_ITERATIONS,
       prompt,
       historyContext,
       undefined, // 无需 lint 错误

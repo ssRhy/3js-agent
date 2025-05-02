@@ -1,0 +1,14 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+
+The system will wait for rendering to complete before proceeding with analysis
+The system now follows the correct flow:
+User input → Code generation → Frontend rendering → Screenshot capture (after rendering complete) → Scene analysis → Code improvements (if needed)
+
+
+
+
+将截图分析工具集成到agent的执行流程中。这样agent可以在每次迭代中主动调用截图分析工具，而不是等待所有循环结束后再分析。

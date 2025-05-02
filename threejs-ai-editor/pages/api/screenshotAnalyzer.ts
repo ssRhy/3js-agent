@@ -13,21 +13,27 @@ import { codeGenTool } from "../../lib/tools/codeGenTool";
  * @param screenshotBase64 Base64 编码的截图
  * @param currentCode 当前代码
  * @param userPrompt 用户需求（可选）
+ * @param renderingComplete 渲染是否完成（可选）
  * @returns 分析结果
  */
 export async function analyzeScreenshotDirectly(
   screenshotBase64: string,
   currentCode: string,
-  userPrompt: string = ""
+  userPrompt: string = "",
+  renderingComplete: boolean = false
 ): Promise<string> {
   const requestId = `analysis_${Date.now()}`;
+  console.log(
+    `[${requestId}] [Screenshot Analysis] Starting analysis process, rendering complete: ${renderingComplete}`
+  );
 
-  console.log(
-    `[${requestId}] [Screenshot Analysis] Started at ${new Date().toISOString()}`
-  );
-  console.log(
-    `[${requestId}] [Screenshot Analysis] User prompt: "${userPrompt}"`
-  );
+  // If rendering is not complete, return a default message
+  if (!renderingComplete) {
+    console.log(
+      `[${requestId}] [Screenshot Analysis] Skipping analysis as rendering is not complete`
+    );
+    return "Rendering is not complete yet. Generate initial code based on user requirements without screenshot analysis.";
+  }
 
   try {
     const imageDataSize = screenshotBase64.length;

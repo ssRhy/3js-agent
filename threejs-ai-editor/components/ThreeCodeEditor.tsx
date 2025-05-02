@@ -39,6 +39,8 @@ export default function ThreeCodeEditor() {
     controls?: OrbitControls;
     gltfLoader?: GLTFLoader;
     dynamicGroup?: THREE.Group;
+    animationId: number | null;
+    objects: Record<string, THREE.Object3D>;
   } | null>(null);
 
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
@@ -85,6 +87,9 @@ export default function ThreeCodeEditor() {
     addHistoryEntry,
     serializeSceneState,
   } = useSceneStore();
+
+  // Add rendering complete flag
+  const renderingCompleteRef = useRef<boolean>(false);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -141,15 +146,30 @@ export default function ThreeCodeEditor() {
     const gltfLoader = new GLTFLoader();
 
     const animate = () => {
-      requestAnimationFrame(animate);
+      if (!threeRef.current) return;
+
+      const { scene, camera, renderer, controls } = threeRef.current;
+      if (!scene || !camera || !renderer || !controls) return;
+
+      threeRef.current.animationId = requestAnimationFrame(animate);
+
+      // Update controls
       controls.update();
-      scene.children.forEach((child) => {
-        if (child.userData.autoRotate) {
-          child.rotation.x += 0.01;
-          child.rotation.y += 0.01;
-        }
-      });
+
+      // Render the scene
       renderer.render(scene, camera);
+
+      // Mark rendering as complete after the first few frames
+      // This ensures all assets are loaded and visible
+      if (!renderingCompleteRef.current) {
+        // Set a small timeout to ensure all models and textures are loaded
+        setTimeout(() => {
+          renderingCompleteRef.current = true;
+          console.log(
+            "[Rendering] Scene rendering completed and ready for screenshot"
+          );
+        }, 1000); // Wait 1 second to ensure everything is loaded
+      }
     };
     animate();
 
@@ -160,6 +180,8 @@ export default function ThreeCodeEditor() {
       controls,
       gltfLoader,
       dynamicGroup,
+      animationId: null,
+      objects: {},
     };
 
     setScene(scene);
@@ -779,6 +801,7 @@ export default function ThreeCodeEditor() {
     }
   }, [code, addToHistory, error]);
 
+  // Update the captureScreenshot function to wait for rendering completion
   const captureScreenshot = async () => {
     console.log("[Screenshot] Starting screenshot capture process...");
     if (!threeRef.current) {
@@ -796,8 +819,86 @@ export default function ThreeCodeEditor() {
       return null;
     }
 
+    // Wait for rendering to complete if not already done
+    if (!renderingCompleteRef.current) {
+      console.log("[Screenshot] Waiting for rendering to complete...");
+      return new Promise<string | null>((resolve) => {
+        // Check rendering status every 100ms
+        const checkInterval = setInterval(() => {
+          if (renderingCompleteRef.current) {
+            clearInterval(checkInterval);
+            console.log(
+              "[Screenshot] Rendering complete, capturing screenshot now"
+            );
+
+            try {
+              // Force a final render to ensure latest state
+              renderer.render(scene, camera);
+
+              const canvas = renderer.domElement;
+              if (!canvas) {
+                console.warn("[Screenshot] Failed: Canvas element not found");
+                resolve(null);
+                return;
+              }
+
+              const imageBase64 = canvas.toDataURL("image/png");
+              console.log(
+                "[Screenshot] Base64 data generated after rendering complete, length:",
+                imageBase64.length,
+                "bytes"
+              );
+
+              if (
+                imageBase64 === "data:," ||
+                !imageBase64.startsWith("data:image/png;base64,")
+              ) {
+                console.error("[Screenshot] Invalid base64 data format", {
+                  isEmpty: imageBase64 === "data:",
+                  hasCorrectPrefix: imageBase64.startsWith(
+                    "data:image/png;base64,"
+                  ),
+                });
+                resolve(null);
+                return;
+              }
+
+              console.log(
+                "[Screenshot] Successfully captured scene after rendering completed"
+              );
+              resolve(imageBase64);
+            } catch (err) {
+              console.error("[Screenshot] Capture failed with error:", err);
+              resolve(null);
+            }
+          }
+        }, 100);
+
+        // Set a timeout to prevent indefinite waiting
+        setTimeout(() => {
+          clearInterval(checkInterval);
+          console.warn(
+            "[Screenshot] Rendering completion timeout, capturing anyway"
+          );
+
+          try {
+            renderer.render(scene, camera);
+            const canvas = renderer.domElement;
+            const imageBase64 = canvas ? canvas.toDataURL("image/png") : null;
+            resolve(imageBase64);
+          } catch (err) {
+            console.error("[Screenshot] Timeout capture failed:", err);
+            resolve(null);
+          }
+        }, 5000); // 5 second timeout
+      });
+    }
+
     try {
-      console.log("[Screenshot] Rendering scene before capture...");
+      console.log(
+        "[Screenshot] Rendering already complete, capturing immediately"
+      );
+      // Force a final render to ensure latest state
       renderer.render(scene, camera);
 
       const canvas = renderer.domElement;
@@ -840,6 +941,62 @@ export default function ThreeCodeEditor() {
     }
   };
 
+  // Add a function to safely apply code to the scene before screenshot
+  const applySafelyToScene = async (codeToApply: string): Promise<boolean> => {
+    try {
+      console.log("[Rendering] Applying code to scene before screenshot");
+      if (!validateCode(codeToApply)) {
+        console.warn("[Rendering] Invalid code, not applying to scene");
+        return false;
+      }
+
+      // Reset rendering complete flag
+      renderingCompleteRef.current = false;
+
+      // Check if scene is initialized
+      if (!threeRef.current) {
+        console.warn("[Rendering] Three.js scene not initialized");
+        return false;
+      }
+
+      // Clear previous errors
+      setError("");
+
+      // Apply the code to the scene
+      const { scene, camera, controls, renderer } = threeRef.current;
+      if (!scene || !camera || !controls || !renderer) {
+        console.warn("[Rendering] Scene components not available");
+        return false;
+      }
+
+      // Execute the code with scene objects
+      try {
+        // Extract and execute setup function
+        const setupMatch = codeToApply.match(
+          /function\s+setup\s*\([^)]*\)\s*{([\s\S]*?)}/
+        );
+        if (!setupMatch || !setupMatch[1]) {
+          console.warn("[Rendering] Could not find setup function");
+          return false;
+        }
+
+        // Force render a few frames to ensure everything loads
+        for (let i = 0; i < 5; i++) {
+          renderer.render(scene, camera);
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+
+        return true;
+      } catch (execError) {
+        console.error("[Rendering] Error executing code:", execError);
+        return false;
+      }
+    } catch (error) {
+      console.error("[Rendering] Error applying code to scene:", error);
+      return false;
+    }
+  };
+
   const validateCode = (codeToValidate: string) => {
     const hasSetupFn = codeToValidate.includes("function setup");
 
@@ -873,6 +1030,12 @@ export default function ThreeCodeEditor() {
       console.log(
         "[Screenshot] Initiating screenshot capture for scene analysis..."
       );
+      // Make sure renderingCompleteRef.current is false before capturing
+      // so that captureScreenshot will wait for rendering to complete
+      renderingCompleteRef.current = false;
+      // Apply the current code to ensure we're capturing the right scene
+      await applySafelyToScene(code);
+      // Now capture the screenshot after rendering is complete
       const imageBase64 = await captureScreenshot();
       console.log(
         "[Screenshot] Screenshot capture completed:",
@@ -921,6 +1084,7 @@ export default function ThreeCodeEditor() {
             sceneHistory, // 将场景历史传递给 API
             lintErrors: lintErrors.length > 0 ? lintErrors : undefined,
             modelSize, // 传递模型大小参数给API
+            renderingComplete: renderingCompleteRef.current, // 传递渲染完成状态
           }),
         });
 
@@ -1037,6 +1201,80 @@ export default function ThreeCodeEditor() {
   const handleEditorDidMount: OnMount = (editor) => {
     editorRef.current = editor;
   };
+
+  // Reset rendering complete flag when code changes
+  useEffect(() => {
+    if (code) {
+      renderingCompleteRef.current = false;
+      console.log(
+        "[Rendering] Code changed, resetting rendering complete flag"
+      );
+    }
+  }, [code]);
+
+  // During initialization, override the GLTFLoader's load method to use the proxy
+  useEffect(() => {
+    if (threeRef.current && threeRef.current.gltfLoader) {
+      const originalLoad = threeRef.current.gltfLoader.load;
+
+      // Override the load method to use our proxy
+      threeRef.current.gltfLoader.load = function (
+        url,
+        onLoad,
+        onProgress,
+        onError
+      ) {
+        console.log("Intercepting GLTFLoader.load for URL:", url);
+
+        // Check if this is an external URL that needs proxying
+        if (url.startsWith("http") && !url.includes("/api/proxy-model")) {
+          console.log("Using proxy for external URL:", url);
+
+          // Use the proxy endpoint
+          fetch("/api/proxy-model", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ url }),
+          })
+            .then((response) => {
+              if (!response.ok) {
+                throw new Error(
+                  `Proxy returned HTTP error! status: ${response.status}`
+                );
+              }
+              return response.arrayBuffer();
+            })
+            .then((buffer) => {
+              console.log(
+                "Successfully fetched model via proxy, size:",
+                buffer.byteLength
+              );
+              // Parse the model from the buffer
+              threeRef.current?.gltfLoader?.parse(
+                buffer,
+                "",
+                (gltf) => onLoad(gltf),
+                (error) => {
+                  console.error("Error parsing model:", error);
+                  if (onError) onError(error);
+                }
+              );
+            })
+            .catch((error) => {
+              console.error("Error fetching model via proxy:", error);
+              if (onError) onError(error);
+            });
+
+          return null; // The real loading happens asynchronously
+        } else {
+          // For local URLs or those already using the proxy, use the original method
+          return originalLoad.call(this, url, onLoad, onProgress, onError);
+        }
+      };
+    }
+  }, []);
 
   return (
     <div className="editor-container">

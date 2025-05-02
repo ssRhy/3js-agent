@@ -87,11 +87,11 @@ ${modelHistorySection}
 1. 代码必须是可直接执行的JavaScript代码，使用Three.js库
 2. 使用function setup(scene, camera, renderer, THREE, OrbitControls) { ... } 函数格式
 3. 所有交互控制器只能用OrbitControls.create(camera, renderer.domElement)方式创建
-4. 返回scene.children.find(child => child instanceof THREE.Mesh) || scene;
+4. 最后一行：return scene.
 5. 永远不要直接使用new OrbitControls()，必须通过OrbitControls.create(camera, renderer.domElement)创建或获取控制器
 6. 保持setup函数结构不变
 7. 记住，模型不要重复放在同一个地方
-8. 场景可以保留多个模型，确保generate_3d_model生成的模型不会重叠在一起
+8. 场景可以保留多个模型，确保generate_3d_model生成的模型不会重叠在一起，根据模型实际包围盒大小，自动计算合适的缩放因子，参考周围物体
 9. 返回scene对象或主要mesh
 10. 确保功能完整、代码规范
 

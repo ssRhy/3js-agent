@@ -16,24 +16,22 @@ export function createSystemPrompt(
 ) {
   // 格式化代码问题
   let lintErrorsMessage = "";
-  if (lintErrors && lintErrors.length > 0) {
+  if (lintErrors && Array.isArray(lintErrors) && lintErrors.length > 0) {
     lintErrorsMessage =
       "# 当前代码存在的问题\n" +
       lintErrors
-        .map(
-          (err: LintError) =>
-            `- 行 ${err.line}:${err.column} - ${err.message} (${
-              err.ruleId || "未知规则"
-            })`
-        )
+        .map((err: LintError) => {
+          const ruleId = err.ruleId || "未知规则";
+          return `- 行 ${err.line}:${err.column} - ${err.message} (${ruleId})`;
+        })
         .join("\n");
   }
 
   const modelGenSection =
     "\n# 工作流程\n" +
     "为确保3D模型能正确渲染，请按以下顺序执行：\n" +
-    "1. 首先判断是否需要生成新的3D模型，复杂模型比如（人，动物，建筑），请直接生成3D模型\n" +
-    "此工作流确保生成的代码始终能正确引用已生成的模型，并且模型不会堆叠在一起。";
+    "1. 首先判断是否需要生成新的3D模型，复杂模型（如人物、动物、建筑）请直接生成3D模型.环境场景一般不需要生成3D模型\n" +
+    "此工作流确保生成的代码能正确引用已生成的模型，并避免模型堆叠。";
 
   const historyContextSection = historyContext
     ? "# 历史上下文\n" +
@@ -43,38 +41,41 @@ export function createSystemPrompt(
 
   // 最近模型url
   let modelHistorySection = "";
-  if (modelHistory && modelHistory.length > 0) {
+  if (modelHistory && Array.isArray(modelHistory) && modelHistory.length > 0) {
     modelHistorySection =
       "\n# 最近生成的3D模型\n" +
       modelHistory
-        .map(
-          (m, i) =>
-            `- [${i + 1}] ${m.timestamp}: ${
-              m.modelUrl
-            }（需求: ${m.prompt?.slice(0, 20)}...）`
-        )
+        .map((m, i) => {
+          const promptPreview = m.prompt?.slice(0, 20) || "";
+          return `- [${i + 1}] ${m.timestamp}: ${
+            m.modelUrl
+          }（需求: ${promptPreview}...）`;
+        })
         .join("\n") +
       "\n如需复用3D模型，请直接加载上述url。";
   }
 
   // 场景状态信息
   let sceneStateSection = "";
-  if (sceneState && sceneState.length > 0) {
+  if (sceneState && Array.isArray(sceneState) && sceneState.length > 0) {
     sceneStateSection =
       "\n# 当前场景状态\n" +
-      "场景中已有以下对象，在生成代码时考虑它们的位置和属性，避免重叠或覆盖：\n" +
+      "场景中已有以下对象，生成代码时考虑它们的位置和属性，避免重叠或覆盖：\n" +
       sceneState
-        .map(
-          (obj, i) =>
-            `- 对象[${i + 1}]: 类型=${obj.type}, 名称=${
-              obj.name || "未命名"
-            }, ` +
-            `位置=(${obj.position?.join(", ") || "0,0,0"}), ` +
-            `旋转=(${obj.rotation?.join(", ") || "0,0,0"}), ` +
-            `缩放=(${obj.scale?.join(", ") || "1,1,1"})`
-        )
+        .map((obj, i) => {
+          const objName = obj.name || "未命名";
+          const position = obj.position?.join(", ") || "0,0,0";
+          const rotation = obj.rotation?.join(", ") || "0,0,0";
+          const scale = obj.scale?.join(", ") || "1,1,1";
+          return (
+            `- 对象[${i + 1}]: 类型=${obj.type}, 名称=${objName}, ` +
+            `位置=(${position}), ` +
+            `旋转=(${rotation}), ` +
+            `缩放=(${scale})`
+          );
+        })
         .join("\n") +
-      "\n\n请在生成新代码时考虑上述场景状态，不要移除已有对象，添加新对象时选择合适的位置。";
+      "\n\n添加新对象时请选择合适的位置，不要移除已有对象。";
   }
 
   // 场景历史信息
@@ -83,37 +84,46 @@ export function createSystemPrompt(
     sceneHistorySection =
       "\n# 场景历史记录\n" +
       sceneHistory +
-      "\n\n请参考以上场景历史，理解场景的演变过程，保持场景的连续性。添加新内容时避免与历史冲突。";
+      "\n\n请参考场景历史，理解演变过程，保持连续性，避免与历史冲突。";
   }
 
-  return SystemMessagePromptTemplate.fromTemplate(
-    "你是专业的Three.js代码优化AI助手。以下是你的工作指南：\n\n" +
-      "# 工具说明\n" +
-      "- **generate_fix_code**：生成或修复代码\n" +
-      "- **apply_patch**：应用补丁到已有代码\n" +
-      "- **generate_3d_model**：生成3D模型\n\n" +
-      "# 场景搭建\n" +
-      "- **混合场景搭建：generate_3d_model生成的3d模型和generate_fix_code生成的threejs场景一起混合使用\n" +
-      "请根据url模型的实际包围盒大小，自动计算并应用一个缩放因子（参考周围事物，选择合适3d模型缩放），并且将模型随意放置在不受 gridHelper 约束的任意区域\n" +
-      "同时不要随便找在线的url，n" +
-      "需要使用generate-3d-model工具时，先获取3d模型url，然后再把获取的3d模型传给generate_fix_code工具生成场景\n" +
-      "# 工作流程\n" +
-      "1.截图分析建议\n" +
-      "2. 判断是需要调用generate_3d_model工具生成3D模型，还是直接调用generate_fix_code工具生成threejs场景代码\n" +
-      "2. 调用generate_fix_code工具时，要结合建议生成代码\n" +
-      "3. 不需要再次分析或思考，立即执行工具调用\n" +
-      "4. generate_fix_code工具调用后，然后使用apply_patch应用变更\n\n" +
-      "# 输出格式\n" +
-      "1. 必须仅返回可执行的three.js代码\n" +
-      "2. 不要包含任何思考过程、分析或解释性文本\n" +
-      "3. 不要包含markdown代码块标记\n" +
-      "4. 返回值必须是一个可直接执行的setup函数\n\n" +
-      modelGenSection +
-      "\n\n" +
-      lintErrorsMessage +
-      historyContextSection +
-      modelHistorySection +
-      sceneStateSection +
-      sceneHistorySection
-  );
+  // 使用双大括号转义LangChain模板中的大括号
+  const templateContent =
+    "你是 AgenticThreeJSworkflow，一位具备自主决策与工具调用能力的 Three.js 场景构建与优化专家。\n\n" +
+    "# 工具说明\n" +
+    "- **generate_3d_model(params)** → { modelUrl, metadata }\n" +
+    "- **generate_fix_code(params)** → { code }\n" +
+    "- **apply_patch({ originalCode, patch })** → { updatedCode }\n" +
+    "- **analyze_screenshot({ image })** → { issues, suggestions }\n\n" +
+    "# 场景搭建原则\n" +
+    "1. 根据实际需求选择是否需要生成3d模型。如果需要的话混合使用 generate_3d_model 与 generate_fix_code，先生成模型再构建场景。\n" +
+    "2. 自动计算模型包围盒，参考周围物体确定缩放与位置，不受 gridHelper 约束。\n" +
+    "3. 若有 screenshot 输入，优先调用 analyze_screenshot，结合需求与截图建议改进代码。\n\n" +
+    "# Agentic 工作流程\n" +
+    "1. **决策**：解析需求与当前状态，选择最合适的工具。\n" +
+    "2. **调用**：按以下 JSON 格式发起工具调用：\n" +
+    "   ```json\n" +
+    '   { "tool": "TOOL_NAME", "params": { /* 参数 */ } }\n' +
+    "   ```\n" +
+    "3. **评估**：基于工具返回或 analyze_screenshot 结果，自主判断是否满足需求。\n" +
+    "4. **迭代**：如未满足，调整参数或切换工具，重复调用与评估。\n" +
+    "5. **终结**：满足需求后，仅输出最终可执行的 setup() 函数代码。\n\n" +
+    "# 输出要求\n" +
+    "- 只返回纯粹的 Three.js setup() 函数源码。\n" +
+    "- 不包含任何思考过程、分析文字或 Markdown 标记。\n" +
+    modelGenSection +
+    "\n\n" +
+    lintErrorsMessage +
+    historyContextSection +
+    modelHistorySection +
+    sceneStateSection +
+    sceneHistorySection;
+
+  // 使用正则表达式替换单个大括号为双大括号，但不影响已有的变量占位符
+  // 这里的关键问题是没有实际的变量占位符，所以不需要考虑保留它们
+  const safeTemplateContent = templateContent
+    .replace(/\{(?!\{)/g, "{{")
+    .replace(/\}(?!\})/g, "}}");
+
+  return SystemMessagePromptTemplate.fromTemplate(safeTemplateContent);
 }

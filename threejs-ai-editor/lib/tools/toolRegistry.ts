@@ -4,6 +4,7 @@ import { StructuredTool } from "@langchain/core/tools";
 import { codeGenTool } from "./codeGenTool";
 import { modelGenTool } from "./modelGenTool";
 import { applyPatchTool } from "./applyPatchTool";
+import { screenshotTool } from "./screenshotTool";
 
 /**
  * 工具类别枚举
@@ -50,6 +51,13 @@ export class ToolRegistry {
 
     // 注册补丁应用工具
     this.registerTool(applyPatchTool.name, applyPatchTool, ToolCategory.CODE);
+
+    // 注册截图分析工具
+    this.registerTool(
+      screenshotTool.name,
+      screenshotTool,
+      ToolCategory.UTILITY
+    );
 
     console.log("[ToolRegistry] Initialized tools");
     this.initialized = true;
