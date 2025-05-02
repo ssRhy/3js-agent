@@ -36,7 +36,7 @@ export function createHumanPrompt(
       "\n分析建议：\n{suggestion}",
       "\n用户需求：\n{userPrompt}",
       sceneStateSection,
-      "\n重要：复用所有历史模型URL（只使用hyper3d返回的url），为每个模型指定不同位置坐标。",
+      "\n重要：为每个模型指定不同位置坐标。",
       "\n如果输入包含screenshot，请首先使用analyze_screenshot工具分析当前场景是否符合需求，再决定后续操作。",
       "\n⚠️ 根据analyze_screenshot的分析结果调用generate_fix_code工具，提交仅包含threejs代码的完整方案，无需包含思考过程、分析或解释。返回必须是可直接执行的setup函数。",
       "{chat_history}",

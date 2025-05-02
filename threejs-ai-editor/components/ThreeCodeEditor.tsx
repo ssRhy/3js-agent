@@ -283,8 +283,9 @@ export default function ThreeCodeEditor() {
 
                     // 使用更大更自由的范围，不再局限于固定半径的圆
                     let angle = Math.random() * Math.PI * 2;
-                    const minRadius = modelMaxDim * 1.5; // 最小距离为模型最大尺寸的1.5倍
-                    const maxRadius = minRadius + 8 + existingModels.length; // 随着模型数量增加，范围扩大
+                    const minRadius = modelMaxDim * 2.0; // 增加最小距离为模型最大尺寸的2.0倍
+                    const maxRadius =
+                      minRadius + 12 + existingModels.length * 1.5; // 更大的扩展范围
 
                     let radius =
                       minRadius + Math.random() * (maxRadius - minRadius);
@@ -307,9 +308,15 @@ export default function ThreeCodeEditor() {
                     }
 
                     // 检查并避免与现有模型重叠
-                    const maxAttempts = 10;
+                    const maxAttempts = 30; // 增加尝试次数
                     let attempts = 0;
                     let overlapping = true;
+
+                    // 用于存储避开方向的映射
+                    const avoidDirections: Record<
+                      string,
+                      { dx: number; dz: number }
+                    > = {};
 
                     while (overlapping && attempts < maxAttempts) {
                       overlapping = false;
@@ -333,23 +340,68 @@ export default function ThreeCodeEditor() {
                             existingModel
                           );
 
+                          // 获取现有模型的中心点
+                          const existingCenter = existingBox.getCenter(
+                            new THREE.Vector3()
+                          );
+
                           // 如果边界盒相交，则表示有重叠
                           if (tempBox.intersectsBox(existingBox)) {
                             overlapping = true;
 
-                            // 尝试新位置 - 增加半径并稍微改变角度
-                            radius += modelMaxDim * 0.75;
-                            angle +=
-                              (Math.PI / 4) * (Math.random() * 0.5 + 0.75); // 随机偏移45-90度
+                            // 计算当前位置到碰撞物体的方向向量
+                            const avoidDirection = {
+                              dx: position.x - existingCenter.x,
+                              dz: position.z - existingCenter.z,
+                            };
+
+                            // 规范化方向向量
+                            const length = Math.sqrt(
+                              avoidDirection.dx * avoidDirection.dx +
+                                avoidDirection.dz * avoidDirection.dz
+                            );
+                            if (length > 0) {
+                              avoidDirection.dx /= length;
+                              avoidDirection.dz /= length;
+                            }
+
+                            // 记录这个物体的避开方向
+                            const objId = existingModel.userData.modelId;
+                            avoidDirections[objId] = avoidDirection;
+
+                            // 尝试新位置 - 增加半径并使用智能避开方向
+                            radius += modelMaxDim * 1.0; // 更积极地增加半径
+
+                            // 根据已有的避开方向计算综合方向
+                            let sumDx = 0,
+                              sumDz = 0;
+                            let count = 0;
+
+                            for (const dir of Object.values(avoidDirections)) {
+                              sumDx += dir.dx;
+                              sumDz += dir.dz;
+                              count++;
+                            }
+
+                            if (count > 0) {
+                              // 使用综合避开方向计算新角度
+                              angle = Math.atan2(sumDz, sumDx);
+                              // 添加一些随机性避免卡在困难位置
+                              angle += ((Math.random() - 0.5) * Math.PI) / 8;
+                            } else {
+                              // 如果没有避开方向，随机尝试新方向
+                              angle +=
+                                (Math.PI / 4) * (Math.random() * 0.5 + 0.75);
+                            }
 
                             position = {
                               x:
                                 Math.cos(angle) * radius +
-                                (Math.random() - 0.5) * modelScale,
+                                (Math.random() - 0.5) * modelScale * 0.5, // 减小随机性
                               y: position.y, // 保持相同的y坐标
                               z:
                                 Math.sin(angle) * radius +
-                                (Math.random() - 0.5) * modelScale,
+                                (Math.random() - 0.5) * modelScale * 0.5, // 减小随机性
                             };
 
                             break;
@@ -360,12 +412,47 @@ export default function ThreeCodeEditor() {
                       attempts++;
 
                       // 释放临时对象
-                      // Group对象没有geometry和material属性，这里不需要disposing
                       tempModel.clear(); // 只需要清除子对象
+
+                      // 如果尝试次数过多但仍然重叠，增加y轴高度尝试避开
+                      if (attempts > maxAttempts * 0.7 && overlapping) {
+                        position.y += modelHeight * 0.5;
+                        console.log(
+                          "Increasing height to avoid overlap:",
+                          position.y
+                        );
+                      }
+                    }
+
+                    // 如果仍然重叠，则选择一个安全距离远的位置
+                    if (overlapping) {
+                      console.log(
+                        "Could not find non-overlapping position, using fallback positioning"
+                      );
+                      // 计算场景中所有模型的最远距离
+                      let maxDistanceX = 0;
+                      let maxDistanceZ = 0;
+
+                      existingModels.forEach((existingModel) => {
+                        const pos = existingModel.position;
+                        maxDistanceX = Math.max(maxDistanceX, Math.abs(pos.x));
+                        maxDistanceZ = Math.max(maxDistanceZ, Math.abs(pos.z));
+                      });
+
+                      // 放置在最远距离外加上模型尺寸的2倍
+                      const safeDistance =
+                        Math.max(maxDistanceX, maxDistanceZ) + modelMaxDim * 2;
+                      const safeAngle = Math.random() * Math.PI * 2;
+
+                      position = {
+                        x: Math.cos(safeAngle) * safeDistance,
+                        y: modelHeight / 2 + Math.random() * modelHeight, // 稍微抬高
+                        z: Math.sin(safeAngle) * safeDistance,
+                      };
                     }
 
                     console.log(
-                      `Position found after ${attempts} attempts, overlapping: ${overlapping}`
+                      `Position found after ${attempts}/${maxAttempts} attempts, overlapping: ${overlapping}`
                     );
                   }
 

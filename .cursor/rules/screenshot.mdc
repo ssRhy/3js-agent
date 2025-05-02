@@ -10,5 +10,4 @@ User input → Code generation → Frontend rendering → Screenshot capture (af
 
 
 
-
-将截图分析工具集成到agent的执行流程中。这样agent可以在每次迭代中主动调用截图分析工具，而不是等待所有循环结束后再分析。
+将截图分析工具集成到agent的执行流程中。这样agent可以在每次迭代中主动调用截图分析工具，而不是等待所有循环结束后再分析。Agent 会在整个循环里“自驱”地完成截图分析和自动修复。Agent 智能截图→分析→修复”，又避免了过度截图和无限迭代，同时保证最终场景符合用户需求。

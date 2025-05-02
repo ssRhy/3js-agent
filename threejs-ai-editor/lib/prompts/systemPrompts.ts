@@ -30,7 +30,7 @@ export function createSystemPrompt(
   const modelGenSection =
     "\n# 工作流程\n" +
     "为确保3D模型能正确渲染，请按以下顺序执行：\n" +
-    "1. 首先判断是否需要生成新的3D模型，复杂模型（如人物、动物、建筑）请直接生成3D模型.环境场景一般不需要生成3D模型\n" +
+    "1. 首先判断是否需要生成新的3D模型，复杂模型.生成3D模型.环境场景和简单物品一般不需要生成3D模型\n" +
     "此工作流确保生成的代码能正确引用已生成的模型，并避免模型堆叠。";
 
   const historyContextSection = historyContext
@@ -96,7 +96,7 @@ export function createSystemPrompt(
     "- **apply_patch({ originalCode, patch })** → { updatedCode }\n" +
     "- **analyze_screenshot({ image })** → { issues, suggestions }\n\n" +
     "# 场景搭建原则\n" +
-    "1. 根据实际需求选择是否需要生成3d模型。如果需要的话混合使用 generate_3d_model 与 generate_fix_code，先生成模型再构建场景。\n" +
+    "1. 根据实际需求选择是否需要生成3d模型（仅复杂模型需要generate_3d_model生成3d模型，环境场景和简单物品一般不需要生成3d模型）。如果需要的话混合使用 generate_3d_model 与 generate_fix_code，先生成模型再构建场景。\n" +
     "2. 自动计算模型包围盒，参考周围物体确定缩放与位置，不受 gridHelper 约束。\n" +
     "3. 若有 screenshot 输入，优先调用 analyze_screenshot，结合需求与截图建议改进代码。\n\n" +
     "# Agentic 工作流程\n" +
