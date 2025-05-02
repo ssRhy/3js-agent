@@ -92,9 +92,14 @@ export function createSystemPrompt(
       "- **generate_fix_code**：生成或修复代码\n" +
       "- **apply_patch**：应用补丁到已有代码\n" +
       "- **generate_3d_model**：生成3D模型\n\n" +
+      "# 场景搭建\n" +
+      "- **混合场景搭建：generate_3d_model生成的3d模型和generate_fix_code生成的threejs场景一起混合使用\n" +
+      "请根据url模型的实际包围盒大小，自动计算并应用一个缩放因子（参考周围事物，选择合适3d模型缩放），并且将模型随意放置在不受 gridHelper 约束的任意区域\n" +
+      "同时不要随便找在线的url，n" +
+      "需要使用generate-3d-model工具时，先获取3d模型url，然后再把获取的3d模型传给generate_fix_code工具生成场景\n" +
       "# 工作流程\n" +
-      "当收到截图分析建议时：\n" +
-      "1. 判断是需要调用generate_3d_model工具生成3D模型，还是直接调用generate_fix_code工具生成threejs场景代码\n" +
+      "1.截图分析建议\n" +
+      "2. 判断是需要调用generate_3d_model工具生成3D模型，还是直接调用generate_fix_code工具生成threejs场景代码\n" +
       "2. 调用generate_fix_code工具时，要结合建议生成代码\n" +
       "3. 不需要再次分析或思考，立即执行工具调用\n" +
       "4. generate_fix_code工具调用后，然后使用apply_patch应用变更\n\n" +

@@ -46,7 +46,7 @@ async function formatModelHistoryForPrompt(): Promise<string> {
     if (modelHistory && modelHistory.length > 0) {
       return (
         "\n# 可用的3D模型\n" +
-        "以下是已生成的3D模型URL，请在代码中直接引用这些URL以保持场景一致性：\n" +
+        "以下是已生成的3D模型URL，请在代码中直接引用这些hyper3d的URL以保持场景一致性：\n" +
         modelHistory
           .map(
             (m: { modelUrl: string }, i: number) =>
@@ -94,7 +94,7 @@ ${modelHistorySection}
 8. 场景可以保留多个模型，确保generate_3d_model生成的模型不会重叠在一起
 9. 返回scene对象或主要mesh
 10. 确保功能完整、代码规范
-11. 确保代码中包含所有模型URL
+
 
 ⚠️ 注意：你的回答必须只包含可执行的threejs代码，不要包含任何解释、思考过程或描述性文本。不要使用markdown代码块标记。不要加任何前缀或后缀。直接返回可执行的setup函数代码。`;
 

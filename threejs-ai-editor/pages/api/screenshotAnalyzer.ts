@@ -21,6 +21,7 @@ export async function analyzeScreenshotDirectly(
   userPrompt: string = ""
 ): Promise<string> {
   const requestId = `analysis_${Date.now()}`;
+
   console.log(
     `[${requestId}] [Screenshot Analysis] Started at ${new Date().toISOString()}`
   );

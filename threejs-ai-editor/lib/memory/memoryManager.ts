@@ -47,7 +47,7 @@ class MemoryManager {
   private _currentCodeState = "";
 
   constructor() {
-    // Initialize memory systems with BufferWindowMemory instead of BufferMemory
+    // Initialize memory systems with BufferWindowMemory
     this._codeMemory = new BufferWindowMemory({
       memoryKey: "codeState",
       inputKey: "userPrompt",
@@ -134,6 +134,13 @@ class MemoryManager {
         },
       }
     );
+
+    console.log(
+      `[Memory] Analysis saved to memory with prompt: "${userPrompt.substring(
+        0,
+        30
+      )}..."`
+    );
   }
 
   /**
@@ -154,8 +161,9 @@ class MemoryManager {
    * @param sceneState Current state of the scene
    */
   async saveSceneStateToMemory(userPrompt: string, sceneState: SceneObject[]) {
-    if (!sceneState || sceneState.length === 0) {
-      return;
+    if (!sceneState) {
+      console.log("[Memory] No scene state to save, creating empty state");
+      sceneState = [];
     }
 
     try {
@@ -193,6 +201,10 @@ class MemoryManager {
           },
         }
       );
+
+      console.log(
+        `[Memory] Scene state saved: ${sceneState.length} objects, history: ${trimmedHistory.length} entries`
+      );
     } catch (error) {
       console.error("Failed to save scene state to memory:", error);
     }
@@ -209,6 +221,9 @@ class MemoryManager {
 
       if (historyContext.history && historyContext.history.length > 0) {
         const historyEntries = historyContext.history;
+        console.log(
+          `[Memory] Loaded ${historyEntries.length} scene history entries`
+        );
 
         return historyEntries
           .map(
@@ -228,6 +243,8 @@ class MemoryManager {
                 .join("\n")
           )
           .join("\n\n");
+      } else {
+        console.log("[Memory] No scene history entries found");
       }
     } catch (error) {
       console.error("Failed to load scene history from memory:", error);
@@ -283,6 +300,15 @@ class MemoryManager {
       userPrompt,
       this
     );
+  }
+
+  /**
+   * Clear memory
+   */
+  clearMemory() {
+    this._codeMemory.clear();
+    this._sceneMemory.clear();
+    console.log("[Memory] Memory cleared");
   }
 }
 
@@ -590,95 +616,9 @@ export interface ModelHistoryEntry {
   prompt: string;
 }
 
-// Generate a unique session ID based on user prompt and timestamp
-export const generateSessionId = (userPrompt: string): string => {
-  const timestamp = Date.now();
-  const promptHash = userPrompt.slice(0, 10).replace(/\s+/g, "_");
-  return `session_${timestamp}_${promptHash}`;
-};
-
-// Initialize session history with model history if provided
-export const initializeSessionHistory = async (
-  sessionId: string,
-  modelHistory?: ModelHistoryEntry[]
-): Promise<void> => {
-  if (!modelHistory || modelHistory.length === 0) {
-    return;
-  }
-
-  try {
-    const memory = getCodeMemory();
-    const memoryVars = await memory.loadMemoryVariables({});
-    const ctx = memoryVars.codeStateContext || {};
-
-    await memory.saveContext(
-      { userPrompt: "Session initialization" },
-      {
-        codeStateContext: {
-          ...ctx,
-          modelHistory,
-          lastUpdateTimestamp: new Date().toISOString(),
-        },
-      }
-    );
-  } catch (error) {
-    console.error(
-      `Failed to initialize session history for ${sessionId}:`,
-      error
-    );
-  }
-};
-
-// Validate that all model URLs in the output match those in history
-export const validateModelUrlsInOutput = async (
-  output: string,
-  modelHistory?: ModelHistoryEntry[],
-  sessionId?: string
-): Promise<boolean> => {
-  if (!modelHistory || modelHistory.length === 0) {
-    return true;
-  }
-
-  try {
-    const modelUrls = modelHistory.map((entry) => entry.modelUrl);
-    // Simple validation - just check if the URLs are included
-    const isValid = modelUrls.every((url) => output.includes(url));
-
-    if (!isValid) {
-      console.warn(
-        `[${sessionId || "unknown"}] Output missing expected model URLs`
-      );
-    }
-
-    return isValid;
-  } catch (error) {
-    console.error(`Error validating model URLs:`, error);
-    return false;
-  }
-};
-
-// Clear all session state for a given session ID
-export const clearSessionState = (sessionId: string): void => {
-  if (!sessionId) {
-    console.warn("Attempted to clear session state with invalid session ID");
-    return;
-  }
-
-  try {
-    // For now, we'll just reset the memory
-    // In a production implementation, this would clear specific session data
-    const codeMemory = getCodeMemory();
-    const sceneMemory = getSceneMemory();
-
-    // Clear memories
-    // Note: This is a simplified implementation
-    codeMemory.clear();
-    sceneMemory.clear();
-
-    console.log(`Session state cleared for ${sessionId}`);
-  } catch (error) {
-    console.error(`Failed to clear session state for ${sessionId}:`, error);
-  }
+// 简化版的清除内存状态函数
+export const clearSessionState = (): void => {
+  memoryManager.clearMemory();
 };
 
 // Helper function that would be imported from elsewhere

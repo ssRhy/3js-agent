@@ -50,6 +50,10 @@ export default function ThreeCodeEditor() {
   controls.enableDamping = true;
   controls.dampingFactor = 0.25;
   
+  // 注意: 可以使用全局的 autoScaleModel 函数来调整加载的模型大小
+  // 示例: 在模型加载后调用 autoScaleModel(model, desiredSize)
+  // desiredSize 参数表示期望的模型最长边长度（默认为5个单位）
+  
   // Return the scene so that all future objects added to it will be rendered
   return scene;
 }`);
@@ -104,7 +108,10 @@ export default function ThreeCodeEditor() {
       0.1,
       1000
     );
-    camera.position.z = 5;
+    camera.position.z = 10;
+    camera.position.y = 5;
+    camera.position.x = 5;
+    camera.lookAt(0, 0, 0);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(container.clientWidth, container.clientHeight);
@@ -119,7 +126,10 @@ export default function ThreeCodeEditor() {
     directionalLight.castShadow = true;
     scene.add(directionalLight);
 
-    const gridHelper = new THREE.GridHelper(10, 10);
+    const gridHelper = new THREE.GridHelper(30, 30, 0x444444, 0x222222);
+    gridHelper.position.y = -0.01; // Slightly below the origin to avoid z-fighting
+    gridHelper.material.opacity = 0.5;
+    gridHelper.material.transparent = true;
     scene.add(gridHelper);
 
     const controls = new OrbitControls(camera, renderer.domElement);
@@ -171,7 +181,7 @@ export default function ThreeCodeEditor() {
     };
   }, [setScene, setDynamicGroup]);
 
-  const loadModel = async (modelUrl: string) => {
+  const loadModel = async (modelUrl: string, modelSize?: number) => {
     if (!threeRef.current || !threeRef.current.gltfLoader) {
       setError("Three.js scene not initialized");
       return false;
@@ -187,6 +197,9 @@ export default function ThreeCodeEditor() {
       }
 
       console.log("Loading 3D model from URL:", modelUrl);
+      if (modelSize) {
+        console.log(`将调整模型大小为: ${modelSize} 单位`);
+      }
 
       const { scene, camera } = threeRef.current;
       const loader = threeRef.current.gltfLoader;
@@ -226,26 +239,122 @@ export default function ThreeCodeEditor() {
                     (child) => child.userData.modelId
                   );
 
-                  // 计算模型的包围盒以确定其高度
-                  const boundingBox = new THREE.Box3().setFromObject(model);
-                  const modelHeight = boundingBox.max.y - boundingBox.min.y;
+                  // 如果指定了模型大小，则使用指定值，否则使用默认值(5)
+                  autoScaleModel(model, modelSize || 5);
 
-                  // 将模型上移高度的一半，使其垂直居中
+                  // 计算模型的包围盒以确定其大小
+                  const boundingBox = new THREE.Box3().setFromObject(model);
+                  const size = boundingBox.getSize(new THREE.Vector3());
+
+                  // 计算模型的高度和最大维度
+                  const modelHeight = size.y;
+                  const modelMaxDim = Math.max(size.x, size.y, size.z);
+
+                  // 默认位置：保持垂直居中，将模型放在y=0平面上
                   let position = { x: 0, y: modelHeight / 2, z: 0 };
 
                   // 如果已有模型，计算新位置
                   if (existingModels.length > 0) {
-                    // 在半径为3的圆上放置模型
-                    const angle = Math.random() * Math.PI * 2;
-                    const radius = 3 + Math.random() * 2; // 半径3-5之间随机
+                    // 根据模型大小动态确定放置半径
+                    // 对于较大的模型使用更大的间距，避免模型重叠
+                    const modelScale = Math.max(1, modelMaxDim / 2);
+
+                    // 使用更大更自由的范围，不再局限于固定半径的圆
+                    let angle = Math.random() * Math.PI * 2;
+                    const minRadius = modelMaxDim * 1.5; // 最小距离为模型最大尺寸的1.5倍
+                    const maxRadius = minRadius + 8 + existingModels.length; // 随着模型数量增加，范围扩大
+
+                    let radius =
+                      minRadius + Math.random() * (maxRadius - minRadius);
+
+                    // 初始计算在xz平面上的位置
                     position = {
-                      x: Math.cos(angle) * radius,
+                      x:
+                        Math.cos(angle) * radius +
+                        (Math.random() - 0.5) * modelScale,
                       y: modelHeight / 2, // 保持垂直居中
-                      z: Math.sin(angle) * radius,
+                      z:
+                        Math.sin(angle) * radius +
+                        (Math.random() - 0.5) * modelScale,
                     };
+
+                    // 添加一些随机性到y坐标，不再总是对齐到地面
+                    if (Math.random() > 0.7) {
+                      // 30%的概率
+                      position.y += (Math.random() - 0.5) * modelScale * 0.5;
+                    }
+
+                    // 检查并避免与现有模型重叠
+                    const maxAttempts = 10;
+                    let attempts = 0;
+                    let overlapping = true;
+
+                    while (overlapping && attempts < maxAttempts) {
+                      overlapping = false;
+
+                      // 为当前位置计算潜在的边界盒
+                      const tempModel = model.clone();
+                      tempModel.position.set(
+                        position.x,
+                        position.y,
+                        position.z
+                      );
+                      const tempBox = new THREE.Box3().setFromObject(tempModel);
+
+                      // 检查与现有模型的碰撞
+                      for (const existingModel of existingModels) {
+                        if (
+                          existingModel.userData &&
+                          existingModel.userData.modelId
+                        ) {
+                          const existingBox = new THREE.Box3().setFromObject(
+                            existingModel
+                          );
+
+                          // 如果边界盒相交，则表示有重叠
+                          if (tempBox.intersectsBox(existingBox)) {
+                            overlapping = true;
+
+                            // 尝试新位置 - 增加半径并稍微改变角度
+                            radius += modelMaxDim * 0.75;
+                            angle +=
+                              (Math.PI / 4) * (Math.random() * 0.5 + 0.75); // 随机偏移45-90度
+
+                            position = {
+                              x:
+                                Math.cos(angle) * radius +
+                                (Math.random() - 0.5) * modelScale,
+                              y: position.y, // 保持相同的y坐标
+                              z:
+                                Math.sin(angle) * radius +
+                                (Math.random() - 0.5) * modelScale,
+                            };
+
+                            break;
+                          }
+                        }
+                      }
+
+                      attempts++;
+
+                      // 释放临时对象
+                      // Group对象没有geometry和material属性，这里不需要disposing
+                      tempModel.clear(); // 只需要清除子对象
+                    }
+
+                    console.log(
+                      `Position found after ${attempts} attempts, overlapping: ${overlapping}`
+                    );
                   }
 
+                  // 应用计算出的位置
                   model.position.set(position.x, position.y, position.z);
+
+                  // 随机旋转，使场景更自然
+                  if (Math.random() > 0.5) {
+                    // 50%的概率
+                    model.rotation.y = Math.random() * Math.PI * 2;
+                  }
 
                   model.traverse((node: THREE.Object3D) => {
                     if ((node as THREE.Mesh).isMesh) {
@@ -263,14 +372,6 @@ export default function ThreeCodeEditor() {
                     "Model added to scene with position:",
                     model.position
                   );
-
-                  const box = new THREE.Box3().setFromObject(model);
-                  const helper = new THREE.Box3Helper(
-                    box,
-                    new THREE.Color(0xff0000)
-                  );
-                  scene.add(helper);
-                  console.log("Added bounding box helper to model");
 
                   fitCameraToModel(camera, model);
 
@@ -342,10 +443,20 @@ export default function ThreeCodeEditor() {
     const fov = camera.fov * (Math.PI / 180);
     let cameraZ = Math.abs(maxDim / Math.sin(fov / 2));
 
-    cameraZ *= 1.5;
+    // 使用更大的缩放因子，给模型更多空间
+    cameraZ *= 2.0;
+
+    // 添加一些随机偏移，使视角更自然
+    const offsetAngle = Math.random() * Math.PI * 0.25; // 最多45度偏移
+    const cameraX = Math.sin(offsetAngle) * cameraZ * 0.8;
+    const adjustedCameraZ = Math.cos(offsetAngle) * cameraZ;
 
     const oldPosition = { ...camera.position };
-    camera.position.set(center.x, center.y, center.z + cameraZ);
+    camera.position.set(
+      center.x + cameraX,
+      center.y + maxDim * 0.4, // 稍微抬高视角
+      center.z + adjustedCameraZ
+    );
     console.log("Camera position adjusted:", {
       from: oldPosition,
       to: { ...camera.position },
@@ -355,6 +466,70 @@ export default function ThreeCodeEditor() {
     camera.lookAt(center);
     camera.updateProjectionMatrix();
   };
+
+  // 自动缩放模型到期望大小
+  const autoScaleModel = (model: THREE.Object3D, desiredSize: number = 5) => {
+    // 计算模型的包围盒以确定当前大小
+    const boundingBox = new THREE.Box3().setFromObject(model);
+    const size = boundingBox.getSize(new THREE.Vector3());
+
+    // 获取模型当前的最大尺寸
+    const maxDimension = Math.max(size.x, size.y, size.z);
+
+    // 如果最大尺寸为0，无法缩放
+    if (maxDimension === 0) {
+      console.warn("无法缩放模型：模型尺寸为0");
+      return;
+    }
+
+    // 计算缩放比例
+    const scale = desiredSize / maxDimension;
+
+    // 应用缩放
+    model.scale.set(scale, scale, scale);
+
+    console.log(
+      `模型已缩放: 原始尺寸=${maxDimension.toFixed(
+        2
+      )}, 目标尺寸=${desiredSize}, 缩放比例=${scale.toFixed(4)}`
+    );
+
+    // 返回最终缩放比例，以便于调用者记录或使用
+    return scale;
+  };
+
+  // 添加全局窗口函数，使Agent生成的代码可以直接调用自动缩放功能
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      // 为window添加autoScaleModel函数
+      (
+        window as Window &
+          typeof globalThis & {
+            autoScaleModel: (
+              model: THREE.Object3D,
+              desiredSize?: number
+            ) => number | undefined;
+          }
+      ).autoScaleModel = (model: THREE.Object3D, desiredSize: number = 5) => {
+        return autoScaleModel(model, desiredSize);
+      };
+    }
+
+    return () => {
+      // 组件卸载时清理
+      if (typeof window !== "undefined") {
+        delete (
+          window as Window &
+            typeof globalThis & {
+              autoScaleModel?: (
+                model: THREE.Object3D,
+                desiredSize?: number
+              ) => number | undefined;
+            }
+        ).autoScaleModel;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!code) return;
@@ -721,6 +896,19 @@ export default function ThreeCodeEditor() {
       }
 
       try {
+        // 检查提示中是否包含模型大小信息
+        const sizeRegex = /大小\s*[:：]\s*(\d+(\.\d+)?)/i;
+        const sizePrefRegex = /(\d+(\.\d+)?)\s*(尺寸|大小|单位)/i;
+        const sizeMatch =
+          prompt.match(sizeRegex) || prompt.match(sizePrefRegex);
+
+        // 如果找到大小参数，提取数值
+        let modelSize: number | undefined = undefined;
+        if (sizeMatch && sizeMatch[1]) {
+          modelSize = parseFloat(sizeMatch[1]);
+          console.log(`检测到模型尺寸参数: ${modelSize}`);
+        }
+
         const response = await fetch("/api/agent", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -732,6 +920,7 @@ export default function ThreeCodeEditor() {
             sceneState,
             sceneHistory, // 将场景历史传递给 API
             lintErrors: lintErrors.length > 0 ? lintErrors : undefined,
+            modelSize, // 传递模型大小参数给API
           }),
         });
 
@@ -747,7 +936,7 @@ export default function ThreeCodeEditor() {
         if (data.modelUrl) {
           console.log("Model URL received:", data.modelUrl);
           setIsModelLoading(true);
-          const modelLoaded = await loadModel(data.modelUrl);
+          const modelLoaded = await loadModel(data.modelUrl, modelSize);
           console.log("Model loading result:", modelLoaded);
           setIsModelLoading(false);
 
@@ -814,7 +1003,7 @@ export default function ThreeCodeEditor() {
             console.log("从代码中提取到模型URL:", modelUrl);
 
             setIsModelLoading(true);
-            const modelLoaded = await loadModel(modelUrl);
+            const modelLoaded = await loadModel(modelUrl, modelSize);
             console.log(
               "Model loading result from code extraction:",
               modelLoaded

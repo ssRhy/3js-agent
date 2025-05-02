@@ -31,30 +31,28 @@ export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
 ) {
+  // 生成请求ID，仅用于日志
+  const requestId = `req_${Date.now()}_${req.body.action || "default"}`;
+  console.log(
+    `[${requestId}] Agent API called with action: ${
+      req.body.action || "unknown"
+    }`
+  );
+
   // 仅支持 POST 方法
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
   // 解析请求参数
-  const {
-    action,
-    code,
-    prompt,
-    screenshot,
-    lintErrors,
-    modelRequired,
-    sessionId,
-  } = req.body;
+  const { action, code, prompt, screenshot, lintErrors, modelRequired } =
+    req.body;
 
   // 将 sceneState 转换为正确的类型
   const sceneState = req.body.sceneState as SceneStateObject[] | undefined;
 
   // 获取场景历史（如果提供）
   const sceneHistory = req.body.sceneHistory;
-
-  // 使用客户端提供的会话ID或生成一个新的请求ID
-  const requestId = sessionId || `req_${Date.now()}_${action || "unknown"}`;
 
   // 记录 API 调用详情
   console.log(
@@ -98,16 +96,11 @@ export default async function handler(
         return await handleModelGeneration(req, res, requestId, code, prompt);
 
       case "reset-session":
-        // Clear the session state if requested
-        if (sessionId) {
-          clearSessionState(sessionId);
-          return res
-            .status(200)
-            .json({ success: true, message: "Session reset successful" });
-        }
+        // 清除会话状态
+        clearSessionState();
         return res
-          .status(400)
-          .json({ error: "No session ID provided for reset" });
+          .status(200)
+          .json({ success: true, message: "Session reset successful" });
 
       default:
         console.log(`[${requestId}] Invalid action: ${action}`);
@@ -148,6 +141,14 @@ async function handleScreenshotAnalysis(
 ) {
   console.log(`[${requestId}] Processing screenshot analysis request`);
 
+  // 获取模型大小参数
+  const modelSizeParam = req.body.modelSize as number | undefined;
+  if (modelSizeParam) {
+    console.log(
+      `[${requestId}] Model size parameter provided: ${modelSizeParam}`
+    );
+  }
+
   // 验证必需参数
   if (!screenshot || !code) {
     console.log(`[${requestId}] Missing required parameters`);
@@ -177,7 +178,7 @@ async function handleScreenshotAnalysis(
       );
     }
 
-    // 使用整合的优化流程，传递会话ID
+    // 使用整合的优化流程
     return await runCompleteOptimizationFlow(
       screenshot,
       code,
@@ -188,7 +189,7 @@ async function handleScreenshotAnalysis(
         modelRequired,
         sceneState,
         sceneHistory,
-        sessionId: requestId, // 使用会话ID
+        modelSize: modelSizeParam,
       },
       res
     );
@@ -216,6 +217,13 @@ async function handleScreenshotAnalysis(
       // 3. 保存当前场景状态
       if (sceneState && sceneState.length > 0) {
         await saveSceneStateToMemory(prompt || "", sceneState);
+        console.log(
+          `[${requestId}] Saved scene state with ${sceneState.length} objects to memory`
+        );
+      } else {
+        // 即使没有对象，也保存空场景状态，确保历史记录的连续性
+        await saveSceneStateToMemory(prompt || "", []);
+        console.log(`[${requestId}] Saved empty scene state to memory`);
       }
 
       // 4. 获取工具
@@ -238,7 +246,7 @@ async function handleScreenshotAnalysis(
         );
       }
 
-      // 5. 运行 agent 循环，使用会话ID
+      // 5. 运行 agent 循环
       console.log(`[${requestId}] Running agent loop with fallback approach`);
       return await runAgentLoop(
         suggestion,
@@ -252,8 +260,7 @@ async function handleScreenshotAnalysis(
         sceneState,
         modelHistory,
         sceneHistory || loadedSceneHistory,
-        res,
-        requestId // 传递会话ID
+        res
       );
     } catch (fallbackError) {
       console.error(
@@ -308,6 +315,13 @@ async function handleCodeOptimization(
     // 保存当前场景状态（如果有）
     if (sceneState && sceneState.length > 0) {
       await saveSceneStateToMemory(prompt || "", sceneState);
+      console.log(
+        `[${requestId}] Saved scene state with ${sceneState.length} objects to memory`
+      );
+    } else {
+      // 即使没有对象，也保存空场景状态，确保历史记录的连续性
+      await saveSceneStateToMemory(prompt || "", []);
+      console.log(`[${requestId}] Saved empty scene state to memory`);
     }
 
     // 获取可用工具
