@@ -56,6 +56,7 @@ const conversationContext: {
   lastCodeGenerated?: string;
   lastModelUrls?: { url: string; name: string }[];
   conversationSummary?: string;
+  lastSceneState?: SceneStateObject[]; // 添加上一次场景状态
 } = {};
 
 // 获取消息历史
@@ -77,6 +78,9 @@ function updateConversationContext(
       break;
     case "lastModelUrls":
       conversationContext[key] = value as { url: string; name: string }[];
+      break;
+    case "lastSceneState":
+      conversationContext[key] = value as SceneStateObject[];
       break;
   }
   console.log(`[Memory] Updated conversation context: ${key}`);
@@ -163,8 +167,27 @@ export async function runInteractionFlow(
   );
 
   try {
-    // 保存场景状态到记忆
-    if (sceneState && sceneState.length > 0) {
+    // 合并当前场景状态与之前存储的场景状态
+    let combinedSceneState = sceneState || [];
+
+    // 如果没有新的场景状态但有存储的状态，则使用存储的状态
+    if (
+      (!sceneState || sceneState.length === 0) &&
+      conversationContext.lastSceneState &&
+      conversationContext.lastSceneState.length > 0
+    ) {
+      console.log(
+        `[${requestId}] Using cached scene state from memory with ${conversationContext.lastSceneState.length} objects`
+      );
+      combinedSceneState = conversationContext.lastSceneState;
+    }
+    // 如果有新场景状态，保存到会话上下文中
+    else if (sceneState && sceneState.length > 0) {
+      console.log(
+        `[${requestId}] Saving new scene state to memory with ${sceneState.length} objects`
+      );
+      updateConversationContext("lastSceneState", sceneState);
+      // 保存到持久化记忆中
       await saveSceneStateToMemory(sceneState);
     }
 
@@ -173,6 +196,14 @@ export async function runInteractionFlow(
     console.log(
       `[${requestId}] Prepared history context: ${
         historyContext ? historyContext.substring(0, 100) + "..." : "none"
+      }`
+    );
+
+    // 加载场景历史以增强上下文
+    const loadedSceneHistory = await loadSceneHistoryFromMemory();
+    console.log(
+      `[${requestId}] Loaded scene history: ${
+        loadedSceneHistory ? "success" : "none"
       }`
     );
 
@@ -206,6 +237,12 @@ export async function runInteractionFlow(
       suggestion = "根据用户需求生成代码，无需考虑当前场景状态。";
     }
 
+    // 如果有场景状态，添加到系统指令中
+    if (combinedSceneState && combinedSceneState.length > 0) {
+      systemInstructions +=
+        "\n\n当前场景中已有对象，请保留已有对象并根据需求进行修改或添加，避免重新创建整个场景。";
+    }
+
     // 运行agent循环
     console.log(
       `[${requestId}] Running agent loop with system instructions: ${systemInstructions.substring(
@@ -225,11 +262,11 @@ export async function runInteractionFlow(
       historyContext,
       lintErrors,
       modelRequired,
-      sceneState,
+      combinedSceneState, // 使用合并后的场景状态
       modelHistory,
       typeof sceneHistory === "string"
         ? sceneHistory
-        : JSON.stringify(sceneHistory || {}),
+        : loadedSceneHistory || JSON.stringify(sceneHistory || {}),
       undefined, // res
       screenshot,
       renderingComplete === true, // 确保传递boolean类型
@@ -368,6 +405,11 @@ export async function runAgentLoop(
       enhancedHistoryContext += `\n\n上次用户请求: ${conversationContext.lastUserPrompt}`;
     }
 
+    // 添加有关场景状态的上下文信息
+    if (sceneState && sceneState.length > 0) {
+      enhancedHistoryContext += `\n\n当前场景包含 ${sceneState.length} 个对象。这是已经存在的场景，你必须保留并在此基础上进行修改，不要重新创建整个场景。`;
+    }
+
     // 添加有关截图分析的上下文信息(如果有)
     if (screenshot && renderingComplete === true) {
       enhancedHistoryContext +=
@@ -416,13 +458,23 @@ export async function runAgentLoop(
       // 为简化起见，我们在这里不创建新的覆盖工具，而是依赖正确的输入参数
     }
 
-    // 准备系统指令，确保截图优先分析
-    const systemInstructions =
-      screenshot && renderingComplete
-        ? "你必须首先分析截图，然后根据分析结果进行代码生成或修改。" +
-          "步骤1: 调用analyze_screenshot工具分析当前场景。调用时必须使用完整的截图数据，不要修改或替换。" +
-          "步骤2: 根据分析结果，如果需要改进，则调用generate_fix_code工具；如果不需要改进，则直接返回当前代码。"
-        : "根据用户需求生成或优化Three.js代码。";
+    // 准备系统指令，确保截图优先分析和场景保留
+    let systemInstructions = "";
+
+    if (screenshot && renderingComplete) {
+      systemInstructions =
+        "你必须首先分析截图，然后根据分析结果进行代码生成或修改。" +
+        "步骤1: 调用analyze_screenshot工具分析当前场景。调用时必须使用完整的截图数据，不要修改或替换。" +
+        "步骤2: 根据分析结果，如果需要改进，则调用generate_fix_code工具；如果不需要改进，则直接返回当前代码。";
+    } else {
+      systemInstructions = "根据用户需求生成或优化Three.js代码。";
+    }
+
+    // 如果有场景状态，添加场景保留指令
+    if (sceneState && sceneState.length > 0) {
+      systemInstructions +=
+        " 当前已有场景对象，您必须保留现有对象，并在其基础上添加或修改，而不是创建全新场景。";
+    }
 
     // 准备输入和会话配置
     const inputForAgent = {
@@ -439,6 +491,9 @@ export async function runAgentLoop(
       screenshotBase64: screenshot || "", // 直接使用正确的参数名称
       userRequirement: promptStr || "", // 为截图工具添加所需的参数
       renderingComplete: renderingComplete === true,
+      // 添加场景状态信息
+      sceneState: sceneState || [],
+      sceneHistory: sceneHistory || "",
       // 添加自驱动模式标志
       selfDriven,
     };

@@ -31,13 +31,6 @@ LangChain 接管这次函数调用并执行截图分析。
 
 
 
-
-
-
-
-
-
-
 flowchart 
   A[首次场景渲染] --> B[截图并调用分析Tool]
   B --> |合格| C[终止流程，输出结果]
@@ -46,5 +39,10 @@ flowchart
   E --> F[局部或全局重渲染]
   F --> B
 
+
+为什么可以保持agent自主调用能力：
+Agent调用截图工具的真正依据是lib/tools/screenshotTool.ts文件中定义并注册为analyze_screenshot的工具
+我们没有更改工具本身，只是更改了对该工具的一个API包装
+关键点：工具是通过ToolRegistry注册并由agentExecutor.ts中的逻辑调用的，与API端点路径无关
 
 

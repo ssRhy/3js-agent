@@ -1114,7 +1114,7 @@ export default function ThreeCodeEditor() {
       try {
         console.log("[Generate] Calling direct screenshot analysis API");
 
-        const analysisResponse = await fetch("/api/analyze-screenshot", {
+        const analysisResponse = await fetch("/api/screenshot", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
