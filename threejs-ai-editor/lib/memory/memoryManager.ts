@@ -575,10 +575,24 @@ export const saveAnalysisToMemory = async (
 };
 
 export const saveSceneStateToMemory = async (
-  userPrompt: string,
-  sceneState: SceneObject[]
+  userPromptOrState: string | SceneObject[],
+  sceneState?: SceneObject[]
 ) => {
-  return memoryManager.saveSceneStateToMemory(userPrompt, sceneState);
+  // 确定正确的参数
+  let userPrompt: string;
+  let state: SceneObject[];
+
+  if (Array.isArray(userPromptOrState)) {
+    // 单参数调用，第一个参数是sceneState
+    userPrompt = "Scene update " + new Date().toISOString();
+    state = userPromptOrState;
+  } else {
+    // 双参数调用，第一个参数是userPrompt，第二个是sceneState
+    userPrompt = userPromptOrState;
+    state = sceneState || [];
+  }
+
+  return memoryManager.saveSceneStateToMemory(userPrompt, state);
 };
 
 export const loadSceneHistoryFromMemory = async () => {

@@ -1,3 +1,5 @@
+// runInteractionFlow：负责用户意图理解、高层决策和资源协调
+// runAgentLoop：负责实际推理、工具使用和详细任务执行
 /* eslint-disable @typescript-eslint/no-unused-vars */
 // lib/agents/agentExecutor.ts
 import { AgentExecutor } from "langchain/agents";
@@ -48,49 +50,45 @@ const MAX_ITERATIONS = 10;
 // 全局会话历史 - 通过ChatMessageHistory保持多轮对话的连贯性
 const sessionHistory = new ChatMessageHistory();
 
-// 全局对话上下文管理器 - 用于存储重要的对话上下文信息
-const conversationContext = {
-  lastUserPrompt: "",
-  lastCodeGenerated: "",
-  lastModelUrls: [] as { url: string; name: string }[],
-  conversationSummary: "",
-};
+// 用于保持对话上下文的全局对象
+const conversationContext: {
+  lastUserPrompt?: string;
+  lastCodeGenerated?: string;
+  lastModelUrls?: { url: string; name: string }[];
+  conversationSummary?: string;
+} = {};
 
-/**
- * 获取消息历史
- */
+// 获取消息历史
 function getMessageHistory(): BaseChatMessageHistory {
   return sessionHistory;
 }
 
-/**
- * 更新对话上下文
- * @param key 上下文键
- * @param value 上下文值
- */
+// 更新对话上下文
 function updateConversationContext(
   key: keyof typeof conversationContext,
   value: unknown
 ): void {
-  (conversationContext as Record<string, unknown>)[key] = value;
-  console.log(`[Context] Updated "${key}" in conversation context`);
+  // 根据key类型分别处理
+  switch (key) {
+    case "lastUserPrompt":
+    case "lastCodeGenerated":
+    case "conversationSummary":
+      conversationContext[key] = value as string;
+      break;
+    case "lastModelUrls":
+      conversationContext[key] = value as { url: string; name: string }[];
+      break;
+  }
+  console.log(`[Memory] Updated conversation context: ${key}`);
 }
 
-/**
- * 安全地获取字符串值
- * @param value 任意值
- * @returns 字符串值
- */
+// 安全地获取字符串值
 function safeString(value: unknown): string {
   if (value === null || value === undefined) return "";
   return typeof value === "string" ? value : String(value);
 }
 
-/**
- * 保存用户交互到内存，增强对话连贯性
- * @param userPrompt 用户提示
- * @param agentResponse 代理响应
- */
+// 保存交互到内存
 async function saveInteractionToMemory(
   userPrompt: unknown,
   agentResponse: string
@@ -120,286 +118,163 @@ async function saveInteractionToMemory(
 }
 
 /**
- * 执行交互流程
- * 按照项目规定的流程：
- * 1. 用户输入自然语言提示
- * 2. AI代理分析请求并选择适当工具
- * 3. 生成3D模型（如果需要）
- * 4. 生成修改代码
- * 5. 截图检查场景并返回建议
- * 6. 接收建议然后修改代码
- * 7. 更新场景并实时渲染结果
+ * 运行交互流程
+ * 整合了代码优化、截图分析等功能的完整流程
+ *
+ * @param currentCode 当前代码
+ * @param userPrompt 用户提示
+ * @param screenshot 截图数据（可选）
+ * @param screenshotAnalysis 预先分析的截图结果（可选）
+ * @param sceneState 场景状态
+ * @param sceneHistory 场景历史
+ * @param lintErrors 代码检查错误
+ * @param modelSize 模型大小
+ * @param renderingComplete 渲染是否完成
+ * @param requestId 请求ID
  */
 export async function runInteractionFlow(
-  userPrompt: string | Record<string, unknown>,
   currentCode: string,
-  screenshot: string,
+  userPrompt: string,
+  screenshot?: string,
+  screenshotAnalysis?: {
+    status: string;
+    message: string;
+    scene_objects?: Array<Record<string, unknown>>;
+    matches_requirements?: boolean;
+    needs_improvements?: boolean;
+    recommendation?: string;
+    [key: string]: unknown;
+  },
+  sceneState?: SceneStateObject[],
+  sceneHistory?: Record<string, unknown>,
   lintErrors?: LintError[],
-  options: {
-    modelRequired?: boolean;
-    sceneState?: SceneStateObject[];
-    modelSize?: number;
-    renderingComplete?: boolean;
-  } = {},
-  res?: NextApiResponse
-): Promise<string | void> {
-  const { modelRequired, sceneState, modelSize, renderingComplete } = options;
-  const flowId = `flow_${Date.now()}`;
-  const promptStr = safeString(userPrompt);
-
-  // 确保lintErrors是一个数组
-  const safeLintErrors = Array.isArray(lintErrors) ? lintErrors : [];
-
+  modelSize?: number,
+  renderingComplete?: boolean,
+  requestId: string = `req_${Date.now()}`
+): Promise<Record<string, unknown>> {
   console.log(
-    `[${flowId}] Starting interaction flow for: "${promptStr.substring(
-      0,
-      50
-    )}..."${renderingComplete ? " (rendering complete)" : ""}`
+    `[${requestId}] Starting interaction flow with ${
+      screenshotAnalysis
+        ? "pre-analyzed screenshot"
+        : screenshot
+        ? "raw screenshot"
+        : "no screenshot"
+    }`
   );
 
   try {
-    // 1. 加载上下文数据
-    const historyContext = await prepareHistoryContext();
-    const modelHistory = await loadModelHistoryFromMemory();
-    const sceneHistory = await loadSceneHistoryFromMemory();
-
-    // 保存场景状态（如果提供）
+    // 保存场景状态到记忆
     if (sceneState && sceneState.length > 0) {
-      await saveSceneStateToMemory(promptStr, sceneState);
+      await saveSceneStateToMemory(sceneState);
     }
 
-    // 2. 分析用户需求，检测是否需要生成模型
-    const needsModelGeneration =
-      modelRequired === true ||
-      promptStr.toLowerCase().includes("模型") ||
-      promptStr.toLowerCase().includes("model") ||
-      promptStr.toLowerCase().includes("生成") ||
-      promptStr.toLowerCase().includes("generate");
+    // 获取历史上下文
+    const historyContext = await prepareHistoryContext();
+    console.log(
+      `[${requestId}] Prepared history context: ${
+        historyContext ? historyContext.substring(0, 100) + "..." : "none"
+      }`
+    );
 
-    // 3. 生成模型（如果需要）
-    let modelUrls: { url: string; name: string }[] = [];
-    if (needsModelGeneration) {
-      console.log(`[${flowId}] Generating 3D model based on user prompt`);
-      try {
-        const modelResult = await modelGenTool.invoke({
-          prompt: promptStr,
-          meshMode: "Quad",
-          quality: "medium",
-        });
+    // 获取模型历史记录
+    const modelHistory = await loadModelHistoryFromMemory();
 
-        if (typeof modelResult === "string") {
-          const parsedResult = JSON.parse(modelResult);
-          if (parsedResult.modelUrls && Array.isArray(parsedResult.modelUrls)) {
-            modelUrls = parsedResult.modelUrls.map(
-              (url: string | { url: string; name: string }) => {
-                if (typeof url === "string") {
-                  return { url, name: `model_${Date.now()}` };
-                }
-                return url;
-              }
-            );
-            console.log(
-              `[${flowId}] Generated model URLs: ${modelUrls
-                .map((m) => m.url)
-                .join(", ")}`
-            );
-          }
-        }
-      } catch (modelError) {
-        console.error(`[${flowId}] Model generation failed:`, modelError);
-      }
-    }
+    // 获取工具列表
+    const registry = ToolRegistry.getInstance();
+    const tools = registry.getAllTools();
 
-    // 4. 生成/修改代码
-    console.log(`[${flowId}] Generating/modifying Three.js code`);
-    let improvedCode = currentCode;
+    // 构建系统指令，根据是否有截图分析结果或原始截图而不同
+    let systemInstructions = "";
+    let suggestion = "";
 
-    // 准备代码生成指令
-    let codeInstruction = promptStr;
-    if (modelSize) {
-      codeInstruction += ` (注意：模型大小应为 ${modelSize} 单位，使用 autoScaleModel 函数)`;
-    }
-    if (modelUrls.length > 0) {
-      codeInstruction += ` (使用以下模型: ${modelUrls
-        .map((m) => m.url)
-        .join(", ")})`;
-    }
-
-    try {
-      const codeResult = await codeGenTool.invoke({
-        instruction: codeInstruction,
-      });
-
-      if (typeof codeResult === "string") {
-        try {
-          const parsedResult = JSON.parse(codeResult);
-          if (parsedResult.code) {
-            improvedCode = parsedResult.code;
-          }
-        } catch {
-          // 如果结果不是JSON格式，可能是直接返回的代码字符串
-          if (codeResult.includes("function setup")) {
-            improvedCode = codeResult;
-          }
-        }
-      }
+    if (screenshotAnalysis) {
+      // 使用预先分析的结果
       console.log(
-        `[${flowId}] Generated initial code, length: ${improvedCode.length}`
+        `[${requestId}] Using pre-analyzed screenshot result: ${screenshotAnalysis.status}`
       );
-    } catch (codeError) {
-      console.error(`[${flowId}] Initial code generation failed:`, codeError);
+      systemInstructions = "根据截图分析结果，优化或修复Three.js代码。";
+      suggestion = JSON.stringify(screenshotAnalysis);
+    } else if (screenshot && renderingComplete) {
+      // 需要分析截图
+      systemInstructions =
+        "你必须首先分析截图，然后根据分析结果进行代码生成或修改。" +
+        "步骤1: 调用analyze_screenshot工具分析当前场景。调用时必须使用完整的截图数据，不要修改或替换。" +
+        "步骤2: 根据分析结果，如果需要改进，则生成改进代码；如果不需要改进，则直接返回当前代码。";
+    } else {
+      // 无截图的情况
+      systemInstructions = "根据用户需求生成或优化Three.js代码。";
+      suggestion = "根据用户需求生成代码，无需考虑当前场景状态。";
     }
 
-    // 5. 分析截图，提供改进建议 (只在渲染完成后进行)
-    if (screenshot && renderingComplete === true) {
-      console.log(
-        `[${flowId}] Analyzing screenshot to get suggestions (rendering is complete)`
-      );
-      try {
-        const screenshotResult = await screenshotTool.invoke({
-          screenshotBase64: screenshot,
-          userRequirement: promptStr,
-        });
+    // 运行agent循环
+    console.log(
+      `[${requestId}] Running agent loop with system instructions: ${systemInstructions.substring(
+        0,
+        100
+      )}...`
+    );
 
-        const analysisResult = JSON.parse(screenshotResult);
-        const suggestion = analysisResult.analysis || "无法分析截图";
-        const needsImprovements = analysisResult.needs_improvements === true;
+    // 转换modelSize为布尔值
+    const modelRequired = modelSize !== undefined && modelSize > 0;
 
-        console.log(
-          `[${flowId}] Screenshot analysis: needs improvements = ${needsImprovements}`
-        );
+    let improvedCode = (await runAgentLoop(
+      suggestion,
+      currentCode,
+      tools,
+      userPrompt,
+      historyContext,
+      lintErrors,
+      modelRequired,
+      sceneState,
+      modelHistory,
+      typeof sceneHistory === "string"
+        ? sceneHistory
+        : JSON.stringify(sceneHistory || {}),
+      undefined, // res
+      screenshot,
+      renderingComplete === true, // 确保传递boolean类型
+      true // selfDriven
+    )) as string;
 
-        // 6. 基于截图分析改进代码（如果需要）
-        if (needsImprovements) {
-          console.log(
-            `[${flowId}] Improving code based on screenshot analysis`
-          );
-          try {
-            const improvedResult = await codeGenTool.invoke({
-              instruction: `基于以下分析改进Three.js代码：${suggestion}\n\n当前代码：${improvedCode.substring(
-                0,
-                500
-              )}${improvedCode.length > 500 ? "...(代码过长已截断)" : ""}`,
-            });
-
-            if (typeof improvedResult === "string") {
-              try {
-                const parsedResult = JSON.parse(improvedResult);
-                if (parsedResult.code) {
-                  improvedCode = parsedResult.code;
-                  console.log(
-                    `[${flowId}] Code improved based on screenshot analysis`
-                  );
-                }
-              } catch {
-                // 如果结果不是JSON格式，可能是直接返回的代码字符串
-                if (improvedResult.includes("function setup")) {
-                  improvedCode = improvedResult;
-                  console.log(
-                    `[${flowId}] Code improved based on screenshot analysis`
-                  );
-                }
-              }
-            }
-          } catch (improvementError) {
-            console.error(
-              `[${flowId}] Code improvement based on screenshot failed:`,
-              improvementError
-            );
-          }
-        }
-      } catch (analysisError) {
-        console.error(`[${flowId}] Screenshot analysis failed:`, analysisError);
-      }
-    } else if (screenshot) {
-      console.log(
-        `[${flowId}] Skipping screenshot analysis as rendering is not complete yet`
-      );
+    if (!improvedCode) {
+      improvedCode = currentCode;
     }
 
-    // 7. 使用Agent完成最终优化（如果需要）
-    if (safeLintErrors && safeLintErrors.length > 0) {
-      console.log(
-        `[${flowId}] Running final agent optimization for lint errors`
-      );
-      // 获取所有工具
-      const registry = ToolRegistry.getInstance();
-      const tools = registry.getAllTools();
-
-      // 如果需要模型生成，优先使用模型工具
-      let optimizedTools = tools;
-      if (needsModelGeneration) {
-        const modelTools = registry.getToolsByCategory(ToolCategory.MODEL);
-        const codeTools = registry.getToolsByCategory(ToolCategory.CODE);
-        const utilityTools = registry.getToolsByCategory(ToolCategory.UTILITY);
-        optimizedTools = [...modelTools, ...codeTools, ...utilityTools];
-      }
-
-      try {
-        // 运行完整的Agent优化循环
-        const agentResult = await runAgentLoop(
-          "请修复代码中的语法错误",
-          improvedCode,
-          optimizedTools,
-          promptStr,
-          historyContext,
-          safeLintErrors,
-          needsModelGeneration,
-          sceneState,
-          modelHistory,
-          sceneHistory,
-          undefined,
-          undefined,
-          undefined
-        );
-
-        if (agentResult && typeof agentResult === "string") {
-          improvedCode = agentResult;
-          console.log(`[${flowId}] Code optimized by agent`);
-        }
-      } catch (agentError) {
-        console.error(`[${flowId}] Agent optimization failed:`, agentError);
-      }
-    }
-
-    // 8. 提取模型URL信息（如果有）用于响应
+    // 提取结果中的模型信息
     const extractedModelInfo = extractModelUrls(improvedCode);
-    // 合并手动生成和代码中的模型URL
-    if (modelUrls.length > 0) {
-      if (!extractedModelInfo.modelUrls) {
-        extractedModelInfo.modelUrls = [];
-      }
 
-      // 确保所有 URL 都是正确格式
-      modelUrls.forEach((model) => {
-        if (!extractedModelInfo.modelUrls!.some((m) => m.url === model.url)) {
-          extractedModelInfo.modelUrls!.push(model);
-        }
-      });
-    }
+    // 保存代码到交互记忆
+    updateConversationContext(
+      "lastCodeGenerated",
+      improvedCode.substring(0, 200) + "..."
+    );
 
-    // 9. 返回结果
-    console.log(`[${flowId}] Interaction flow completed successfully`);
-    if (res && typeof res.status === "function") {
-      return res.status(200).json({
-        directCode: improvedCode,
-        ...extractedModelInfo,
-      });
-    }
+    // 如果模型URL列表中有模型，添加到结果中
+    const modelUrls = extractedModelInfo.modelUrls || [];
 
-    return improvedCode;
+    // 返回结果
+    const result = {
+      directCode: improvedCode,
+      ...(extractedModelInfo.modelUrl
+        ? { modelUrl: extractedModelInfo.modelUrl }
+        : {}),
+      ...(modelUrls.length > 0 ? { modelUrls } : {}),
+    };
+
+    console.log(`[${requestId}] Interaction flow completed successfully`);
+    return result;
   } catch (error) {
-    console.error(`[${flowId}] Interaction flow failed:`, error);
-    if (res && typeof res.status === "function") {
-      return res.status(500).json({ error: "处理失败", details: error });
-    }
-    throw error;
+    console.error(`[${requestId}] Interaction flow failed:`, error);
+    return {
+      error: "处理失败",
+      details: error instanceof Error ? error.message : String(error),
+    };
   }
 }
 
 /**
  * 运行 agent 循环 - 用于复杂场景的代码优化
- * 增强版本：添加了更强大的内存管理和对话连贯性支持
+ * 增强版本：添加了更强大的内存管理、对话连贯性支持和自驱动模式
  */
 export async function runAgentLoop(
   suggestion: string,
@@ -414,13 +289,16 @@ export async function runAgentLoop(
   sceneHistory?: string,
   res?: NextApiResponse,
   screenshot?: string,
-  renderingComplete?: boolean
+  renderingComplete?: boolean,
+  selfDriven: boolean = false // 是否启用自驱动模式
 ): Promise<string | void> {
   const requestId = `req_${Date.now()}`;
   const promptStr = safeString(userPrompt);
 
   console.log(
-    `[${requestId}] Starting agent loop: "${promptStr.substring(0, 50)}..."`
+    `[${requestId}] Starting agent loop: "${promptStr.substring(0, 50)}..."${
+      selfDriven ? " (self-driven mode)" : ""
+    }`
   );
 
   // 使用工具注册表获取工具（如果未提供）
@@ -443,6 +321,37 @@ export async function runAgentLoop(
     }
   }
 
+  // 检查截图数据的有效性
+  if (screenshot) {
+    console.log(
+      `[${requestId}] [Screenshot Check] Screenshot data type: ${typeof screenshot}, ` +
+        `length: ${screenshot ? screenshot.length : 0} characters, ` +
+        `starts with data: ${screenshot && screenshot.startsWith("data:")}`
+    );
+
+    // 确认截图数据有效
+    if (
+      !screenshot ||
+      screenshot === "<screenshot>" ||
+      screenshot.length < 100
+    ) {
+      console.warn(
+        `[${requestId}] [Screenshot Check] Invalid screenshot data detected. Will not use screenshot analysis.`
+      );
+      // 如果截图无效，设置为undefined以避免后续错误
+      screenshot = undefined;
+      renderingComplete = false;
+    }
+  }
+
+  // 在LangChain.js 0.3中，不再需要分离的自驱动逻辑，因为可以使用函数调用链
+  // 我们将使用单次agent执行，在executor内部完成"截图分析→代码生成"的闭环
+  if (selfDriven && screenshot && renderingComplete === true) {
+    console.log(
+      `[${requestId}] Using integrated LangChain.js 0.3 agent workflow for screenshot analysis and code generation`
+    );
+  }
+
   try {
     // 保存当前用户提示到对话上下文
     updateConversationContext("lastUserPrompt", promptStr);
@@ -462,7 +371,8 @@ export async function runAgentLoop(
     // 添加有关截图分析的上下文信息(如果有)
     if (screenshot && renderingComplete === true) {
       enhancedHistoryContext +=
-        "\n\n场景截图已提供，你可以使用analyze_screenshot工具分析当前场景是否符合需求。";
+        "\n\n场景截图已提供，你必须首先使用analyze_screenshot工具分析当前场景是否符合需求，然后根据分析结果决定下一步行动。" +
+        "调用analyze_screenshot工具时，必须使用完整的screenshot参数，切勿替换或修改。";
     }
 
     // 确保lintErrors是一个数组
@@ -494,10 +404,30 @@ export async function runAgentLoop(
       historyMessagesKey: "chat_history",
     });
 
+    // 创建自定义工具重载，以确保正确传递截图数据
+    const overriddenTools = tools;
+    if (screenshot) {
+      // 记录截图长度，用于调试
+      console.log(
+        `[${requestId}] [Screenshot Check] Preparing screenshot data for analyze_screenshot tool, ` +
+          `length: ${screenshot.length} bytes`
+      );
+
+      // 为简化起见，我们在这里不创建新的覆盖工具，而是依赖正确的输入参数
+    }
+
+    // 准备系统指令，确保截图优先分析
+    const systemInstructions =
+      screenshot && renderingComplete
+        ? "你必须首先分析截图，然后根据分析结果进行代码生成或修改。" +
+          "步骤1: 调用analyze_screenshot工具分析当前场景。调用时必须使用完整的截图数据，不要修改或替换。" +
+          "步骤2: 根据分析结果，如果需要改进，则调用generate_fix_code工具；如果不需要改进，则直接返回当前代码。"
+        : "根据用户需求生成或优化Three.js代码。";
+
     // 准备输入和会话配置
     const inputForAgent = {
       input: promptStr,
-      suggestion,
+      suggestion: systemInstructions, // 使用明确的指令序列替代简单的suggestion
       currentCode,
       userPrompt: promptStr || "无特定需求",
       historyContext: enhancedHistoryContext || "", // 使用增强版历史上下文
@@ -506,8 +436,11 @@ export async function runAgentLoop(
       // 添加上下文信息
       conversationSummary: conversationContext.conversationSummary || "",
       // 添加截图相关信息，允许agent在循环中使用
-      screenshot: screenshot || "",
+      screenshotBase64: screenshot || "", // 直接使用正确的参数名称
+      userRequirement: promptStr || "", // 为截图工具添加所需的参数
       renderingComplete: renderingComplete === true,
+      // 添加自驱动模式标志
+      selfDriven,
     };
 
     const memoryConfig = {
@@ -519,6 +452,10 @@ export async function runAgentLoop(
     };
 
     try {
+      console.log(
+        `[${requestId}] Invoking agent executor with LangChain.js 0.3 execution model`
+      );
+
       // 执行 agent
       const result = await executorWithMemory.invoke(
         inputForAgent,
@@ -544,7 +481,7 @@ export async function runAgentLoop(
       );
 
       // 返回结果
-      if (res && typeof res.status === "function") {
+      if (res && typeof res.status === "function" && !res.writableEnded) {
         return res.status(200).json({
           directCode: cleanedOutput,
           suggestion,
@@ -561,58 +498,6 @@ export async function runAgentLoop(
     console.error(`[${requestId}] Error running agent loop:`, error);
     return currentCode;
   }
-}
-
-/**
- * 运行完整优化流程 - 包括截图分析和代码生成
- * 现在改为直接调用runAgentLoop以便在agent循环中使用截图分析
- */
-export async function runCompleteOptimizationFlow(
-  screenshot: string,
-  code: string,
-  tools: Tool[],
-  prompt?: string | Record<string, unknown>,
-  lintErrors?: LintError[],
-  options: {
-    modelRequired?: boolean;
-    sceneState?: SceneStateObject[];
-    sceneHistory?: string;
-    modelSize?: number;
-    renderingComplete?: boolean;
-  } = {},
-  res?: NextApiResponse
-): Promise<string | void> {
-  console.log(
-    `[Legacy] Using runCompleteOptimizationFlow, consider switching to runInteractionFlow`
-  );
-
-  // 获取必要数据
-  const { modelRequired, sceneState, sceneHistory, renderingComplete } =
-    options;
-
-  // 准备上下文数据
-  const historyContext = await prepareHistoryContext();
-  const modelHistory = await loadModelHistoryFromMemory();
-
-  // 确保lintErrors是一个数组
-  const safeLintErrors = Array.isArray(lintErrors) ? lintErrors : [];
-
-  // 使用agent循环处理，将screenshot直接传递给agent
-  return runAgentLoop(
-    "根据用户需求和截图分析生成Three.js代码", // 初始建议
-    code,
-    tools,
-    prompt || "",
-    historyContext,
-    safeLintErrors,
-    modelRequired,
-    sceneState,
-    modelHistory,
-    sceneHistory,
-    res,
-    screenshot, // 传递截图
-    renderingComplete // 传递渲染状态
-  );
 }
 
 // 确保工具已初始化

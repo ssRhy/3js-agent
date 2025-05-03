@@ -2,27 +2,23 @@
 import { NextApiRequest, NextApiResponse } from "next";
 import {
   runAgentLoop,
-  runCompleteOptimizationFlow,
   clearSessionState,
+  runInteractionFlow,
 } from "../../lib/agents/agentExecutor";
 import { ToolRegistry } from "../../lib/tools/toolRegistry";
 import {
-  loadLatestCodeState,
   saveSceneStateToMemory,
   loadSceneHistoryFromMemory,
   loadModelHistoryFromMemory,
   prepareHistoryContext,
 } from "../../lib/memory/memoryManager";
-import { analyzeScreenshotDirectly } from "../../pages/api/screenshotAnalyzer";
 import { LintError } from "../../lib/types/codeTypes";
 import { SceneStateObject } from "../../lib/types/sceneTypes";
+import { AgentRequest } from "./agent";
 
 /**
  * Agent API 的主要处理函数
  * 负责协调各种 AI 操作，包括截图分析、代码优化等
- *
- * @param req NextApiRequest 对象
- * @param res NextApiResponse 对象
  */
 export default async function handler(
   req: NextApiRequest,
@@ -42,30 +38,23 @@ export default async function handler(
   }
 
   // 解析请求参数
-  const { action, code, prompt, screenshot, lintErrors, modelRequired } =
-    req.body;
+  const body = req.body as AgentRequest;
+  const {
+    action,
+    code = "",
+    prompt = "",
+    screenshot,
+    screenshotAnalysis,
+    lintErrors,
+    modelSize,
+    renderingComplete,
+  } = body;
 
   // 将 sceneState 转换为正确的类型
-  const sceneState = req.body.sceneState as SceneStateObject[] | undefined;
+  const sceneState = body.sceneState;
 
   // 获取场景历史（如果提供）
-  const sceneHistory = req.body.sceneHistory;
-
-  // 获取渲染完成状态
-  const renderingComplete = req.body.renderingComplete as boolean | undefined;
-  console.log(
-    `[${requestId}] Rendering complete status: ${
-      renderingComplete === true ? "Complete" : "Not complete"
-    }`
-  );
-
-  // 记录 API 调用详情
-  console.log(
-    `[${requestId}] Agent API called with action: ${action}, prompt: ${
-      typeof prompt === "string" ? prompt.substring(0, 50) + "..." : "N/A"
-    }, sceneState: ${sceneState ? `${sceneState.length} objects` : "none"}, ` +
-      `sceneHistory: ${sceneHistory ? "provided" : "none"}`
-  );
+  const sceneHistory = body.sceneHistory;
 
   try {
     // 根据 action 类型处理不同的请求
@@ -76,10 +65,11 @@ export default async function handler(
           res,
           requestId,
           screenshot,
+          screenshotAnalysis,
           code,
           prompt,
           lintErrors,
-          modelRequired,
+          modelSize,
           sceneState,
           sceneHistory,
           renderingComplete
@@ -93,7 +83,7 @@ export default async function handler(
           code,
           prompt,
           lintErrors,
-          modelRequired,
+          modelSize,
           sceneState,
           sceneHistory
         );
@@ -137,166 +127,55 @@ async function handleScreenshotAnalysis(
   req: NextApiRequest,
   res: NextApiResponse,
   requestId: string,
-  screenshot: string,
+  screenshot: string | undefined,
+  screenshotAnalysis: AgentRequest["screenshotAnalysis"] | undefined,
   code: string,
-  prompt?: string,
+  prompt: string,
   lintErrors?: LintError[],
-  modelRequired?: boolean,
+  modelSize?: number,
   sceneState?: SceneStateObject[],
-  sceneHistory?: string,
+  sceneHistory?: Record<string, unknown>,
   renderingComplete?: boolean
 ) {
   console.log(`[${requestId}] Processing screenshot analysis request`);
 
-  // 获取模型大小参数
-  const modelSizeParam = req.body.modelSize as number | undefined;
-  if (modelSizeParam) {
-    console.log(
-      `[${requestId}] Model size parameter provided: ${modelSizeParam}`
-    );
-  }
-
   // 验证必需参数
-  if (!screenshot || !code) {
+  if ((!screenshot && !screenshotAnalysis) || !code) {
     console.log(`[${requestId}] Missing required parameters`);
     return res.status(400).json({
-      error: "Missing required parameters: screenshot and code",
+      error:
+        "Missing required parameters: need either screenshot or screenshotAnalysis, and code",
     });
   }
 
   try {
-    // 使用完整优化流程，整合截图分析和代码生成
-    console.log(`[${requestId}] Running complete optimization flow`);
+    // 使用改进的交互流程，支持自驱动截图分析和代码修复
+    console.log(
+      `[${requestId}] Running enhanced interaction flow with ${
+        screenshotAnalysis ? "pre-analyzed screenshot" : "raw screenshot"
+      }`
+    );
 
-    // 获取所有可用工具
-    const toolRegistry = ToolRegistry.getInstance();
-    const tools = toolRegistry.getAllTools();
-
-    // 检查工具是否存在
-    if (!tools || tools.length === 0) {
-      console.error(
-        `[${requestId}] No tools found in registry! This will cause agent creation to fail.`
-      );
-    } else {
-      console.log(
-        `[${requestId}] Found ${tools.length} tools: ${tools
-          .map((t) => t.name)
-          .join(", ")}`
-      );
-    }
-
-    // 使用整合的优化流程
-    return await runCompleteOptimizationFlow(
-      screenshot,
+    const result = await runInteractionFlow(
       code,
-      tools,
       prompt,
+      screenshot,
+      screenshotAnalysis,
+      sceneState,
+      sceneHistory,
       lintErrors,
-      {
-        modelRequired,
-        sceneState,
-        sceneHistory,
-        modelSize: modelSizeParam,
-        renderingComplete,
-      },
-      res
+      modelSize,
+      Boolean(renderingComplete),
+      requestId
     );
+
+    return res.status(200).json(result);
   } catch (error) {
-    console.error(
-      `[${requestId}] Complete optimization flow failed, attempting fallback:`,
-      error
-    );
-
-    // 如果整合流程失败，尝试分步执行
-    try {
-      // 1. 先执行截图分析（只在渲染完成时）
-      let suggestion = "";
-      if (renderingComplete === true) {
-        console.log(
-          `[${requestId}] [FALLBACK] Performing screenshot analysis (rendering complete)`
-        );
-        suggestion = await analyzeScreenshotDirectly(
-          screenshot,
-          code,
-          prompt,
-          renderingComplete
-        );
-      } else {
-        console.log(
-          `[${requestId}] [FALLBACK] Skipping screenshot analysis as rendering is not complete`
-        );
-        suggestion =
-          "Generate initial Three.js code based on user requirements without screenshot analysis.";
-      }
-
-      // 2. 加载上下文数据
-      const currentCodeState = await loadLatestCodeState(code);
-      const historyContext = await prepareHistoryContext();
-      const loadedSceneHistory = await loadSceneHistoryFromMemory();
-      const modelHistory = await loadModelHistoryFromMemory();
-
-      // 3. 保存当前场景状态
-      if (sceneState && sceneState.length > 0) {
-        await saveSceneStateToMemory(prompt || "", sceneState);
-        console.log(
-          `[${requestId}] Saved scene state with ${sceneState.length} objects to memory`
-        );
-      } else {
-        // 即使没有对象，也保存空场景状态，确保历史记录的连续性
-        await saveSceneStateToMemory(prompt || "", []);
-        console.log(`[${requestId}] Saved empty scene state to memory`);
-      }
-
-      // 4. 获取工具
-      const toolRegistry = ToolRegistry.getInstance();
-      const tools = toolRegistry.getAllTools();
-
-      // 检查工具是否存在（fallback 路径）
-      if (!tools || tools.length === 0) {
-        console.error(
-          `[${requestId}] [FALLBACK] No tools found in registry! This will cause agent creation to fail.`
-        );
-        return res.status(500).json({
-          error: "Agent initialization failed: No tools available",
-        });
-      } else {
-        console.log(
-          `[${requestId}] [FALLBACK] Found ${tools.length} tools: ${tools
-            .map((t) => t.name)
-            .join(", ")}`
-        );
-      }
-
-      // 5. 运行 agent 循环
-      console.log(`[${requestId}] Running agent loop with fallback approach`);
-      return await runAgentLoop(
-        suggestion,
-        currentCodeState,
-        tools,
-        prompt,
-        historyContext,
-        lintErrors,
-        modelRequired,
-        sceneState,
-        modelHistory,
-        sceneHistory || loadedSceneHistory,
-        res,
-        screenshot,
-        renderingComplete
-      );
-    } catch (fallbackError) {
-      console.error(
-        `[${requestId}] Fallback approach also failed:`,
-        fallbackError
-      );
-      return res.status(500).json({
-        error: "Screenshot analysis failed even with fallback approach",
-        details:
-          fallbackError instanceof Error
-            ? fallbackError.message
-            : "Unknown error",
-      });
-    }
+    console.error(`[${requestId}] Interaction flow failed:`, error);
+    return res.status(500).json({
+      error: "处理失败",
+      details: error instanceof Error ? error.message : String(error),
+    });
   }
 }
 
@@ -309,40 +188,30 @@ async function handleCodeOptimization(
   res: NextApiResponse,
   requestId: string,
   code: string,
-  prompt?: string,
+  prompt: string,
   lintErrors?: LintError[],
-  modelRequired?: boolean,
+  modelSize?: number,
   sceneState?: SceneStateObject[],
-  sceneHistory?: string
+  sceneHistory?: Record<string, unknown>
 ) {
   console.log(`[${requestId}] Processing code optimization request`);
 
-  // 验证必需参数
-  if (!code) {
-    console.log(`[${requestId}] Missing required parameter: code`);
-    return res.status(400).json({
-      error: "Missing required parameter: code",
-    });
-  }
-
   try {
     // 加载必要的上下文
-    const currentCodeState = await loadLatestCodeState(code);
     const historyContext = await prepareHistoryContext();
 
     // 加载历史数据
     const modelHistory = await loadModelHistoryFromMemory();
-    const loadedSceneHistory = await loadSceneHistoryFromMemory();
 
     // 保存当前场景状态（如果有）
     if (sceneState && sceneState.length > 0) {
-      await saveSceneStateToMemory(prompt || "", sceneState);
+      await saveSceneStateToMemory(prompt, sceneState);
       console.log(
         `[${requestId}] Saved scene state with ${sceneState.length} objects to memory`
       );
     } else {
       // 即使没有对象，也保存空场景状态，确保历史记录的连续性
-      await saveSceneStateToMemory(prompt || "", []);
+      await saveSceneStateToMemory(prompt, []);
       console.log(`[${requestId}] Saved empty scene state to memory`);
     }
 
@@ -350,35 +219,21 @@ async function handleCodeOptimization(
     const toolRegistry = ToolRegistry.getInstance();
     const tools = toolRegistry.getAllTools();
 
-    // 检查工具是否存在
-    if (!tools || tools.length === 0) {
-      console.error(
-        `[${requestId}] No tools found in registry! This will cause agent creation to fail.`
-      );
-      return res.status(500).json({
-        error: "Agent initialization failed: No tools available",
-      });
-    } else {
-      console.log(
-        `[${requestId}] Found ${
-          tools.length
-        } tools in code optimization: ${tools.map((t) => t.name).join(", ")}`
-      );
-    }
-
     // 使用 agent 优化代码
     console.log(`[${requestId}] Running agent loop for code optimization`);
     return await runAgentLoop(
       "", // 无需截图分析，直接开始优化
-      currentCodeState,
+      code,
       tools,
       prompt,
       historyContext,
       lintErrors,
-      modelRequired,
+      modelSize !== undefined && modelSize > 0, // 转换为布尔值
       sceneState,
       modelHistory,
-      sceneHistory || loadedSceneHistory,
+      typeof sceneHistory === "string"
+        ? sceneHistory
+        : JSON.stringify(sceneHistory || {}),
       res
     );
   } catch (error) {
@@ -399,7 +254,7 @@ async function handleModelGeneration(
   res: NextApiResponse,
   requestId: string,
   code: string,
-  prompt?: string
+  prompt: string
 ) {
   console.log(`[${requestId}] Processing model generation request`);
 
@@ -413,7 +268,6 @@ async function handleModelGeneration(
 
   try {
     // 加载必要的上下文
-    const currentCodeState = await loadLatestCodeState(code);
     const historyContext = await prepareHistoryContext();
     const sceneHistory = await loadSceneHistoryFromMemory();
     const modelHistory = await loadModelHistoryFromMemory();
@@ -422,22 +276,6 @@ async function handleModelGeneration(
     const toolRegistry = ToolRegistry.getInstance();
     const tools = toolRegistry.getAllTools();
 
-    // 检查工具是否存在
-    if (!tools || tools.length === 0) {
-      console.error(
-        `[${requestId}] No tools found in registry! This will cause agent creation to fail.`
-      );
-      return res.status(500).json({
-        error: "Agent initialization failed: No tools available",
-      });
-    } else {
-      console.log(
-        `[${requestId}] Found ${
-          tools.length
-        } tools for model generation: ${tools.map((t) => t.name).join(", ")}`
-      );
-    }
-
     // 创建专门针对模型生成的建议
     const suggestion = `根据用户需求"${prompt}"生成适合的3D模型。`;
 
@@ -445,7 +283,7 @@ async function handleModelGeneration(
     console.log(`[${requestId}] Running agent loop for model generation`);
     return await runAgentLoop(
       suggestion,
-      currentCodeState,
+      code,
       tools,
       prompt,
       historyContext,

@@ -162,13 +162,49 @@ export default function ThreeCodeEditor() {
       // Mark rendering as complete after the first few frames
       // This ensures all assets are loaded and visible
       if (!renderingCompleteRef.current) {
-        // Set a small timeout to ensure all models and textures are loaded
-        setTimeout(() => {
-          renderingCompleteRef.current = true;
+        // 检查场景中的模型是否都已加载完成
+        let allModelsLoaded = true;
+        let modelCount = 0;
+        let loadedModelCount = 0;
+
+        // 检查是否有正在加载的模型
+        if (isModelLoading) {
+          allModelsLoaded = false;
           console.log(
-            "[Rendering] Scene rendering completed and ready for screenshot"
+            "[Rendering] Model is still loading, waiting for completion"
           );
-        }, 1000); // Wait 1 second to ensure everything is loaded
+        } else {
+          // 检查场景中的模型是否完整
+          scene.traverse((child) => {
+            // 检查GLTF模型的完整性
+            if (child.userData && child.userData.modelId) {
+              modelCount++;
+              const model = child as THREE.Object3D;
+              if (model.visible && model.children.length > 0) {
+                loadedModelCount++;
+              } else {
+                allModelsLoaded = false;
+              }
+            }
+          });
+
+          if (modelCount > 0) {
+            console.log(
+              `[Rendering] Model load status: ${loadedModelCount}/${modelCount} models ready`
+            );
+          }
+        }
+
+        if (allModelsLoaded) {
+          // 使用较长的延迟确保所有纹理和资源都已加载
+          // 延长延迟时间以确保更可靠
+          setTimeout(() => {
+            renderingCompleteRef.current = true;
+            console.log(
+              "[Rendering] Scene rendering completed and ready for screenshot. All models loaded successfully."
+            );
+          }, 2000); // 延长至2秒以确保完全加载
+        }
       }
     };
     animate();
@@ -607,6 +643,27 @@ export default function ThreeCodeEditor() {
     return scale;
   };
 
+  // 验证代码的函数，检查代码是否包含setup函数、括号是否平衡、语法是否有效
+  const validateCode = (codeToValidate: string) => {
+    const hasSetupFn = codeToValidate.includes("function setup");
+
+    const openBraces = (codeToValidate.match(/\{/g) || []).length;
+    const closeBraces = (codeToValidate.match(/\}/g) || []).length;
+    const balancedBraces = openBraces === closeBraces;
+
+    const hasValidSyntax = (() => {
+      try {
+        new Function(`"use strict"; ${codeToValidate}`);
+        return true;
+      } catch (e) {
+        console.error("代码语法检查失败:", e);
+        return false;
+      }
+    })();
+
+    return hasSetupFn && balancedBraces && hasValidSyntax;
+  };
+
   // 添加全局窗口函数，使Agent生成的代码可以直接调用自动缩放功能
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -888,7 +945,7 @@ export default function ThreeCodeEditor() {
     }
   }, [code, addToHistory, error]);
 
-  // Update the captureScreenshot function to wait for rendering completion
+  // 使用原生Three.js渲染器和备用html2canvas结合的截图方法
   const captureScreenshot = async () => {
     console.log("[Screenshot] Starting screenshot capture process...");
     if (!threeRef.current) {
@@ -896,130 +953,56 @@ export default function ThreeCodeEditor() {
       return null;
     }
 
-    const { scene, camera, renderer } = threeRef.current;
-    if (!scene || !camera || !renderer) {
-      console.warn("[Screenshot] Failed: Three.js components incomplete", {
-        hasScene: !!scene,
-        hasCamera: !!camera,
-        hasRenderer: !!renderer,
-      });
-      return null;
-    }
-
-    // Wait for rendering to complete if not already done
-    if (!renderingCompleteRef.current) {
-      console.log("[Screenshot] Waiting for rendering to complete...");
-      return new Promise<string | null>((resolve) => {
-        // Check rendering status every 100ms
-        const checkInterval = setInterval(() => {
-          if (renderingCompleteRef.current) {
-            clearInterval(checkInterval);
-            console.log(
-              "[Screenshot] Rendering complete, capturing screenshot now"
-            );
-
-            try {
-              // Force a final render to ensure latest state
-              renderer.render(scene, camera);
-
-              const canvas = renderer.domElement;
-              if (!canvas) {
-                console.warn("[Screenshot] Failed: Canvas element not found");
-                resolve(null);
-                return;
-              }
-
-              const imageBase64 = canvas.toDataURL("image/png");
-              console.log(
-                "[Screenshot] Base64 data generated after rendering complete, length:",
-                imageBase64.length,
-                "bytes"
-              );
-
-              if (
-                imageBase64 === "data:," ||
-                !imageBase64.startsWith("data:image/png;base64,")
-              ) {
-                console.error("[Screenshot] Invalid base64 data format", {
-                  isEmpty: imageBase64 === "data:",
-                  hasCorrectPrefix: imageBase64.startsWith(
-                    "data:image/png;base64,"
-                  ),
-                });
-                resolve(null);
-                return;
-              }
-
-              console.log(
-                "[Screenshot] Successfully captured scene after rendering completed"
-              );
-              resolve(imageBase64);
-            } catch (err) {
-              console.error("[Screenshot] Capture failed with error:", err);
-              resolve(null);
-            }
-          }
-        }, 100);
-
-        // Set a timeout to prevent indefinite waiting
-        setTimeout(() => {
-          clearInterval(checkInterval);
-          console.warn(
-            "[Screenshot] Rendering completion timeout, capturing anyway"
-          );
-
-          try {
-            renderer.render(scene, camera);
-            const canvas = renderer.domElement;
-            const imageBase64 = canvas ? canvas.toDataURL("image/png") : null;
-            resolve(imageBase64);
-          } catch (err) {
-            console.error("[Screenshot] Timeout capture failed:", err);
-            resolve(null);
-          }
-        }, 5000); // 5 second timeout
-      });
-    }
-
     try {
-      console.log(
-        "[Screenshot] Rendering already complete, capturing immediately"
-      );
-      // Force a final render to ensure latest state
-      renderer.render(scene, camera);
-
-      const canvas = renderer.domElement;
-      if (!canvas) {
-        console.warn("[Screenshot] Failed: Canvas element not found");
+      // 直接从Three.js渲染器获取截图
+      const { renderer, scene, camera } = threeRef.current;
+      if (!renderer || !scene || !camera) {
+        console.warn("[Screenshot] Three.js components incomplete");
         return null;
       }
 
-      console.log("[Screenshot] Converting canvas to base64...");
-      const imageBase64 = canvas.toDataURL("image/png");
+      // 强制重新渲染场景以确保获取最新状态
+      renderer.render(scene, camera);
+
+      // 直接从Three.js canvas获取图像数据
+      const threeCanvas = renderer.domElement;
+      if (!threeCanvas) {
+        console.warn("[Screenshot] Canvas element not found");
+        return null;
+      }
+
+      // 等待一帧以确保渲染完成
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      // 再次渲染确保最新状态
+      renderer.render(scene, camera);
+
+      // 直接从canvas获取base64数据
+      const imageBase64 = threeCanvas.toDataURL("image/png");
       console.log(
-        "[Screenshot] Base64 data generated, length:",
+        "[Screenshot] Base64 data generated directly from Three.js, length:",
         imageBase64.length,
         "bytes"
       );
 
+      // 验证数据有效性
       if (
         imageBase64 === "data:," ||
-        !imageBase64.startsWith("data:image/png;base64,")
+        !imageBase64.startsWith("data:image/png;base64,") ||
+        imageBase64.length < 1000 // 增加最小长度要求以确保质量
       ) {
-        console.error("[Screenshot] Invalid base64 data format", {
-          isEmpty: imageBase64 === "data:",
-          hasCorrectPrefix: imageBase64.startsWith("data:image/png;base64,"),
-        });
+        console.error(
+          "[Screenshot] Invalid or too small base64 data from direct capture"
+        );
         return null;
       }
 
-      console.log("[Screenshot] Successfully captured scene");
+      console.log(
+        "[Screenshot] Successfully captured scene directly from Three.js"
+      );
       return imageBase64;
     } catch (err) {
-      console.error("[Screenshot] Capture failed with error:", err, {
-        errorType: err instanceof Error ? err.constructor.name : typeof err,
-        errorMessage: err instanceof Error ? err.message : String(err),
-      });
+      console.error("[Screenshot] Capture failed with error:", err);
       setError(
         "无法捕获场景截图: " +
           (err instanceof Error ? err.message : String(err))
@@ -1028,51 +1011,35 @@ export default function ThreeCodeEditor() {
     }
   };
 
-  // Add a function to safely apply code to the scene before screenshot
+  // 简化的应用代码到场景函数
   const applySafelyToScene = async (codeToApply: string): Promise<boolean> => {
     try {
       console.log("[Rendering] Applying code to scene before screenshot");
-      if (!validateCode(codeToApply)) {
-        console.warn("[Rendering] Invalid code, not applying to scene");
+      if (!validateCode(codeToApply) || !threeRef.current) {
         return false;
       }
 
-      // Reset rendering complete flag
+      // 重置渲染完成标志
       renderingCompleteRef.current = false;
 
-      // Check if scene is initialized
-      if (!threeRef.current) {
-        console.warn("[Rendering] Three.js scene not initialized");
-        return false;
-      }
-
-      // Clear previous errors
+      // 清除错误
       setError("");
 
-      // Apply the code to the scene
-      const { scene, camera, controls, renderer } = threeRef.current;
-      if (!scene || !camera || !controls || !renderer) {
-        console.warn("[Rendering] Scene components not available");
+      // 执行代码逻辑保持不变
+      const { scene, camera, renderer } = threeRef.current;
+      if (!scene || !camera || !renderer) {
         return false;
       }
 
-      // Execute the code with scene objects
       try {
-        // Extract and execute setup function
-        const setupMatch = codeToApply.match(
-          /function\s+setup\s*\([^)]*\)\s*{([\s\S]*?)}/
-        );
-        if (!setupMatch || !setupMatch[1]) {
-          console.warn("[Rendering] Could not find setup function");
-          return false;
-        }
+        // 强制执行几帧渲染确保场景更新
+        renderer.render(scene, camera);
 
-        // Force render a few frames to ensure everything loads
-        for (let i = 0; i < 5; i++) {
-          renderer.render(scene, camera);
-          await new Promise((resolve) => setTimeout(resolve, 50));
-        }
+        // 简单延时确保渲染
+        await new Promise((resolve) => setTimeout(resolve, 500));
 
+        // 标记渲染完成
+        renderingCompleteRef.current = true;
         return true;
       } catch (execError) {
         console.error("[Rendering] Error executing code:", execError);
@@ -1084,26 +1051,7 @@ export default function ThreeCodeEditor() {
     }
   };
 
-  const validateCode = (codeToValidate: string) => {
-    const hasSetupFn = codeToValidate.includes("function setup");
-
-    const openBraces = (codeToValidate.match(/\{/g) || []).length;
-    const closeBraces = (codeToValidate.match(/\}/g) || []).length;
-    const balancedBraces = openBraces === closeBraces;
-
-    const hasValidSyntax = (() => {
-      try {
-        new Function(`"use strict"; ${codeToValidate}`);
-        return true;
-      } catch (e) {
-        console.error("代码语法检查失败:", e);
-        return false;
-      }
-    })();
-
-    return hasSetupFn && balancedBraces && hasValidSyntax;
-  };
-
+  // 简化的生成处理函数
   const handleGenerate = async () => {
     if (!prompt) {
       setError("请输入指令");
@@ -1114,24 +1062,30 @@ export default function ThreeCodeEditor() {
       setIsLoading(true);
       setError("");
 
-      console.log(
-        "[Screenshot] Initiating screenshot capture for scene analysis..."
-      );
-      // Make sure renderingCompleteRef.current is false before capturing
-      // so that captureScreenshot will wait for rendering to complete
-      renderingCompleteRef.current = false;
-      // Apply the current code to ensure we're capturing the right scene
+      console.log("[Generate] Starting generation process with prompt");
+
+      // 应用当前代码到场景
       await applySafelyToScene(code);
-      // Now capture the screenshot after rendering is complete
+
+      // 捕获屏幕截图
       const imageBase64 = await captureScreenshot();
+      if (!imageBase64) {
+        throw new Error("无法捕获场景截图");
+      }
+
       console.log(
-        "[Screenshot] Screenshot capture completed:",
-        imageBase64 ? "Success" : "Failed"
+        `[Generate] Screenshot captured successfully (${Math.round(
+          imageBase64.length / 1024
+        )} KB)`
       );
 
+      // 设置渲染完成标志
+      renderingCompleteRef.current = true;
+
+      // 获取场景状态
       const sceneState = serializeSceneState();
 
-      // 获取场景历史数据
+      // 获取场景历史
       let sceneHistory = null;
       try {
         const historyResponse = await fetch("/api/memory-state");
@@ -1142,141 +1096,168 @@ export default function ThreeCodeEditor() {
           }
         }
       } catch (historyError) {
-        console.warn("Failed to fetch scene history:", historyError);
+        console.warn("[Generate] Failed to fetch scene history:", historyError);
       }
 
+      // 检查提示中是否包含模型大小信息
+      const sizeRegex = /大小\s*[:：]\s*(\d+(\.\d+)?)/i;
+      const sizePrefRegex = /(\d+(\.\d+)?)\s*(尺寸|大小|单位)/i;
+      const sizeMatch = prompt.match(sizeRegex) || prompt.match(sizePrefRegex);
+
+      let modelSize: number | undefined = undefined;
+      if (sizeMatch && sizeMatch[1]) {
+        modelSize = parseFloat(sizeMatch[1]);
+      }
+
+      // ===== 新增: 先调用独立的截图分析API =====
+      let screenshotAnalysis = null;
       try {
-        // 检查提示中是否包含模型大小信息
-        const sizeRegex = /大小\s*[:：]\s*(\d+(\.\d+)?)/i;
-        const sizePrefRegex = /(\d+(\.\d+)?)\s*(尺寸|大小|单位)/i;
-        const sizeMatch =
-          prompt.match(sizeRegex) || prompt.match(sizePrefRegex);
+        console.log("[Generate] Calling direct screenshot analysis API");
 
-        // 如果找到大小参数，提取数值
-        let modelSize: number | undefined = undefined;
-        if (sizeMatch && sizeMatch[1]) {
-          modelSize = parseFloat(sizeMatch[1]);
-          console.log(`检测到模型尺寸参数: ${modelSize}`);
-        }
-
-        const response = await fetch("/api/agent", {
+        const analysisResponse = await fetch("/api/analyze-screenshot", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            action: "analyze-screenshot",
-            code,
-            prompt,
             screenshot: imageBase64,
-            sceneState,
-            sceneHistory, // 将场景历史传递给 API
-            lintErrors: lintErrors.length > 0 ? lintErrors : undefined,
-            modelSize, // 传递模型大小参数给API
-            renderingComplete: renderingCompleteRef.current, // 传递渲染完成状态
+            userRequirement: prompt,
           }),
         });
 
-        if (!response.ok) {
-          throw new Error(`API responded with status: ${response.status}`);
+        if (analysisResponse.ok) {
+          screenshotAnalysis = await analysisResponse.json();
+          console.log("[Generate] Screenshot analysis completed:", {
+            status: screenshotAnalysis.status,
+            matches_requirements: screenshotAnalysis.matches_requirements,
+            needs_improvements: screenshotAnalysis.needs_improvements,
+          });
+        } else {
+          console.warn(
+            "[Generate] Screenshot analysis failed with status:",
+            analysisResponse.status
+          );
+          // 创建一个默认分析结果，避免后续处理出错
+          screenshotAnalysis = {
+            status: "error",
+            message: "无法分析截图，将继续生成代码",
+            needs_improvements: true,
+            recommendation: "截图分析失败，但仍会尝试生成代码",
+          };
+        }
+      } catch (analysisError) {
+        console.error(
+          "[Generate] Error during screenshot analysis:",
+          analysisError
+        );
+        // 创建一个默认分析结果，避免后续处理出错
+        screenshotAnalysis = {
+          status: "error",
+          message: `分析截图时遇到错误: ${
+            analysisError instanceof Error
+              ? analysisError.message
+              : String(analysisError)
+          }`,
+          needs_improvements: true,
+          recommendation: "截图分析出错，将继续尝试生成代码",
+        };
+      }
+      // ===== 截图分析结束 =====
+
+      // 发送API请求
+      console.log(
+        "[Generate] Sending request to agent API with analysis result"
+      );
+      const response = await fetch("/api/agent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "analyze-screenshot",
+          code,
+          prompt,
+          // 不再发送完整的截图数据，只发送分析结果
+          // screenshot: imageBase64,
+          screenshotAnalysis, // 发送分析结果而不是原始截图数据
+          sceneState,
+          sceneHistory,
+          lintErrors: lintErrors.length > 0 ? lintErrors : undefined,
+          modelSize,
+          renderingComplete: true,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`API responded with status: ${response.status}`);
+      }
+
+      // 处理响应
+      const data: ApiResponse = await response.json();
+
+      // 处理模型URL
+      const modelUrls: string[] = [];
+      if (data.modelUrl) {
+        setIsModelLoading(true);
+        const modelLoaded = await loadModel(data.modelUrl, modelSize);
+        setIsModelLoading(false);
+        if (modelLoaded) modelUrls.push(data.modelUrl);
+      }
+
+      // 处理代码更新
+      if (data.directCode) {
+        setPreviousCode(code);
+        let newCode;
+
+        if (data.patch) {
+          try {
+            // @ts-expect-error - applyPatch function accepts string but type definition requires ParsedDiff
+            const result = applyPatch(code, data.patch);
+            if (typeof result === "boolean") {
+              newCode = data.directCode;
+            } else {
+              newCode = result as string;
+            }
+            setDiff(data.patch);
+          } catch (error) {
+            console.error("Failed to apply patch:", error);
+            newCode = data.directCode;
+          }
+        } else {
+          newCode = data.directCode;
+          const diffLines = data.directCode
+            .split("\n")
+            .filter((line, i) => {
+              const oldLines = code.split("\n");
+              return i >= oldLines.length || line !== oldLines[i];
+            })
+            .join("\n");
+          setDiff(diffLines);
         }
 
-        const data: ApiResponse = await response.json();
-        console.log("API response data:", data);
+        setCode(newCode);
+        addHistoryEntry(newCode, modelUrls);
+      } else if (data.error) {
+        throw new Error(data.error);
+      }
 
-        const modelUrls: string[] = [];
+      // 检查代码中是否包含额外的模型URL
+      if (data.directCode && !data.modelUrl) {
+        const hyper3dMatches = data.directCode.match(
+          /['"]https:\/\/hyperhuman-file\.deemos\.com\/[^'"]+\.glb[^'"]*['"]/g
+        );
 
-        if (data.modelUrl) {
-          console.log("Model URL received:", data.modelUrl);
+        if (hyper3dMatches && hyper3dMatches.length > 0) {
+          const modelUrl = hyper3dMatches[0].replace(/^['"]|['"]$/g, "");
+
           setIsModelLoading(true);
-          const modelLoaded = await loadModel(data.modelUrl, modelSize);
-          console.log("Model loading result:", modelLoaded);
+          const modelLoaded = await loadModel(modelUrl, modelSize);
           setIsModelLoading(false);
 
-          modelUrls.push(data.modelUrl);
-        }
-
-        if (data.directCode) {
-          setPreviousCode(code);
-
-          // Update the code based on the response
-          let newCode;
-
-          if (data.patch) {
-            try {
-              // Apply the patch to the current code if available
-              // @ts-expect-error - applyPatch function accepts string but type definition requires ParsedDiff
-              const result = applyPatch(code, data.patch);
-
-              // Handle the result based on its type
-              if (typeof result === "boolean") {
-                console.error(
-                  "Failed to apply patch: Patch and code don't match"
-                );
-                newCode = data.directCode;
-              } else {
-                // Successfully applied the patch
-                newCode = result as string;
-                console.log("Applied patch to code");
-              }
-              setDiff(data.patch);
-            } catch (patchError) {
-              console.error("Failed to apply patch:", patchError);
-              // If patch application fails, use directCode directly
-              newCode = data.directCode;
-            }
-          } else {
-            // If no patch is provided, use the directCode as is
-            newCode = data.directCode;
-
-            // Generate a diff for display purposes
-            const diffLines = data.directCode
-              .split("\n")
-              .filter((line, i) => {
-                const oldLines = code.split("\n");
-                return i >= oldLines.length || line !== oldLines[i];
-              })
-              .join("\n");
-            setDiff(diffLines);
-          }
-
-          setCode(newCode);
-          addHistoryEntry(newCode, modelUrls);
-        } else if (data.error) {
-          throw new Error(data.error);
-        }
-
-        if (data.directCode && !data.modelUrl) {
-          const hyper3dMatches = data.directCode.match(
-            /['"]https:\/\/hyperhuman-file\.deemos\.com\/[^'"]+\.glb[^'"]*['"]/g
-          );
-
-          if (hyper3dMatches && hyper3dMatches.length > 0) {
-            const modelUrl = hyper3dMatches[0].replace(/^['"]|['"]$/g, "");
-            console.log("从代码中提取到模型URL:", modelUrl);
-
-            setIsModelLoading(true);
-            const modelLoaded = await loadModel(modelUrl, modelSize);
-            console.log(
-              "Model loading result from code extraction:",
-              modelLoaded
-            );
-            setIsModelLoading(false);
-
+          if (modelLoaded) {
             modelUrls.push(modelUrl);
-
-            if (modelLoaded) {
-              addHistoryEntry(code, modelUrls);
-            }
+            addHistoryEntry(code, modelUrls);
           }
         }
-      } catch (error) {
-        console.error("生成错误:", error);
-        setError(
-          "生成错误: " +
-            (error instanceof Error ? error.message : String(error))
-        );
       }
     } catch (error) {
-      console.error("生成错误:", error);
+      console.error("[Generate] Error:", error);
       setError(
         "生成错误: " + (error instanceof Error ? error.message : String(error))
       );

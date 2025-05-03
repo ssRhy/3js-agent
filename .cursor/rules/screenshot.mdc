@@ -4,10 +4,47 @@ globs:
 alwaysApply: false
 ---
 
-The system will wait for rendering to complete before proceeding with analysis
-The system now follows the correct flow:
-User input → Code generation → Frontend rendering → Screenshot capture (after rendering complete) → Scene analysis → Code improvements (if needed)
 
 
 
-将截图分析工具集成到agent的执行流程中。这样agent可以在每次迭代中主动调用截图分析工具，而不是等待所有循环结束后再分析。Agent 会在整个循环里“自驱”地完成截图分析和自动修复。Agent 智能截图→分析→修复”，又避免了过度截图和无限迭代，同时保证最终场景符合用户需求。
+将截图分析工具集成到agent的执行流程中。这样agent可以在每次迭代中主动调用截图分析工具，而不是等待所有循环结束后再分析。Agent 会在整个循环里“自驱”地完成截图分析和自动修复。Agent 智能截图→分析→修复”，避免了过度截图和无限迭代，同时保证最终场景符合用户需求。
+##
+在首次场景渲染完成后，截图分析，查看场景是否符合实际，检查模型位置，大小，物体是否正确渲染，场景是否符合需求等，如果不符合的话就反馈意见给codeGenTool修改代码，修改合格之后就再次截图分析判断是否合格。如果截图分析合格的话，就不需要再codeGenTool修改代码。
+##
+要保证 Agent 真正先等待截图分析结果再决定是否生成代码：
+让 Agent 使用 AgentExecutor
+
+Agent 会：
+根据 System Prompt 规划，第一次 发起对 analyze_screenshot 的函数调用。
+LangChain 接管这次函数调用并执行截图分析。
+将分析结果再“注入”回 LLM，触发第二次 LLM 推理。
+如果分析结果 needs_improvements=true，LLM 在同一次调用内继续“function_call”到 generate_fix_code；否则它直接输出终结答案。
+这整个过程只是一条 await executor.invoke(...)，但底层会自动完成两步工具调用和中间结果传回，符合真正的 Agentic Workflow。
+##
+优势：
+单次 Agent 调用：executor.invoke() 内部会自行完成“function_call→执行→再推理→function_call→执行” 的闭环。
+天然顺序保证：OpenAI Functions 的模式下，LLM 必须等到上一次函数调用结果回来，才能生成下一条回复或下一次调用，绝不会并行或跳票。
+符合 Agentic Workflow：整个流程都在 LLM 的决策回路里，工具调用由 Agent 自主发起、评估并决定是否终结。
+无侵入：不用自己写中间件拦截，也不用手工管理 analysisDone，最大程度利用框架能力。
+只要你的 screenshotTool 与 codeGenTool 能分别对应这两个 function，以上代码就能让 Agent 在一次执行中保障“先分析→再修复”，并最终输出符合需求的 Three.js setup() 函数代码。
+
+
+
+
+
+
+
+
+
+
+
+flowchart 
+  A[首次场景渲染] --> B[截图并调用分析Tool]
+  B --> |合格| C[终止流程，输出结果]
+  B --> |不合格| D[生成修复指令给codeGenTool]
+  D --> E[codeGenTool 更新代码]
+  E --> F[局部或全局重渲染]
+  F --> B
+
+
+

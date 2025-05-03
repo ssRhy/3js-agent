@@ -4,6 +4,8 @@ globs:
 alwaysApply: false
 ---
 主要目的是通过AI agenttic workflow:用户创建和编辑Three.js场景。项目采用Next.js框架开发，结合了三维可视化(Three.js)、代码编辑器(Monaco)和AI生成能力(LangChainjs0.3)。
+
+
 ##
 核心功能和结构：
 三维场景编辑：通过Three.js实现3D场景的可视化和交互，支持模型加载、渲染和操作。
@@ -14,7 +16,7 @@ AI助手系统：
 支持代码生成和优化(codeGenTool)
 支持3D模型生成(modelGenTool)
 支持代码修改和应用(applyPatchTool)
-截图Tool
+截图screenshotTool
 ##
 状态管理：
 使用Zustand管理全局状态，包括场景对象、执行历史和用户意图

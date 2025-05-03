@@ -1,45 +1,48 @@
 // lib/prompts/humanPrompts.ts
 import { HumanMessagePromptTemplate } from "@langchain/core/prompts";
-import { SceneStateObject, ModelHistoryEntry } from "../types/sceneTypes";
+import { ModelHistoryEntry, SceneStateObject } from "../types/sceneTypes";
 
 /**
- * 创建人类消息提示模板 - 集中提示词逻辑
+ * 创建用户提示模板
+ * @param modelHistory 模型历史记录
+ * @param sceneState 当前场景状态
+ * @returns 用户提示模板
  */
 export function createHumanPrompt(
   modelHistory?: ModelHistoryEntry[],
   sceneState?: SceneStateObject[]
 ) {
-  const modelHistorySection =
-    modelHistory && modelHistory.length > 0
-      ? "\n最近生成的3D模型URL,只使用hyper3d返回的url（可复用）:\n" +
-        modelHistory
-          .map(
-            (m: ModelHistoryEntry, i: number) => `- [${i + 1}] ${m.modelUrl}`
-          )
-          .join("\n")
-      : "";
+  // 构建模型历史部分
+  let modelHistoryPart = "";
+  if (modelHistory && modelHistory.length > 0) {
+    modelHistoryPart = "有以下已生成模型可使用:\n";
+    modelHistory.forEach((entry, index) => {
+      // 使用 prompt 显示模型名称，如果没有则显示序号
+      const modelName = entry.prompt ? `${entry.prompt}` : `模型 ${index + 1}`;
+      modelHistoryPart += `${index + 1}. ${modelName}: ${entry.modelUrl}\n`;
+    });
+  }
 
-  const sceneStateSection =
-    sceneState && sceneState.length > 0
-      ? "\n当前场景状态：\n" +
-        JSON.stringify(sceneState, null, 2) +
-        "\n考虑场景中已有对象，添加新对象时避免重叠或覆盖。"
-      : "";
+  // 构建场景状态部分
+  let sceneStatePart = "";
+  if (sceneState && sceneState.length > 0) {
+    sceneStatePart = "\n当前场景包含以下对象:\n";
+    sceneState.forEach((obj, index) => {
+      sceneStatePart += `${index + 1}. ${obj.name || "对象" + index} (${
+        obj.type
+      })\n`;
+    });
+  }
 
-  return HumanMessagePromptTemplate.fromTemplate(
-    [
-      "请基于以下Three.js代码生成新功能：",
-      "```js",
-      "{currentCode}",
-      "```",
-      modelHistorySection,
-      "\n分析建议：\n{suggestion}",
-      "\n用户需求：\n{userPrompt}",
-      sceneStateSection,
-      "\n重要：为每个模型指定不同位置坐标。",
-      "\n如果输入包含screenshot，请首先使用analyze_screenshot工具分析当前场景是否符合需求，再决定后续操作。",
-      "\n⚠️ 根据analyze_screenshot的分析结果调用generate_fix_code工具，提交仅包含threejs代码的完整方案，无需包含思考过程、分析或解释。返回必须是可直接执行的setup函数。",
-      "{chat_history}",
-    ].join("\n")
-  );
+  // 构造提示模板 - 修复条件语法中的大括号问题
+  // LangChain.js 模板引擎需要对条件语句使用双大括号进行转义
+  const template =
+    `{userPrompt}` +
+    (modelHistoryPart ? `\n\n${modelHistoryPart}` : "") +
+    (sceneStatePart ? `\n${sceneStatePart}` : "") +
+    "\n\n如果有截图提供，请先使用 analyze_screenshot 工具分析场景，然后再进行其他操作。" +
+    "{{suggestion ? `\\n\\n建议: ${suggestion}` : ''}}" +
+    "\n\n当前代码:\n```javascript\n{currentCode}\n```";
+
+  return HumanMessagePromptTemplate.fromTemplate(template);
 }

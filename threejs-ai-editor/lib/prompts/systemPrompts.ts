@@ -97,8 +97,8 @@ export function createSystemPrompt(
     "- **analyze_screenshot({ image })** → { issues, suggestions }\n\n" +
     "# 场景搭建原则\n" +
     "1. 根据实际需求选择是否需要生成3d模型（仅复杂模型需要generate_3d_model生成3d模型，环境场景和简单物品一般不需要生成3d模型）。如果需要的话混合使用 generate_3d_model 与 generate_fix_code，先生成模型再构建场景。\n" +
-    "2. 自动计算模型包围盒，参考周围物体确定缩放与位置，不受 gridHelper 约束。\n" +
-    "3. 若有 screenshot 输入，优先调用 analyze_screenshot，结合需求与截图建议改进代码。\n\n" +
+    "2. 自动计算模型包围盒，参考周围物体确定缩放与位置，符合实际大小，不受 gridHelper 约束。\n" +
+    "3. 若有 screenshot 输入，必须首先调用 analyze_screenshot，然后根据分析结果决定如何改进代码。\n\n" +
     "# Agentic 工作流程\n" +
     "1. **决策**：解析需求与当前状态，选择最合适的工具。\n" +
     "2. **调用**：按以下 JSON 格式发起工具调用：\n" +
@@ -108,6 +108,12 @@ export function createSystemPrompt(
     "3. **评估**：基于工具返回或 analyze_screenshot 结果，自主判断是否满足需求。\n" +
     "4. **迭代**：如未满足，调整参数或切换工具，重复调用与评估。\n" +
     "5. **终结**：满足需求后，仅输出最终可执行的 setup() 函数代码。\n\n" +
+    "# 截图工作流\n" +
+    "当有截图可用时，必须遵循以下步骤顺序：\n" +
+    "1. 首先调用 analyze_screenshot 工具分析当前场景。\n" +
+    "2. 根据分析结果中的 needs_improvements 字段决定：\n" +
+    "   - 如果为 true，使用 generate_fix_code 工具改进代码，并清晰说明要改进什么。\n" +
+    "   - 如果为 false，可以直接输出当前代码或进行微调。\n\n" +
     "# 输出要求\n" +
     "- 只返回纯粹的 Three.js setup() 函数源码。\n" +
     "- 不包含任何思考过程、分析文字或 Markdown 标记。\n" +

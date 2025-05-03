@@ -1,132 +1,134 @@
-// lib/analyzers/screenshotAnalyzer.ts
-
-import { HumanMessage } from "@langchain/core/messages";
-import { createModelClient } from "../../lib/agents/agentFactory";
-import { extractTextContent } from "../../lib/processors/codeProcessor";
+// screenshotAnalyzer.ts - 集成API端点和核心分析逻辑
+import { NextApiRequest, NextApiResponse } from "next";
 import { saveAnalysisToMemory } from "../../lib/memory/memoryManager";
-import { prepareHistoryContext } from "../../lib/memory/memoryManager";
-import { codeGenTool } from "../../lib/tools/codeGenTool";
+import { screenshotTool } from "../../lib/tools/screenshotTool";
 
 /**
- * 分析 Three.js 场景截图并生成优化建议
- *
- * @param screenshotBase64 Base64 编码的截图
- * @param currentCode 当前代码
- * @param userPrompt 用户需求（可选）
- * @param renderingComplete 渲染是否完成（可选）
- * @returns 分析结果
+ * API端点处理程序 - 分析截图并返回结果
  */
-export async function analyzeScreenshotDirectly(
-  screenshotBase64: string,
-  currentCode: string,
-  userPrompt: string = "",
-  renderingComplete: boolean = false
-): Promise<string> {
-  const requestId = `analysis_${Date.now()}`;
-  console.log(
-    `[${requestId}] [Screenshot Analysis] Starting analysis process, rendering complete: ${renderingComplete}`
-  );
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse
+) {
+  const requestId = `req_${Date.now()}`;
+  console.log(`[${requestId}] Received screenshot analysis request`);
 
-  // If rendering is not complete, return a default message
-  if (!renderingComplete) {
-    console.log(
-      `[${requestId}] [Screenshot Analysis] Skipping analysis as rendering is not complete`
-    );
-    return "Rendering is not complete yet. Generate initial code based on user requirements without screenshot analysis.";
+  // 只接受POST请求
+  if (req.method !== "POST") {
+    return res
+      .status(405)
+      .json({ error: "Method not allowed, please use POST" });
   }
 
   try {
-    const imageDataSize = screenshotBase64.length;
-    console.log(
-      `[${requestId}] [Screenshot Analysis] Image data size: ${imageDataSize} bytes`
-    );
+    // 从请求体中获取截图数据和用户需求
+    const { screenshot, userRequirement } = req.body;
 
-    const historyContext = await prepareHistoryContext();
-    console.log(
-      `[${requestId}] [Screenshot Analysis] Building prompt with history context: ${
-        historyContext ? "Available" : "Not available"
-      }`
-    );
-
-    // 构建分析提示词
-    const prompt = `Analyze this Three.js scene screenshot and suggest scene improvements:
-    
-User requirements:
-${userPrompt || "No specific requirements provided"}
-
-${historyContext ? `Historical context:\n${historyContext}\n\n` : ""}
-
-Based on the photo and the user requirements, provide brief suggestions for improving the Three.js scene. 
-don't generate the code at this stage.
-`;
-
-    // 创建图像消息
-    const imageUrl = screenshotBase64.startsWith("data:")
-      ? screenshotBase64
-      : `data:image/png;base64,${screenshotBase64}`;
-
-    console.log(
-      `[${requestId}] [Screenshot Analysis] Sending request to model at ${new Date().toISOString()}`
-    );
-
-    // 获取模型客户端
-    const model = createModelClient();
-
-    // 创建带图像的消息
-    const message = new HumanMessage({
-      content: [
-        { type: "text", text: prompt },
-        { type: "image_url", image_url: { url: imageUrl } },
-      ],
-    });
-
-    // 调用模型
-    const result = await model.invoke([message]);
-    const contentText = extractTextContent(result.content);
-
-    console.log(
-      `[${requestId}] [Screenshot Analysis] Analysis completed at ${new Date().toISOString()}`
-    );
-    console.log(
-      `[${requestId}] [Screenshot Analysis] Suggestion length: ${contentText.length} chars`
-    );
-
-    // 传递分析结果给 codeGenTool
-    try {
-      console.log(
-        `[${requestId}] [Screenshot Analysis] Passing suggestions to codeGenTool`
-      );
-
-      const instruction = `Apply the following improvements based on screenshot analysis:
-${userPrompt || "No specific requirements"}
-
-Scene improvement suggestions:
-${contentText}
-
- implement these suggestions in the Three.js scene.`;
-
-      // 调用代码生成工具
-      await codeGenTool.invoke({ instruction });
-
-      console.log(
-        `[${requestId}] [Screenshot Analysis] Successfully passed suggestions to codeGenTool`
-      );
-    } catch (toolError) {
-      console.error(
-        `[${requestId}] [Screenshot Analysis] Failed to pass suggestions to codeGenTool:`,
-        toolError
-      );
+    // 验证必要参数
+    if (!screenshot) {
+      console.error(`[${requestId}] Missing required parameter: screenshot`);
+      return res.status(400).json({
+        error: "Missing required parameter: screenshot",
+        status: "error",
+      });
     }
 
-    // 将分析摘要保存到内存
-    await saveAnalysisToMemory(userPrompt, contentText);
     console.log(
-      `[${requestId}] [Screenshot Analysis] Analysis saved to memory`
+      `[${requestId}] Processing screenshot analysis, data length: ${screenshot.length} bytes`
     );
 
-    return contentText;
+    // 调用核心分析功能
+    const result = await analyzeScreenshot(
+      screenshot,
+      userRequirement,
+      requestId
+    );
+    return res.status(200).json(result);
   } catch (error) {
-    console.error(`[${requestId}] [Screenshot Analysis] Error:`, error);
+    console.error(`[${requestId}] Screenshot analysis failed:`, error);
+    return res.status(500).json({
+      status: "error",
+      error: error instanceof Error ? error.message : "Unknown error occurred",
+      needs_improvements: true,
+      recommendation: "截图分析出错，请检查截图数据或稍后重试",
+    });
+  }
+}
+
+/**
+ * 核心截图分析函数 - 可直接调用或通过API使用
+ *
+ * @param screenshotData Base64编码的截图数据
+ * @param userRequirement 用户需求
+ * @param requestId 请求ID (可选)
+ * @returns 分析结果对象
+ */
+export async function analyzeScreenshot(
+  screenshotData: string,
+  userRequirement: string = "",
+  requestId: string = `analysis_${Date.now()}`
+): Promise<Record<string, unknown>> {
+  console.log(`[${requestId}] Running screenshot analysis`);
+
+  try {
+    // 直接使用screenshotTool进行分析
+    const analysisResult = await screenshotTool.func({
+      screenshotBase64: screenshotData,
+      userRequirement: userRequirement || "",
+    });
+
+    // 解析JSON结果
+    try {
+      const parsedResult = JSON.parse(analysisResult);
+      console.log(
+        `[${requestId}] Analysis completed successfully, status: ${parsedResult.status}`
+      );
+      return parsedResult;
+    } catch (parseError) {
+      console.error(
+        `[${requestId}] Failed to parse analysis result:`,
+        parseError
+      );
+      throw new Error("Failed to parse analysis result");
+    }
+  } catch (error) {
+    console.error(`[${requestId}] Error in screenshot analysis:`, error);
+    return {
+      status: "error",
+      message:
+        error instanceof Error ? error.message : "Unknown error occurred",
+      needs_improvements: true,
+      recommendation: "截图分析出错，请检查截图数据或稍后重试",
+    };
+  }
+}
+
+/**
+ * 直接分析截图并返回文本建议 (为兼容旧代码保留)
+ */
+export async function analyzeScreenshotDirectly(
+  screenshotBase64: string,
+  userPrompt: string = "",
+  requestId: string = `analysis_${Date.now()}`
+): Promise<string> {
+  try {
+    const result = await analyzeScreenshot(
+      screenshotBase64,
+      userPrompt,
+      requestId
+    );
+
+    // 保存分析结果到内存
+    if (result.analysis && typeof result.analysis === "string") {
+      await saveAnalysisToMemory(userPrompt, result.analysis);
+    }
+
+    // 返回分析文本或完整的JSON字符串
+    return result.analysis && typeof result.analysis === "string"
+      ? result.analysis
+      : JSON.stringify(result);
+  } catch (error) {
+    console.error(`[${requestId}] Direct analysis failed:`, error);
     return "Could not analyze the screenshot. Please try again.";
   }
 }
