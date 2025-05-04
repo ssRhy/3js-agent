@@ -11,16 +11,25 @@ import { analyzeScreenshot } from "./screenshotAnalyzer";
  * @returns 是否是有效的base64图像数据
  */
 function isValidBase64Image(base64String: string): boolean {
-  // 如果已经是Data URL，提取base64部分
-  if (base64String.startsWith("data:image")) {
-    const parts = base64String.split(",");
-    if (parts.length !== 2) return false;
-    base64String = parts[1];
-  }
+  try {
+    // 如果已经是Data URL，提取base64部分
+    if (base64String.startsWith("data:image")) {
+      const parts = base64String.split(",");
+      if (parts.length !== 2) return false;
+      base64String = parts[1];
+    }
 
-  // 检查是否符合base64模式（长度是4的倍数，有效字符）
-  const regex = /^[A-Za-z0-9+/]+(=|==)?$/;
-  return regex.test(base64String) && base64String.length % 4 === 0;
+    // 检查是否符合base64模式（长度是4的倍数，只包含有效字符）
+    if (base64String.length % 4 !== 0) return false;
+    if (!/^[A-Za-z0-9+/=]+$/.test(base64String)) return false;
+
+    // 检查大小（base64图像通常至少有几百字节）
+    return base64String.length >= 100;
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  } catch (_) {
+    // 捕获任何验证过程中的异常，直接返回false
+    return false;
+  }
 }
 
 /**

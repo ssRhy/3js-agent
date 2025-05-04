@@ -501,17 +501,30 @@ export async function runAgentLoop(
       try {
         const wsRequestId = `agent_loop_${Date.now()}`;
         screenshot = await requestScreenshot(wsRequestId);
+
         // 更新最后截图时间戳
         updateConversationContext("lastScreenshotTimestamp", Date.now());
-        console.log(
-          `[${requestId}] Successfully obtained screenshot via WebSocket for agent reasoning`
-        );
+
+        if (screenshot && screenshot.length > 100) {
+          console.log(
+            `[${requestId}] Successfully obtained screenshot via WebSocket for agent reasoning`
+          );
+        } else {
+          console.warn(
+            `[${requestId}] Received empty or invalid screenshot data from WebSocket, continuing without screenshot analysis`
+          );
+          // Make sure we don't treat this as a valid screenshot
+          screenshot = undefined;
+        }
       } catch (wsError) {
         console.error(
-          `[${requestId}] Failed to obtain screenshot via WebSocket:`,
-          wsError
+          `[${requestId}] Failed to get screenshot via WebSocket: ${
+            wsError instanceof Error ? wsError.message : String(wsError)
+          }`
         );
-        // 继续执行，只是没有截图
+        // Set screenshot to undefined to ensure agent knows there's no screenshot
+        screenshot = undefined;
+        // Continue execution, just without a screenshot
       }
     }
 
@@ -582,7 +595,7 @@ export async function runAgentLoop(
 
       // 添加WebSocket主动截图能力的说明
       enhancedHistoryContext +=
-        "\n\n你可以随时使用analyze_screenshot工具通过WebSocket请求获取前端当前场景的截图，并进行分析。" +
+        "\n\n你可以随时使用analyze_screenshot工具通过WebSocket请求获取前端当前场景的截图，" +
         "当你需要了解当前场景的视觉状态，或者需要验证代码修改效果时，可以主动调用此工具。";
 
       // 确保lintErrors是一个数组
@@ -765,118 +778,170 @@ export { clearSessionState };
  * @param socket Socket.IO连接实例
  */
 export async function runAgentWithSocketIO(socket: Socket) {
-  // 设置Socket.IO实例供所有工具使用
-  setSocketIOInstance(socket);
+  try {
+    // 设置Socket.IO实例供所有工具使用
+    setSocketIOInstance(socket);
+    console.log(`[Agent-SocketIO] Socket instance registered: ${socket.id}`);
+  } catch (initError) {
+    console.error(
+      "[Agent-SocketIO] Error during socket initialization:",
+      initError
+    );
+  }
 
   // 设置事件监听器
-  socket.on("start_agent_session", async (data) => {
-    console.log("[Agent-SocketIO] Starting new agent session", data);
+  try {
+    // 设置start_agent_session事件监听器
+    socket.on("start_agent_session", async (data) => {
+      try {
+        console.log("[Agent-SocketIO] Starting new agent session", data);
 
-    const { code, prompt, clientId } = data;
+        const { code, prompt, clientId } = data;
 
-    if (!code || !prompt) {
-      socket.emit("agent_error", {
-        message: "Missing required parameters: code and prompt",
-        timestamp: Date.now(),
-      });
-      return;
-    }
+        if (!code || !prompt) {
+          socket.emit("agent_error", {
+            message: "Missing required parameters: code and prompt",
+            timestamp: Date.now(),
+            recoverable: true,
+          });
+          return;
+        }
 
-    try {
-      // 创建一个带有所有工具的自驱动Agent
-      const toolsToUse = [];
-      const codeGenTool = ToolRegistry.getInstance().getTool(
-        ToolCategory.CODE_GEN
-      );
-      const searchTool = ToolRegistry.getInstance().getTool(
-        ToolCategory.SEARCH
-      );
+        // 创建一个带有所有工具的自驱动Agent
+        const toolsToUse = [];
+        const codeGenTool = ToolRegistry.getInstance().getTool(
+          ToolCategory.CODE_GEN
+        );
+        const searchTool = ToolRegistry.getInstance().getTool(
+          ToolCategory.SEARCH
+        );
 
-      if (codeGenTool) toolsToUse.push(codeGenTool);
-      if (searchTool) toolsToUse.push(searchTool);
-      toolsToUse.push(screenshotToolInstance);
+        if (codeGenTool) toolsToUse.push(codeGenTool);
+        if (searchTool) toolsToUse.push(searchTool);
+        toolsToUse.push(screenshotToolInstance);
 
-      // 通知前端Agent开始执行
-      socket.emit("agent_status", {
-        status: "starting",
-        message: "Agent is analyzing your request...",
-        timestamp: Date.now(),
-      });
+        // 通知前端Agent开始执行
+        socket.emit("agent_status", {
+          status: "starting",
+          message: "Agent is analyzing your request...",
+          timestamp: Date.now(),
+        });
 
-      // 获取历史上下文
-      const historyContext = await prepareHistoryContext();
+        // 获取历史上下文
+        const historyContext = await prepareHistoryContext();
 
-      // 启动Agent循环，启用自驱动模式
-      const response = await runAgentLoop(
-        "Analyze user request and improve Three.js scene",
-        code,
-        toolsToUse,
-        prompt,
-        historyContext,
-        undefined, // 无lint错误
-        false, // 不需要模型
-        undefined, // 无场景状态
-        undefined, // 无模型历史
-        undefined, // 无场景历史
-        undefined, // 无响应对象
-        undefined, // 无初始截图
-        true, // 渲染完成
-        true // 启用自驱动模式，允许Agent自主决策和请求截图
-      );
+        // 启动Agent循环，启用自驱动模式
+        const response = await runAgentLoop(
+          "Analyze user request and improve Three.js scene",
+          code,
+          toolsToUse,
+          prompt,
+          historyContext,
+          undefined, // 无lint错误
+          false, // 不需要模型
+          undefined, // 无场景状态
+          undefined, // 无模型历史
+          undefined, // 无场景历史
+          undefined, // 无响应对象
+          undefined, // 无初始截图
+          true, // 渲染完成
+          true // 启用自驱动模式，允许Agent自主决策和请求截图
+        );
 
-      // 清理输出代码
-      const cleanedCode = cleanCodeOutput(response || "");
+        // 清理输出代码
+        const cleanedCode = cleanCodeOutput(response || "");
 
-      // 发送结果回前端
-      socket.emit("agent_result", {
-        status: "complete",
-        directCode: cleanedCode,
-        timestamp: Date.now(),
-      });
+        // 发送结果回前端
+        socket.emit("agent_result", {
+          status: "complete",
+          directCode: cleanedCode,
+          timestamp: Date.now(),
+        });
 
-      // 保存交互到内存
-      await saveInteractionToMemory(prompt, response || "");
-    } catch (error) {
-      console.error("[Agent-SocketIO] Error in agent execution:", error);
-      socket.emit("agent_error", {
-        message: error instanceof Error ? error.message : String(error),
-        timestamp: Date.now(),
-      });
-    }
-  });
+        // 保存交互到内存
+        await saveInteractionToMemory(prompt, response || "");
+      } catch (sessionError) {
+        console.error("[Agent-SocketIO] Error in agent session:", sessionError);
+        socket.emit("agent_error", {
+          message:
+            sessionError instanceof Error
+              ? sessionError.message
+              : String(sessionError),
+          timestamp: Date.now(),
+          recoverable: true,
+        });
+      }
+    });
 
-  // 设置新的事件处理器，处理agent主动请求截图的场景
-  socket.on("agent_request_screenshot", async (data) => {
-    console.log("[Agent-SocketIO] Agent requested screenshot:", data);
+    // 设置agent_request_screenshot事件监听器
+    socket.on("agent_request_screenshot", async (data) => {
+      console.log("[Agent-SocketIO] Agent requested screenshot:", data);
 
-    try {
-      // 发出截图请求
-      socket.emit("request_screenshot", {
-        requestId: data.requestId || `agent_req_${Date.now()}`,
-        timestamp: Date.now(),
-        fromAgent: true, // 标记这是来自agent的请求
-      });
+      try {
+        // 确保请求有一个唯一ID
+        const requestId = data.requestId || `agent_req_${Date.now()}`;
 
-      // 通知agent已发送截图请求
-      socket.emit("agent_status", {
-        status: "requesting_screenshot",
-        message: "请求前端提供场景截图...",
-        timestamp: Date.now(),
-      });
-    } catch (error) {
-      console.error("[Agent-SocketIO] Error requesting screenshot:", error);
-      socket.emit("agent_error", {
-        message: "截图请求发送失败",
-        timestamp: Date.now(),
-      });
-    }
-  });
+        // 直接使用当前socket发出截图请求，确保单播而非广播
+        try {
+          socket.emit("request_screenshot", {
+            requestId,
+            timestamp: Date.now(),
+            fromAgent: true, // 标记这是来自agent的请求
+          });
 
-  // 当Socket断开连接时清理
-  socket.on("disconnect", () => {
-    console.log("[Agent-SocketIO] Client disconnected, cleaning up");
-    // 在这里可以进行必要的清理工作
-  });
+          // 通知agent已发送截图请求
+          socket.emit("agent_status", {
+            status: "requesting_screenshot",
+            message: "请求前端提供场景截图...",
+            timestamp: Date.now(),
+          });
 
-  console.log("[Agent-SocketIO] Agent ready for Socket.IO driven interactions");
+          console.log(`[Agent-SocketIO] Screenshot request ${requestId} sent`);
+        } catch (socketError) {
+          console.error(
+            "[Agent-SocketIO] Error sending screenshot request:",
+            socketError
+          );
+
+          // 通知agent截图请求失败但可以继续执行
+          socket.emit("agent_status", {
+            status: "screenshot_error",
+            message: "截图请求失败，但Agent可以继续执行其他任务",
+            error:
+              socketError instanceof Error
+                ? socketError.message
+                : String(socketError),
+            timestamp: Date.now(),
+            recoverable: true,
+          });
+        }
+      } catch (error) {
+        console.error(
+          "[Agent-SocketIO] Exception in screenshot request handler:",
+          error
+        );
+      }
+    });
+
+    // 当Socket断开连接时清理
+    socket.on("disconnect", () => {
+      try {
+        console.log("[Agent-SocketIO] Client disconnected, cleaning up");
+      } catch (disconnectError) {
+        console.error(
+          "[Agent-SocketIO] Error during disconnect cleanup:",
+          disconnectError
+        );
+      }
+    });
+
+    console.log(
+      "[Agent-SocketIO] Agent ready for Socket.IO driven interactions"
+    );
+  } catch (setupError) {
+    console.error(
+      "[Agent-SocketIO] Critical error setting up Socket.IO handlers:",
+      setupError
+    );
+  }
 }

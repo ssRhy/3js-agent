@@ -1,6 +1,5 @@
 // lib/tools/toolRegistry.ts
-import { Tool } from "@langchain/core/tools";
-import { StructuredTool } from "@langchain/core/tools";
+import { Tool } from "langchain/tools";
 import { codeGenTool } from "./codeGenTool";
 import { modelGenTool } from "./modelGenTool";
 import { applyPatchTool } from "./applyPatchTool";
@@ -48,18 +47,30 @@ export class ToolRegistry {
     if (this.initialized) return;
 
     // 注册代码生成工具
-    this.registerTool(codeGenTool.name, codeGenTool, ToolCategory.CODE);
+    this.registerTool(
+      codeGenTool.name,
+      codeGenTool as unknown as Tool,
+      ToolCategory.CODE
+    );
 
     // 注册模型生成工具
-    this.registerTool(modelGenTool.name, modelGenTool, ToolCategory.MODEL);
+    this.registerTool(
+      modelGenTool.name,
+      modelGenTool as unknown as Tool,
+      ToolCategory.MODEL
+    );
 
     // 注册补丁应用工具
-    this.registerTool(applyPatchTool.name, applyPatchTool, ToolCategory.CODE);
+    this.registerTool(
+      applyPatchTool.name,
+      applyPatchTool as unknown as Tool,
+      ToolCategory.CODE
+    );
 
     // 注册截图分析工具
     this.registerTool(
       screenshotTool.name,
-      screenshotTool,
+      screenshotTool as unknown as Tool,
       ToolCategory.UTILITY
     );
 

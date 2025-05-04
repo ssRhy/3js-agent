@@ -33,6 +33,11 @@ interface ModelGenResult {
   success: boolean;
   modelUrl?: string;
   message?: string;
+  requestId?: string;
+  status?: "generating" | "completed" | "failed";
+  category?: string;
+  format?: string;
+  prompt?: string;
 }
 
 /**
@@ -425,18 +430,45 @@ class MemoryCallbackHandler extends BaseCallbackHandler {
 
   async processModelGenResult(resultStr: string) {
     try {
+      console.log(
+        "[MemoryCallbackHandler] Processing model generation result:",
+        resultStr.substring(0, 100) + "..."
+      );
+
       const result = JSON.parse(resultStr) as ModelGenResult;
+
+      // Handle the "generating" status case
+      if (result.status === "generating" && result.requestId) {
+        console.log(
+          `[MemoryCallbackHandler] Model generation started with requestId: ${result.requestId}`
+        );
+        return;
+      }
+
+      // Handle the completed model case
       if (result.success && result.modelUrl) {
         const memoryVars = await this.agentMemory.loadMemoryVariables({});
         const ctx = memoryVars.codeStateContext || {};
 
-        // Initialize or update model history
-        const modelHistory = ctx.modelHistory || [];
-        modelHistory.push({
+        // Create more detailed model entry with additional metadata
+        const newModelEntry = {
           modelUrl: result.modelUrl,
           timestamp: new Date().toISOString(),
           prompt: this.userPrompt,
-        });
+          requestId: result.requestId || `model_${Date.now()}`,
+          category: result.category || "unknown",
+          format: result.format || "gltf",
+        };
+
+        console.log(
+          `[MemoryCallbackHandler] Adding model to history: ${JSON.stringify(
+            newModelEntry
+          )}`
+        );
+
+        // Initialize or update model history
+        const modelHistory = ctx.modelHistory || [];
+        modelHistory.push(newModelEntry);
 
         // Only keep the last 5 models in history
         const trimmedHistory = modelHistory.slice(-5);

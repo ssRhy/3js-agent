@@ -3,18 +3,8 @@ import type { Server as HttpServer } from "http";
 import type { Socket as NetSocket } from "net";
 import type { NextApiResponse } from "next";
 import { Server as SocketIOServer } from "socket.io";
+import { Socket } from "socket.io";
 import { runAgentWithSocketIO } from "../../lib/agents/agentExecutor";
-
-// 分析结果接口
-interface AnalysisResult {
-  status: string;
-  analysis?: string;
-  matches_requirements?: boolean;
-  needs_improvements?: boolean;
-  key_improvements?: string;
-  recommendation?: string;
-  message?: string;
-}
 
 // 服务器附加Socket.IO的接口
 interface ServerWithIO extends HttpServer {
@@ -38,67 +28,13 @@ declare global {
   var socketIOServer: SocketIOServer | undefined;
 }
 
-// Socket连接和截图请求处理
+// Socket连接和截图请求处理 - 修改为只存储resolve函数，不存储分析处理
 const screenshotRequests = new Map<string, (screenshot: string) => void>();
-
-// 可以正常导入分析器
-let analyzeScreenshot: (
-  screenshot: string,
-  userRequirement: string,
-  historyContext?: string
-) => Promise<AnalysisResult>;
-
-// 本地分析函数（备用）
-async function localAnalyzeScreenshot(
-  screenshot: string,
-  userRequirement: string,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  _historyContext: string = ""
-): Promise<AnalysisResult> {
-  console.log(
-    `[Screenshot Analyzer Fallback] Analyzing screenshot for: ${userRequirement.substring(
-      0,
-      30
-    )}...`
-  );
-
-  return {
-    status: "success",
-    analysis: "Screenshot analysis completed (fallback implementation)",
-    matches_requirements: false,
-    needs_improvements: true,
-    key_improvements:
-      "Using fallback analyzer - real analyzer module failed to load",
-    recommendation: "Please check screenshot analyzer module",
-  };
-}
-
-// 内存管理导入函数（备用）
-let prepareHistoryContext = async () => "";
-
-// 动态导入分析器和内存管理模块
-try {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const screenshotAnalyzerModule = require("../../lib/tools/screenshotAnalyzer");
-  analyzeScreenshot = screenshotAnalyzerModule.analyzeScreenshot;
-  console.log("[Socket.IO] Successfully loaded screenshot analyzer module");
-} catch (e) {
-  console.error("[Socket.IO] Error importing screenshot analyzer:", e);
-  analyzeScreenshot = localAnalyzeScreenshot;
-}
-
-try {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const memoryManager = require("../../lib/memory/memoryManager");
-  prepareHistoryContext = memoryManager.prepareHistoryContext;
-  console.log("[Socket.IO] Successfully loaded memory manager module");
-} catch (e) {
-  console.error("[Socket.IO] Error importing memory manager:", e);
-}
 
 /**
  * Socket.IO API端点
  * 处理Agent发来的截图请求和从客户端接收截图数据
+ * 只负责数据传输，不进行其他处理
  */
 export default function handler(req: NextApiRequest, res: ResponseWithSocket) {
   // 仅初始化Socket.IO一次
@@ -109,6 +45,8 @@ export default function handler(req: NextApiRequest, res: ResponseWithSocket) {
     const io = new SocketIOServer(res.socket.server, {
       path: "/api/socket",
       addTrailingSlash: false,
+      pingTimeout: 60000, // Increase ping timeout to 60 seconds
+      pingInterval: 30000, // Every 30 seconds
       cors: {
         origin: "*",
         methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -149,9 +87,10 @@ export default function handler(req: NextApiRequest, res: ResponseWithSocket) {
           "[Socket.IO] Error initializing agent with Socket.IO:",
           error
         );
+        // Error shouldn't prevent connections from working
       }
 
-      // 处理心跳检测
+      // 处理心跳检测 - 降低频率减少不必要的网络流量
       const pingInterval = setInterval(() => {
         if (socket.connected) {
           socket.emit("ping", {
@@ -161,48 +100,49 @@ export default function handler(req: NextApiRequest, res: ResponseWithSocket) {
           // 如果断开连接，清除定时器
           clearInterval(pingInterval);
         }
-      }, 30000); // 每30秒ping一次
+      }, 60000); // 每60秒ping一次，减少频率
 
-      // 处理来自客户端的截图数据
+      // 处理来自客户端的截图数据 - 简化为纯数据传输层
       socket.on("provide_screenshot", async (data) => {
         console.log(
-          `[Socket.IO] Screenshot data received, size: ${data.screenshot.length} bytes`
+          `[Socket.IO] Screenshot data received from socket ${socket.id}, size: ${data.screenshot.length} bytes`
         );
 
-        // 如果提供了用户需求则分析截图
-        if (data.userRequirement) {
-          try {
-            const historyContext = await prepareHistoryContext();
-            const analysis = await analyzeScreenshot(
-              data.screenshot,
-              data.userRequirement,
-              historyContext
-            );
-
-            // 如果请求则发回分析结果
-            if (data.returnAnalysis) {
-              socket.emit("screenshot_analysis", {
-                requestId: data.requestId,
-                analysis,
-              });
-            }
-          } catch (error) {
-            console.error(`[Socket.IO] Analysis error:`, error);
-          }
-        }
-
-        // 查找并解决挂起的请求
+        // 获取resolver函数
         const resolver = screenshotRequests.get(data.requestId);
+
+        // 无论分析是否成功，优先传递截图数据以不阻塞Agent流程
         if (resolver) {
-          resolver(data.screenshot);
-          screenshotRequests.delete(data.requestId);
-          console.log(
-            `[Socket.IO] Screenshot request ${data.requestId} resolved`
-          );
+          try {
+            // 立即传递截图数据，不阻塞流程
+            resolver(data.screenshot);
+            console.log(
+              `[Socket.IO] Screenshot request ${data.requestId} resolved (from socket ${socket.id})`
+            );
+          } catch (resolveError) {
+            console.error(
+              `[Socket.IO] Error resolving screenshot request:`,
+              resolveError
+            );
+          } finally {
+            // 清理请求
+            screenshotRequests.delete(data.requestId);
+          }
         } else {
           console.warn(
             `[Socket.IO] No pending request for ID: ${data.requestId}`
           );
+        }
+
+        // 如果提供了用户需求，告知客户端我们收到了分析请求
+        // 但实际分析不在这里进行，而是应该在Agent流程中
+        if (data.userRequirement) {
+          // 仅发送确认收到的消息，不进行实际分析
+          socket.emit("screenshot_analysis", {
+            requestId: data.requestId,
+            status: "received",
+            message: "Screenshot received for analysis, processing in agent",
+          });
         }
       });
 
@@ -210,11 +150,6 @@ export default function handler(req: NextApiRequest, res: ResponseWithSocket) {
       socket.on("disconnect", () => {
         console.log(`[Socket.IO] Client disconnected: ${clientId}`);
         clearInterval(pingInterval);
-      });
-
-      // 处理错误
-      socket.on("error", (error) => {
-        console.error(`[Socket.IO] Connection error for ${clientId}:`, error);
       });
     });
 
@@ -228,12 +163,14 @@ export default function handler(req: NextApiRequest, res: ResponseWithSocket) {
 /**
  * 通过Socket.IO从客户端请求截图
  * @param requestId 此截图请求的唯一ID
+ * @param socket 可选的特定socket实例，用于单播请求而非广播
  * @returns 解析为截图数据的Promise
  */
 export async function requestScreenshot(
-  requestId: string = `req_${Date.now()}`
+  requestId: string = `req_${Date.now()}`,
+  socket?: Socket
 ): Promise<string> {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     // 获取Socket.IO服务器实例
     const io = global.socketIOServer;
 
@@ -241,13 +178,57 @@ export async function requestScreenshot(
       console.error(
         `[Socket.IO] [${requestId}] Server instance not available globally`
       );
-      reject(new Error("Socket.IO server not initialized"));
+      resolve(""); // 返回空字符串而非拒绝Promise
       return;
     }
 
     console.log(
       `[Socket.IO] [${requestId}] Starting screenshot request - ${new Date().toISOString()}`
     );
+
+    // 如果提供了特定socket，使用单播模式
+    if (socket && socket.connected) {
+      console.log(
+        `[Socket.IO] [${requestId}] Using direct socket connection ${socket.id}`
+      );
+
+      // 存储解析函数用于处理回调
+      screenshotRequests.set(requestId, resolve);
+
+      // 30秒后超时 - 增加超时时间确保有足够时间获取响应
+      const timeout = setTimeout(() => {
+        if (screenshotRequests.has(requestId)) {
+          console.error(
+            `[Socket.IO] [${requestId}] Screenshot request timed out (30 seconds)`
+          );
+          screenshotRequests.delete(requestId);
+          resolve(""); // 返回空字符串而非抛出错误
+        }
+      }, 30000);
+
+      // 向特定客户端发送截图请求
+      try {
+        socket.emit("request_screenshot", {
+          requestId,
+          timestamp: Date.now(),
+          fromAgent: true,
+        });
+
+        console.log(
+          `[Socket.IO] [${requestId}] Screenshot request sent to specific client ${socket.id}`
+        );
+      } catch (error) {
+        clearTimeout(timeout);
+        screenshotRequests.delete(requestId);
+        console.error(
+          `[Socket.IO] [${requestId}] Error sending screenshot request:`,
+          error
+        );
+        resolve(""); // 返回空字符串而非拒绝Promise
+      }
+
+      return;
+    }
 
     // 获取已连接的客户端数量
     const clientCount = io.engine.clientsCount;
@@ -259,23 +240,23 @@ export async function requestScreenshot(
       console.error(
         `[Socket.IO] [${requestId}] No connected clients available`
       );
-      reject(new Error("No connected clients available"));
+      resolve(""); // 返回空字符串而非拒绝Promise
       return;
     }
 
     // 存储解析函数用于处理回调
     screenshotRequests.set(requestId, resolve);
 
-    // 15秒后超时
+    // 30秒后超时 - 增加超时时间
     const timeout = setTimeout(() => {
       if (screenshotRequests.has(requestId)) {
         console.error(
-          `[Socket.IO] [${requestId}] Screenshot request timed out (15 seconds)`
+          `[Socket.IO] [${requestId}] Screenshot request timed out (30 seconds)`
         );
         screenshotRequests.delete(requestId);
-        reject(new Error("Screenshot request timed out"));
+        resolve(""); // 返回空字符串而非抛出错误
       }
-    }, 15000);
+    }, 30000);
 
     // 向所有客户端广播截图请求
     try {
@@ -294,7 +275,7 @@ export async function requestScreenshot(
         `[Socket.IO] [${requestId}] Error sending screenshot request:`,
         error
       );
-      reject(error);
+      resolve(""); // 返回空字符串而非拒绝Promise
     }
   });
 }

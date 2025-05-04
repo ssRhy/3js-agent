@@ -1,4 +1,4 @@
-import { Tool } from "langchain/tools";
+
 import { LintError } from "./codeTypes";
 import { ModelHistoryEntry, SceneStateObject } from "./sceneTypes";
 import { NextApiResponse } from "next";

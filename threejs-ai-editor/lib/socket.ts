@@ -6,8 +6,11 @@ import { Socket, io } from "socket.io-client";
 export interface ScreenshotRequest {
   requestId: string;
   timestamp: number;
-  resolve: (screenshot: string) => void;
-  reject: (error: Error) => void;
+  resolve: (result: {
+    status: string;
+    screenshot?: string;
+    error?: string;
+  }) => void;
   timeout: NodeJS.Timeout;
 }
 
@@ -16,6 +19,7 @@ interface SocketStore {
   // Connection state
   isConnected: boolean;
   connectionError: string | null;
+  isInSilentMode: boolean; // Flag for silent mode
 
   // Socket.IO instance (singleton)
   socket: Socket | null;
@@ -30,14 +34,21 @@ interface SocketStore {
   connect: () => void;
   disconnect: () => void;
 
+  // Silent mode control
+  enterSilentMode: () => void;
+  exitSilentMode: () => void;
+
   // Request tracking
   addRequest: (
     requestId: string,
-    resolve: (screenshot: string) => void,
-    reject: (error: Error) => void
+    resolve: (result: {
+      status: string;
+      screenshot?: string;
+      error?: string;
+    }) => void
   ) => void;
   resolveRequest: (requestId: string, screenshot: string) => void;
-  rejectRequest: (requestId: string, error: Error) => void;
+  rejectRequest: (requestId: string, error: string) => void;
 
   // State setters
   setSocket: (socket: Socket | null) => void;
@@ -50,6 +61,7 @@ interface SocketStore {
 export const useSocketStore = create<SocketStore>((set, get) => ({
   isConnected: false,
   connectionError: null,
+  isInSilentMode: false, // Start in normal mode
   socket: null,
   clientId: null,
   pendingRequests: new Map(),
@@ -85,7 +97,7 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
         reconnectionAttempts: 5,
         reconnectionDelay: 1000,
         reconnectionDelayMax: 5000,
-        timeout: 20000,
+        timeout: 30000, // Increased timeout to 30s
         // Force a new connection by adding a timestamp
         query: { t: Date.now().toString() },
       });
@@ -109,6 +121,9 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
       socket.on("connection_established", (data) => {
         console.log("[Socket.IO Client] Connection established:", data);
         set({ clientId: data.clientId, isConnected: true });
+
+        // Enter silent mode after connection established
+        get().enterSilentMode();
       });
 
       // 处理截图请求的响应
@@ -117,21 +132,28 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
         const request = pendingRequests.get(data.requestId);
 
         if (request) {
+          // Use structured response with status
           get().resolveRequest(data.requestId, data.screenshot);
         }
       });
 
-      // 处理截图分析结果
+      // 处理截图分析结果 - simplified to just log in silent mode
       socket.on("screenshot_analysis", (data) => {
-        console.log(
-          "[Socket.IO Client] Received analysis for request:",
-          data.requestId
-        );
+        // In silent mode, just log without additional processing
+        if (get().isInSilentMode) {
+          console.log(
+            "[Socket.IO Client] Received analysis for request:",
+            data.requestId
+          );
+        }
       });
 
-      // 心跳包处理
+      // 心跳包处理 - simplified
       socket.on("ping", (data) => {
-        console.log("[Socket.IO Client] Ping received, responding with pong");
+        // In silent mode, respond without logging
+        if (!get().isInSilentMode) {
+          console.log("[Socket.IO Client] Ping received, responding with pong");
+        }
         socket.emit("pong", { timestamp: data.timestamp });
       });
 
@@ -143,6 +165,9 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
           "[Socket.IO Client] Socket already connected on initialization"
         );
         set({ isConnected: true });
+
+        // Enter silent mode after connection established
+        get().enterSilentMode();
       }
     } catch (error) {
       console.error("[Socket.IO Client] Failed to initialize socket:", error);
@@ -151,6 +176,18 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
         isConnected: false,
       });
     }
+  },
+
+  // Enter silent mode - minimize logging and only respond to specific events
+  enterSilentMode: () => {
+    console.log("[Socket.IO Client] Entering silent mode");
+    set({ isInSilentMode: true });
+  },
+
+  // Exit silent mode - restore normal operation
+  exitSilentMode: () => {
+    console.log("[Socket.IO Client] Exiting silent mode");
+    set({ isInSilentMode: false });
   },
 
   // Disconnect from Socket.IO server
@@ -171,33 +208,33 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
     set({ socket });
   },
 
-  // Add a new screenshot request with promise handlers
+  // Add a new screenshot request with promise handlers - using structured responses
   addRequest: (
     requestId: string,
-    resolve: (screenshot: string) => void,
-    reject: (error: Error) => void
+    resolve: (result: {
+      status: string;
+      screenshot?: string;
+      error?: string;
+    }) => void
   ) => {
     const { pendingRequests } = get();
 
-    // Create timeout for the request
+    // Create timeout for the request - increased to 30 seconds
     const timeout = setTimeout(() => {
       const store = get();
       if (store.pendingRequests.has(requestId)) {
-        const request = store.pendingRequests.get(requestId);
-        if (request) {
-          request.reject(
-            new Error("Screenshot request timed out after 15 seconds")
-          );
-          store.pendingRequests.delete(requestId);
-        }
+        // Instead of rejecting, resolve with error status
+        store.rejectRequest(
+          requestId,
+          "Screenshot request timed out after 30 seconds"
+        );
       }
-    }, 15000);
+    }, 30000); // Increased to 30 seconds
 
     pendingRequests.set(requestId, {
       requestId,
       timestamp: Date.now(),
       resolve,
-      reject,
       timeout,
     });
 
@@ -211,25 +248,42 @@ export const useSocketStore = create<SocketStore>((set, get) => ({
 
     if (request) {
       clearTimeout(request.timeout);
-      request.resolve(screenshot);
+      // Use structured response
+      request.resolve({
+        status: "success",
+        screenshot,
+      });
       pendingRequests.delete(requestId);
       set({ pendingRequests: new Map(pendingRequests) });
-      console.log(
-        `[Socket.IO Client] Screenshot request ${requestId} resolved`
-      );
+
+      // Only log in non-silent mode
+      if (!get().isInSilentMode) {
+        console.log(
+          `[Socket.IO Client] Screenshot request ${requestId} resolved`
+        );
+      }
     }
   },
 
-  // Reject a screenshot request with error
-  rejectRequest: (requestId: string, error: Error) => {
+  // Reject a screenshot request with error - using structured response
+  rejectRequest: (requestId: string, error: string) => {
     const { pendingRequests } = get();
     const request = pendingRequests.get(requestId);
 
     if (request) {
       clearTimeout(request.timeout);
-      request.reject(error);
+      // Use structured response with error status
+      request.resolve({
+        status: "error",
+        error,
+      });
       pendingRequests.delete(requestId);
       set({ pendingRequests: new Map(pendingRequests) });
+
+      // Always log errors regardless of mode
+      console.error(
+        `[Socket.IO Client] Screenshot request ${requestId} failed: ${error}`
+      );
     }
   },
 
@@ -260,25 +314,45 @@ export async function requestScreenshot(
 ): Promise<string> {
   const store = useSocketStore.getState();
 
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     // Check if Socket.IO is connected
     if (!store.socket || !store.isConnected) {
-      return reject(new Error("Socket.IO is not connected"));
+      console.warn(
+        "[Socket.IO Client] Socket not connected for screenshot request"
+      );
+      // Return empty string instead of rejecting to avoid interrupting agent
+      resolve("");
+      return;
     }
 
     // Check socket state
     if (!store.socket.connected) {
-      return reject(
-        new Error(
-          `Socket.IO is not connected (state: ${
-            store.socket.connected ? "connected" : "disconnected"
-          })`
-        )
+      console.warn(
+        "[Socket.IO Client] Socket not in connected state for screenshot request"
       );
+      // Return empty string instead of rejecting to avoid interrupting agent
+      resolve("");
+      return;
     }
 
-    // Store the promise handlers
-    store.addRequest(requestId, resolve, reject);
+    // Temporarily exit silent mode for this request
+    store.exitSilentMode();
+
+    // Store the promise handlers with structured response
+    store.addRequest(requestId, (result) => {
+      // Re-enter silent mode after request completes
+      store.enterSilentMode();
+
+      if (result.status === "success" && result.screenshot) {
+        resolve(result.screenshot);
+      } else {
+        // Return empty string on error instead of rejecting
+        console.warn(
+          `[Socket.IO Client] Error in screenshot request: ${result.error}`
+        );
+        resolve("");
+      }
+    });
 
     try {
       // Send the screenshot request
@@ -293,14 +367,19 @@ export async function requestScreenshot(
       );
     } catch (error) {
       // Clean up the request if sending fails
+      console.error(
+        "[Socket.IO Client] Error sending screenshot request:",
+        error
+      );
       store.rejectRequest(
         requestId,
-        new Error(
-          `Failed to send screenshot request: ${
-            error instanceof Error ? error.message : String(error)
-          }`
-        )
+        `Failed to send screenshot request: ${
+          error instanceof Error ? error.message : String(error)
+        }`
       );
+
+      // Return empty string instead of rejecting
+      resolve("");
     }
   });
 }
@@ -314,35 +393,34 @@ export async function requestScreenshot(
 export function sendSocketMessage(
   event: string,
   data: Record<string, unknown>
-): Promise<void> {
+): Promise<boolean> {
   const store = useSocketStore.getState();
 
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     if (!store.socket || !store.isConnected) {
-      return reject(new Error("Socket.IO is not connected"));
+      console.warn(
+        "[Socket.IO Client] Socket not connected for message:",
+        event
+      );
+      resolve(false);
+      return;
     }
 
     if (!store.socket.connected) {
-      return reject(
-        new Error(
-          `Socket.IO is not connected (state: ${
-            store.socket.connected ? "connected" : "disconnected"
-          })`
-        )
+      console.warn(
+        "[Socket.IO Client] Socket not in connected state for message:",
+        event
       );
+      resolve(false);
+      return;
     }
 
     try {
       store.socket.emit(event, data);
-      resolve();
+      resolve(true);
     } catch (error) {
-      reject(
-        new Error(
-          `Failed to send message: ${
-            error instanceof Error ? error.message : String(error)
-          }`
-        )
-      );
+      console.error("[Socket.IO Client] Error sending message:", error);
+      resolve(false);
     }
   });
 }
