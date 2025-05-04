@@ -73,9 +73,42 @@ export const codeGenTool = new DynamicStructuredTool({
     instruction: z.string().describe("要实现的功能或需要修复的问题描述"),
   }),
   func: async ({ instruction }) => {
+    const requestId = `codegen_${Date.now()}`;
+    const startTime = Date.now();
+    console.log(
+      `[${requestId}] [CodeGen Tool] 🚀 Agent请求生成/修复代码 - ${new Date().toISOString()}`
+    );
+    console.log(
+      `[${requestId}] [CodeGen Tool] 📝 指令内容: "${instruction.substring(
+        0,
+        100
+      )}${instruction.length > 100 ? "..." : ""}"`
+    );
+
+    // 检测是否是来自截图分析的请求
+    const isFromScreenshotAnalysis =
+      instruction.includes("截图分析") ||
+      instruction.includes("分析结果") ||
+      instruction.includes("needs_improvements") ||
+      instruction.includes("场景需要调整");
+
+    if (isFromScreenshotAnalysis) {
+      console.log(
+        `[${requestId}] [CodeGen Tool] 🖼️ 检测到基于截图分析的代码修复请求`
+      );
+    }
+
     try {
       // 获取模型历史，确保在生成代码时引用这些模型
+      console.log(`[${requestId}] [CodeGen Tool] 📚 正在获取模型历史数据...`);
       const modelHistorySection = await formatModelHistoryForPrompt();
+      console.log(
+        `[${requestId}] [CodeGen Tool] ✅ 模型历史数据获取完成，包含 ${
+          modelHistorySection.split("\n").length - 4 > 0
+            ? modelHistorySection.split("\n").length - 4
+            : 0
+        } 个模型`
+      );
 
       const prompt = `作为Three.js专家，请根据以下指令生成或修复代码：
 
@@ -99,7 +132,17 @@ ${modelHistorySection}
 ⚠️ 注意：你的回答必须只包含可执行的threejs代码，不要包含任何解释、思考过程或描述性文本。不要使用markdown代码块标记。不要加任何前缀或后缀。直接返回可执行的setup函数代码。`;
 
       // 调用LLM生成或修改代码
+      console.log(`[${requestId}] [CodeGen Tool] 🤖 调用LLM生成代码...`);
+      const llmCallStartTime = Date.now();
       const result = await codeGenModel.invoke(prompt);
+      const llmResponseTime = Date.now();
+
+      console.log(
+        `[${requestId}] [CodeGen Tool] ✅ LLM响应完成，耗时: ${
+          llmResponseTime - llmCallStartTime
+        }ms`
+      );
+
       const responseContent = handleLLMResponseContent(result.content);
 
       // 提取生成的代码
@@ -112,11 +155,17 @@ ${modelHistorySection}
         );
         if (codeMatch && codeMatch[1]) {
           improvedCode = codeMatch[1].trim();
+          console.log(
+            `[${requestId}] [CodeGen Tool] ℹ️ 从markdown代码块中提取代码`
+          );
         }
       }
 
       // 确保代码是setup函数格式
       if (!improvedCode.startsWith("function setup")) {
+        console.log(
+          `[${requestId}] [CodeGen Tool] ⚠️ 生成的代码不是setup函数格式，添加封装`
+        );
         improvedCode = `function setup(scene, camera, renderer, THREE, OrbitControls) {
   ${improvedCode}
   // Return the main object or scene
@@ -126,6 +175,9 @@ ${modelHistorySection}
 
       // 获取原始缓存代码
       const originalCode = getCachedCode() || "";
+      console.log(
+        `[${requestId}] [CodeGen Tool] ℹ️ 获取到原始代码, 长度: ${originalCode.length} 字符`
+      );
 
       // 检查生成的代码是否包含模型URL，如果不包含，尝试从原始代码中提取并保留
       const modelHistory = await loadModelHistoryFromMemory();
@@ -139,7 +191,7 @@ ${modelHistorySection}
             if (originalCode.includes(model.modelUrl)) {
               // 如果原始代码包含但新代码不包含，我们需要确保保留这个模型
               console.log(
-                `Preserving model URL in code: ${model.modelUrl.substring(
+                `[${requestId}] [CodeGen Tool] 🔄 保留模型URL: ${model.modelUrl.substring(
                   0,
                   30
                 )}...`
@@ -160,8 +212,19 @@ ${modelHistorySection}
         }
 
         if (hasPreservedModels) {
-          console.log("Preserved model URLs from history in generated code");
+          console.log(`[${requestId}] [CodeGen Tool] ✅ 已保留历史模型URL`);
         }
+      }
+
+      const totalTime = Date.now() - startTime;
+      console.log(
+        `[${requestId}] [CodeGen Tool] 🏁 代码生成完成，总耗时: ${totalTime}ms，代码长度: ${improvedCode.length} 字符`
+      );
+
+      if (isFromScreenshotAnalysis) {
+        console.log(
+          `[${requestId}] [CodeGen Tool] 🔄 已完成基于截图分析的代码修复`
+        );
       }
 
       // 返回生成的代码
@@ -173,7 +236,11 @@ ${modelHistorySection}
         isFirstGeneration: true,
       });
     } catch (error) {
-      console.error("Failed to generate or modify Three.js code:", error);
+      const totalTime = Date.now() - startTime;
+      console.error(
+        `[${requestId}] [CodeGen Tool] ❌ 代码生成失败，总耗时: ${totalTime}ms, 错误:`,
+        error
+      );
       return JSON.stringify({
         status: "error",
         message: `Failed to generate or modify Three.js code: ${

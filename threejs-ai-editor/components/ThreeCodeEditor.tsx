@@ -4,33 +4,137 @@ import { useSceneStore } from "../stores/useSceneStore";
 import { Editor, OnMount } from "@monaco-editor/react";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
-import { applyPatch } from "diff";
 
-interface ApiResponse {
-  error?: string;
-  message?: string;
-  directCode?: string;
-  patch?: string;
-  modelUrl?: string;
-  modelUrls?: string[];
-  sceneHistory?: {
-    history: Array<{
-      timestamp: string;
-      prompt: string;
-      objectCount: number;
-      objects: Array<{
-        id: string;
-        type: string;
-        name: string;
-        position?: number[];
-      }>;
-    }>;
-    lastUpdateTimestamp?: string;
-  };
-  // Add other fields you expect from the API
+import { useSocketStore } from "../lib/socket";
+
+interface SceneStateObject {
+  id: string;
+  type: string;
+  name?: string;
+  position?: number[];
+  rotation?: number[];
+  scale?: number[];
+  [key: string]: unknown; // Replace any with unknown for better type safety
+}
+
+// 修复RequestPayload中的sceneState类型
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+interface RequestPayload {
+  action: string;
+  code: string;
+  prompt: string;
+  lintErrors: {
+    ruleId: string | null;
+    severity: number;
+    message: string;
+    line: number;
+    column: number;
+  }[];
+  renderingComplete: boolean;
+  screenshot?: string;
+  sceneState?: SceneStateObject[];
 }
 
 export default function ThreeCodeEditor() {
+  // Socket.IO 连接状态
+  const [socketConnectionStatus, setSocketConnectionStatus] = useState<
+    "connecting" | "open" | "closed" | "error"
+  >("connecting");
+
+  // 跟踪最后一次心跳时间
+  const heartbeatIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  // 获取 Socket 存储方法
+  const { setConnectionError, connect } = useSocketStore();
+
+  // Function to reconnect manually
+  const manualReconnect = () => {
+    // Reset connection state
+    setSocketConnectionStatus("connecting");
+    setConnectionError(null);
+
+    // Force reconnection by refreshing the page
+    window.location.reload();
+  };
+
+  // Socket.IO 初始化
+  useEffect(() => {
+    // 初始化连接
+    connect();
+
+    // 设置Socket连接状态监听
+    const { socket } = useSocketStore.getState();
+    if (socket) {
+      // 使用Socket.IO的内置事件监听连接状态
+      const handleConnect = () => {
+        console.log("[ThreeEditor] Socket.IO connected");
+        setSocketConnectionStatus("open");
+      };
+
+      const handleDisconnect = () => {
+        console.log("[ThreeEditor] Socket.IO disconnected");
+        setSocketConnectionStatus("closed");
+      };
+
+      const handleError = (err: Error) => {
+        console.error("[ThreeEditor] Socket.IO error:", err);
+        setSocketConnectionStatus("error");
+        setConnectionError(err.message);
+      };
+
+      // 立即检查当前连接状态
+      if (socket.connected) {
+        setSocketConnectionStatus("open");
+      }
+
+      // 添加事件监听器
+      socket.on("connect", handleConnect);
+      socket.on("disconnect", handleDisconnect);
+      socket.on("error", handleError);
+
+      // Socket.IO客户端特定的连接事件
+      socket.on("connection_established", (data) => {
+        console.log("[ThreeEditor] Server confirmed connection:", data);
+        setSocketConnectionStatus("open");
+      });
+
+      // 监听服务器心跳响应，确保连接稳定
+      socket.on("pong", () => {
+        // 更新最后心跳时间
+        setSocketConnectionStatus("open");
+      });
+    }
+
+    // 设置心跳检测，确保连接稳定
+    heartbeatIntervalRef.current = setInterval(() => {
+      const { socket } = useSocketStore.getState();
+      if (socket && socket.connected) {
+        socket.emit("ping");
+      }
+    }, 30000); // 30秒一次心跳
+
+    // 清理函数
+    return () => {
+      const { disconnect, socket } = useSocketStore.getState();
+
+      // 清理事件监听器
+      if (socket) {
+        socket.off("connect");
+        socket.off("disconnect");
+        socket.off("error");
+        socket.off("connection_established");
+        socket.off("pong");
+      }
+
+      disconnect();
+
+      if (heartbeatIntervalRef.current) {
+        clearInterval(heartbeatIntervalRef.current);
+        heartbeatIntervalRef.current = null;
+      }
+    };
+  }, [connect, setConnectionError]);
+
   const containerRef = useRef<HTMLDivElement | null>(null);
   const threeRef = useRef<{
     scene: THREE.Scene;
@@ -60,11 +164,11 @@ export default function ThreeCodeEditor() {
   return scene;
 }`);
   // ... existing code ...
-  const [previousCode, setPreviousCode] = useState("");
+  const [previousCode] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
   const [showDiff, setShowDiff] = useState(false);
-  const [diff, setDiff] = useState<string>("");
+
   const [lintErrors, setLintErrors] = useState<
     {
       ruleId: string | null;
@@ -84,12 +188,18 @@ export default function ThreeCodeEditor() {
     addToHistory,
     setScene,
     setDynamicGroup,
-    addHistoryEntry,
+
     serializeSceneState,
   } = useSceneStore();
 
   // Add rendering complete flag
   const renderingCompleteRef = useRef<boolean>(false);
+
+  // 添加success状态
+  const [success, setSuccess] = useState("");
+
+  // 定义diff变量
+  const [diff] = useState("");
 
   useEffect(() => {
     const container = containerRef.current;
@@ -237,6 +347,7 @@ export default function ThreeCodeEditor() {
       window.removeEventListener("resize", handleResize);
       renderer.dispose();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setScene, setDynamicGroup]);
 
   const loadModel = async (modelUrl: string, modelSize?: number) => {
@@ -728,6 +839,7 @@ export default function ThreeCodeEditor() {
     }, 1000);
 
     return () => clearTimeout(debounceTimeout);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [code]);
 
   const renderLintErrorsIndicator = (
@@ -961,50 +1073,60 @@ export default function ThreeCodeEditor() {
         return null;
       }
 
-      // 强制重新渲染场景以确保获取最新状态
+      // Force multiple renders to ensure complete rendering
       renderer.render(scene, camera);
 
-      // 直接从Three.js canvas获取图像数据
+      // Wait for any pending animations/processes to complete
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      // Render again to ensure the scene is fully updated
+      renderer.render(scene, camera);
+
+      // Get the canvas element
       const threeCanvas = renderer.domElement;
       if (!threeCanvas) {
         console.warn("[Screenshot] Canvas element not found");
         return null;
       }
 
-      // 等待一帧以确保渲染完成
-      await new Promise((resolve) => setTimeout(resolve, 100));
-
-      // 再次渲染确保最新状态
+      // One final render before capturing
       renderer.render(scene, camera);
 
-      // 直接从canvas获取base64数据
-      const imageBase64 = threeCanvas.toDataURL("image/png");
-      console.log(
-        "[Screenshot] Base64 data generated directly from Three.js, length:",
-        imageBase64.length,
-        "bytes"
-      );
+      try {
+        // Capture the canvas content as PNG base64
+        const imageBase64 = threeCanvas.toDataURL("image/png", 1.0);
 
-      // 验证数据有效性
-      if (
-        imageBase64 === "data:," ||
-        !imageBase64.startsWith("data:image/png;base64,") ||
-        imageBase64.length < 1000 // 增加最小长度要求以确保质量
-      ) {
-        console.error(
-          "[Screenshot] Invalid or too small base64 data from direct capture"
+        console.log(
+          "[Screenshot] Base64 data captured, length:",
+          imageBase64.length,
+          "bytes"
         );
+
+        // Validate data quality and format
+        if (
+          !imageBase64 ||
+          imageBase64 === "data:," ||
+          !imageBase64.startsWith("data:image/png;base64,") ||
+          imageBase64.length < 1000
+        ) {
+          console.error(
+            "[Screenshot] Invalid or too small base64 data from direct capture"
+          );
+          return null;
+        }
+
+        console.log(
+          "[Screenshot] Successfully captured scene from Three.js canvas"
+        );
+        return imageBase64;
+      } catch (canvasError) {
+        console.error("[Screenshot] Canvas capture error:", canvasError);
         return null;
       }
-
-      console.log(
-        "[Screenshot] Successfully captured scene directly from Three.js"
-      );
-      return imageBase64;
     } catch (err) {
       console.error("[Screenshot] Capture failed with error:", err);
       setError(
-        "无法捕获场景截图: " +
+        "Cannot capture scene screenshot: " +
           (err instanceof Error ? err.message : String(err))
       );
       return null;
@@ -1051,215 +1173,252 @@ export default function ThreeCodeEditor() {
     }
   };
 
-  // 简化的生成处理函数
-  const handleGenerate = async () => {
-    if (!prompt) {
-      setError("请输入指令");
-      return;
+  // 移除对 lastMessage 和 sendMessage 的依赖，使用 Socket.IO 客户端
+  useEffect(() => {
+    try {
+      // 检查 socket 是否已连接
+      const { socket } = useSocketStore.getState();
+      if (!socket || !socket.connected) {
+        console.log("[Socket.IO] Not connected, cannot process messages");
+        return;
+      }
+
+      // 设置用于接收代码/分析结果的事件监听器
+      const handleAgentResult = (data: {
+        directCode?: string;
+        status?: string;
+        timestamp?: number;
+      }) => {
+        console.log("[Socket.IO] Received agent result:", data);
+        if (data.directCode) {
+          setCode(data.directCode);
+        }
+      };
+
+      // #region 自动化代理截图流程
+      /**
+       * 截图流程说明:
+       * 1. 用户发起截图分析（点击"生成"按钮）- handleGenerate函数中直接捕获并发送截图
+       * 2. Agent驱动的截图请求 - 通过Socket.IO从后端发起，由下面的handleScreenshotRequest处理
+       */
+      // 设置用于处理截图请求的事件监听器（Agent主动请求截图的情况）
+      const handleScreenshotRequest = async (data: {
+        requestId: string;
+        timestamp: number;
+        fromAgent?: boolean;
+      }) => {
+        console.log(
+          `[Socket.IO] Received screenshot request: ${data.requestId} ${
+            data.fromAgent ? "(from Agent)" : ""
+          }`
+        );
+
+        try {
+          // 确保场景已完全渲染
+          await applySafelyToScene(code);
+
+          // 捕获截图
+          const screenshotData = await captureScreenshot();
+
+          if (!screenshotData) {
+            throw new Error("Failed to capture scene screenshot");
+          }
+
+          console.log(
+            `[Socket.IO] Screenshot captured, size: ${Math.round(
+              screenshotData.length / 1024
+            )} KB`
+          );
+
+          // 发送截图回Socket.IO服务器
+          socket.emit("provide_screenshot", {
+            requestId: data.requestId,
+            screenshot: screenshotData,
+            userRequirement: prompt, // 添加当前用户提示以便分析
+            returnAnalysis: true, // 请求分析结果
+            timestamp: Date.now(),
+          });
+
+          console.log(
+            `[Socket.IO] Screenshot sent, request ID: ${data.requestId}`
+          );
+        } catch (error) {
+          console.error(
+            `[Socket.IO] Screenshot request processing failed:`,
+            error
+          );
+
+          // 发送错误响应
+          socket.emit("provide_screenshot_error", {
+            requestId: data.requestId,
+            error: error instanceof Error ? error.message : String(error),
+            timestamp: Date.now(),
+          });
+        }
+      };
+      // #endregion
+
+      // 添加事件监听器
+      socket.on("agent_result", handleAgentResult);
+      socket.on("request_screenshot", handleScreenshotRequest);
+
+      // 添加分析结果监听，便于调试
+      socket.on("screenshot_analysis", (data) => {
+        console.log("[Socket.IO] Received screenshot analysis:", data);
+      });
+
+      // 清理函数
+      return () => {
+        socket.off("agent_result", handleAgentResult);
+        socket.off("request_screenshot", handleScreenshotRequest);
+        socket.off("screenshot_analysis");
+      };
+    } catch (error) {
+      console.error("[Socket.IO] Message processing error:", error);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [code, prompt]);
+
+  // 更新handleGenerate函数，加强前端用户请求的截图分析功能
+  const handleGenerate = async () => {
+    if (isLoading) return;
+    setIsLoading(true);
+    setError("");
 
     try {
-      setIsLoading(true);
-      setError("");
+      // 获取当前渲染状态
+      const isThreeJSReady =
+        threeRef.current !== null && renderingCompleteRef.current;
 
-      console.log("[Generate] Starting generation process with prompt");
+      let screenshotData = "";
 
-      // 应用当前代码到场景
-      await applySafelyToScene(code);
-
-      // 捕获屏幕截图
-      const imageBase64 = await captureScreenshot();
-      if (!imageBase64) {
-        throw new Error("无法捕获场景截图");
-      }
-
-      console.log(
-        `[Generate] Screenshot captured successfully (${Math.round(
-          imageBase64.length / 1024
-        )} KB)`
-      );
-
-      // 设置渲染完成标志
-      renderingCompleteRef.current = true;
-
-      // 获取场景状态
-      const sceneState = serializeSceneState();
-
-      // 获取场景历史
-      let sceneHistory = null;
-      try {
-        const historyResponse = await fetch("/api/memory-state");
-        if (historyResponse.ok) {
-          const historyData = await historyResponse.json();
-          if (historyData.success && historyData.memoryState.sceneHistory) {
-            sceneHistory = historyData.memoryState.sceneHistory;
+      // 用户发起请求时，始终尝试获取截图数据用于分析（而不是仅在renderingComplete时）
+      if (isThreeJSReady) {
+        try {
+          // 确保场景已完全渲染
+          await applySafelyToScene(code);
+          // 捕获最新场景截图
+          const capturedScreenshot = await captureScreenshot();
+          if (capturedScreenshot) {
+            screenshotData = capturedScreenshot;
+            console.log("[Generate] 成功捕获前端场景截图用于分析");
+          } else {
+            console.warn("[Generate] 截图捕获失败，将继续处理但无截图分析");
           }
+        } catch (screenshotError) {
+          console.error("[Generate] 捕获截图时出错:", screenshotError);
         }
-      } catch (historyError) {
-        console.warn("[Generate] Failed to fetch scene history:", historyError);
+      } else {
+        console.log("[Generate] 场景未就绪，将跳过截图分析");
       }
 
-      // 检查提示中是否包含模型大小信息
-      const sizeRegex = /大小\s*[:：]\s*(\d+(\.\d+)?)/i;
-      const sizePrefRegex = /(\d+(\.\d+)?)\s*(尺寸|大小|单位)/i;
-      const sizeMatch = prompt.match(sizeRegex) || prompt.match(sizePrefRegex);
+      // 准备发送到API的数据
+      const requestBody: {
+        action: string;
+        code: string;
+        prompt: string;
+        lintErrors: {
+          ruleId: string | null;
+          severity: number;
+          message: string;
+          line: number;
+          column: number;
+        }[];
+        renderingComplete: boolean;
+        screenshot?: string;
+        sceneState?: SceneStateObject[];
+      } = {
+        action: "analyze-screenshot",
+        code,
+        prompt,
+        lintErrors,
+        renderingComplete: isThreeJSReady,
+      };
 
-      let modelSize: number | undefined = undefined;
-      if (sizeMatch && sizeMatch[1]) {
-        modelSize = parseFloat(sizeMatch[1]);
+      // 如果有截图数据，添加到请求中
+      if (screenshotData) {
+        requestBody.screenshot = screenshotData;
       }
 
-      // ===== 新增: 先调用独立的截图分析API =====
-      let screenshotAnalysis = null;
-      try {
-        console.log("[Generate] Calling direct screenshot analysis API");
-
-        const analysisResponse = await fetch("/api/screenshot", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            screenshot: imageBase64,
-            userRequirement: prompt,
-          }),
-        });
-
-        if (analysisResponse.ok) {
-          screenshotAnalysis = await analysisResponse.json();
-          console.log("[Generate] Screenshot analysis completed:", {
-            status: screenshotAnalysis.status,
-            matches_requirements: screenshotAnalysis.matches_requirements,
-            needs_improvements: screenshotAnalysis.needs_improvements,
-          });
-        } else {
-          console.warn(
-            "[Generate] Screenshot analysis failed with status:",
-            analysisResponse.status
-          );
-          // 创建一个默认分析结果，避免后续处理出错
-          screenshotAnalysis = {
-            status: "error",
-            message: "无法分析截图，将继续生成代码",
-            needs_improvements: true,
-            recommendation: "截图分析失败，但仍会尝试生成代码",
-          };
+      // 如果有场景对象，添加到请求中
+      if (threeRef.current?.dynamicGroup) {
+        const sceneState = serializeSceneState();
+        if (sceneState.length > 0) {
+          requestBody.sceneState = sceneState as unknown as SceneStateObject[];
         }
-      } catch (analysisError) {
-        console.error(
-          "[Generate] Error during screenshot analysis:",
-          analysisError
-        );
-        // 创建一个默认分析结果，避免后续处理出错
-        screenshotAnalysis = {
-          status: "error",
-          message: `分析截图时遇到错误: ${
-            analysisError instanceof Error
-              ? analysisError.message
-              : String(analysisError)
-          }`,
-          needs_improvements: true,
-          recommendation: "截图分析出错，将继续尝试生成代码",
-        };
       }
-      // ===== 截图分析结束 =====
 
-      // 发送API请求
       console.log(
-        "[Generate] Sending request to agent API with analysis result"
+        `[Generate] 发送请求到API，${
+          screenshotData ? "包含" : "不包含"
+        }截图数据`
       );
-      const response = await fetch("/api/agent", {
+
+      // 发送请求到API
+      const response = await fetch("/api/agentHandler", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "analyze-screenshot",
-          code,
-          prompt,
-          // 不再发送完整的截图数据，只发送分析结果
-          // screenshot: imageBase64,
-          screenshotAnalysis, // 发送分析结果而不是原始截图数据
-          sceneState,
-          sceneHistory,
-          lintErrors: lintErrors.length > 0 ? lintErrors : undefined,
-          modelSize,
-          renderingComplete: true,
-        }),
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(requestBody),
       });
 
       if (!response.ok) {
-        throw new Error(`API responded with status: ${response.status}`);
-      }
-
-      // 处理响应
-      const data: ApiResponse = await response.json();
-
-      // 处理模型URL
-      const modelUrls: string[] = [];
-      if (data.modelUrl) {
-        setIsModelLoading(true);
-        const modelLoaded = await loadModel(data.modelUrl, modelSize);
-        setIsModelLoading(false);
-        if (modelLoaded) modelUrls.push(data.modelUrl);
-      }
-
-      // 处理代码更新
-      if (data.directCode) {
-        setPreviousCode(code);
-        let newCode;
-
-        if (data.patch) {
-          try {
-            // @ts-expect-error - applyPatch function accepts string but type definition requires ParsedDiff
-            const result = applyPatch(code, data.patch);
-            if (typeof result === "boolean") {
-              newCode = data.directCode;
-            } else {
-              newCode = result as string;
-            }
-            setDiff(data.patch);
-          } catch (error) {
-            console.error("Failed to apply patch:", error);
-            newCode = data.directCode;
-          }
-        } else {
-          newCode = data.directCode;
-          const diffLines = data.directCode
-            .split("\n")
-            .filter((line, i) => {
-              const oldLines = code.split("\n");
-              return i >= oldLines.length || line !== oldLines[i];
-            })
-            .join("\n");
-          setDiff(diffLines);
-        }
-
-        setCode(newCode);
-        addHistoryEntry(newCode, modelUrls);
-      } else if (data.error) {
-        throw new Error(data.error);
-      }
-
-      // 检查代码中是否包含额外的模型URL
-      if (data.directCode && !data.modelUrl) {
-        const hyper3dMatches = data.directCode.match(
-          /['"]https:\/\/hyperhuman-file\.deemos\.com\/[^'"]+\.glb[^'"]*['"]/g
+        throw new Error(
+          `API请求失败: ${response.status} ${response.statusText}`
         );
+      }
 
-        if (hyper3dMatches && hyper3dMatches.length > 0) {
-          const modelUrl = hyper3dMatches[0].replace(/^['"]|['"]$/g, "");
+      const data = await response.json();
 
-          setIsModelLoading(true);
-          const modelLoaded = await loadModel(modelUrl, modelSize);
-          setIsModelLoading(false);
+      // 处理API响应
+      if (data.error) {
+        throw new Error(`API错误: ${data.error}`);
+      }
 
-          if (modelLoaded) {
-            modelUrls.push(modelUrl);
-            addHistoryEntry(code, modelUrls);
-          }
+      if (data.directCode) {
+        // 更新代码并安全应用到场景
+        setCode(data.directCode);
+        setSuccess("代码已更新，正在应用到场景...");
+
+        try {
+          await applySafelyToScene(data.directCode);
+          setSuccess("代码已成功应用到场景！");
+        } catch (applyError) {
+          console.error("[Generate] 应用代码到场景失败:", applyError);
+          setError(
+            `应用代码失败: ${
+              applyError instanceof Error
+                ? applyError.message
+                : String(applyError)
+            }`
+          );
         }
+      } else if (data.modelUrls && data.modelUrls.length > 0) {
+        // 处理生成的模型URL
+        setSuccess(`已生成${data.modelUrls.length}个模型！正在加载...`);
+
+        try {
+          // 加载第一个模型
+          await loadModel(data.modelUrls[0]);
+          setSuccess("模型已成功加载！");
+        } catch (loadError) {
+          console.error("[Generate] 加载模型失败:", loadError);
+          setError(
+            `加载模型失败: ${
+              loadError instanceof Error ? loadError.message : String(loadError)
+            }`
+          );
+        }
+      } else {
+        setSuccess("已处理请求，但没有代码或模型更新");
       }
     } catch (error) {
-      console.error("[Generate] Error:", error);
+      console.error("[Generate] 处理请求错误:", error);
       setError(
-        "生成错误: " + (error instanceof Error ? error.message : String(error))
+        `处理请求失败: ${
+          error instanceof Error ? error.message : String(error)
+        }`
       );
     } finally {
       setIsLoading(false);
@@ -1347,28 +1506,81 @@ export default function ThreeCodeEditor() {
   return (
     <div className="editor-container">
       <div className="sidebar">
-        <h2>Three.js AI 编辑器</h2>
-        <textarea
-          value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
-          placeholder="例如: 添加一个旋转的红色球体 或 生成一只红色的猫"
-          rows={4}
-        />
-        <div className="button-group">
-          <button
-            onClick={handleGenerate}
-            disabled={isLoading || isModelLoading}
-          >
-            {isLoading ? "生成中..." : "生成场景代码"}
-          </button>
+        <div className="sidebar-header">
+          <h2>Three.js AI 编辑器</h2>
+          {/* WebSocket connection status indicator */}
+          <div className={`ws-status ${socketConnectionStatus}`}>
+            <span className="status-dot"></span>
+            {socketConnectionStatus === "open"
+              ? "已连接"
+              : socketConnectionStatus === "connecting"
+              ? "连接中..."
+              : socketConnectionStatus === "closed"
+              ? "已断开"
+              : "连接错误"}
+            {socketConnectionStatus !== "open" && (
+              <button onClick={manualReconnect} className="reconnect-button">
+                重连
+              </button>
+            )}
+          </div>
         </div>
-        {error && <div className="error">{error}</div>}
-        {isModelLoading && (
-          <div className="loading-model">
-            <span className="loading-spinner"></span>
-            <span>加载3D模型中...</span>
+
+        <div className="prompt-section">
+          <label htmlFor="prompt-input" className="prompt-label">
+            输入你想要创建的场景描述:
+          </label>
+          <textarea
+            id="prompt-input"
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            placeholder="例如: 添加一个旋转的红色球体 或 生成一只红色的猫"
+            rows={4}
+            className="prompt-input"
+            disabled={socketConnectionStatus !== "open"}
+          />
+          <div className="button-group">
+            <button
+              onClick={handleGenerate}
+              disabled={
+                isLoading || isModelLoading || socketConnectionStatus !== "open"
+              }
+              className="generate-button"
+            >
+              {isLoading
+                ? "生成中..."
+                : socketConnectionStatus !== "open"
+                ? "等待连接..."
+                : renderingCompleteRef.current
+                ? "生成并分析场景" // 当场景渲染完成时，明确显示将分析场景
+                : "生成场景代码"}
+            </button>
+            {renderingCompleteRef.current && (
+              <div className="screenshot-hint">
+                <span className="camera-icon">📷</span>
+                点击生成时将自动分析当前场景
+              </div>
+            )}
+          </div>
+        </div>
+
+        {socketConnectionStatus !== "open" && (
+          <div className="connection-message">
+            <p>正在建立 Socket.IO 连接，请稍候...</p>
           </div>
         )}
+
+        <div className="status-section">
+          {error && <div className="error">{error}</div>}
+          {success && <div className="success">{success}</div>}
+          {isModelLoading && (
+            <div className="loading-model">
+              <span className="loading-spinner"></span>
+              <span>加载3D模型中...</span>
+            </div>
+          )}
+        </div>
+
         {previousCode && code !== previousCode && (
           <div className="diff-toggle">
             <button onClick={() => setShowDiff(!showDiff)}>
@@ -1376,7 +1588,9 @@ export default function ThreeCodeEditor() {
             </button>
           </div>
         )}
+
         <div className="code-section">
+          <h3 className="code-header">Three.js 场景代码</h3>
           <Editor
             height="100%"
             defaultLanguage="javascript"
@@ -1390,6 +1604,13 @@ export default function ThreeCodeEditor() {
               wordWrap: "on",
               scrollBeyondLastLine: false,
               automaticLayout: true,
+              tabSize: 2,
+              lineNumbers: "on",
+              glyphMargin: true,
+              folding: true,
+              contextmenu: true,
+              quickSuggestions: true,
+              suggestOnTriggerCharacters: true,
             }}
           />
         </div>
@@ -1423,10 +1644,348 @@ export default function ThreeCodeEditor() {
       )}
 
       <style jsx>{`
+        .editor-container {
+          display: flex;
+          height: 100vh;
+          width: 100%;
+          overflow: hidden;
+        }
+
+        .sidebar {
+          display: flex;
+          flex-direction: column;
+          width: 40%;
+          min-width: 400px;
+          padding: 15px;
+          background-color: #f5f5f5;
+          border-right: 1px solid #ddd;
+          overflow-y: auto;
+        }
+
+        .sidebar-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 15px;
+        }
+
+        .sidebar-header h2 {
+          margin: 0;
+          color: #333;
+          font-size: 20px;
+        }
+
+        .prompt-section {
+          margin-bottom: 15px;
+        }
+
+        .prompt-label {
+          display: block;
+          margin-bottom: 5px;
+          font-weight: bold;
+          color: #555;
+        }
+
+        .status-section {
+          margin-bottom: 15px;
+        }
+
+        .preview {
+          flex-grow: 1;
+          height: 100%;
+          position: relative;
+          background-color: #f0f0f0;
+        }
+
         .button-group {
           display: flex;
           flex-direction: column;
           gap: 10px;
+          margin-top: 10px;
+        }
+
+        .ws-status {
+          padding: 4px 8px;
+          margin: 4px 0;
+          border-radius: 4px;
+          font-size: 12px;
+          display: flex;
+          align-items: center;
+          gap: 5px;
+        }
+
+        .status-dot {
+          display: inline-block;
+          width: 8px;
+          height: 8px;
+          border-radius: 50%;
+        }
+
+        .ws-status.open {
+          background-color: #d4edda;
+          color: #155724;
+        }
+
+        .ws-status.open .status-dot {
+          background-color: #28a745;
+        }
+
+        .ws-status.connecting {
+          background-color: #fff3cd;
+          color: #856404;
+        }
+
+        .ws-status.connecting .status-dot {
+          background-color: #ffc107;
+        }
+
+        .ws-status.closed,
+        .ws-status.error {
+          background-color: #f8d7da;
+          color: #721c24;
+        }
+
+        .ws-status.closed .status-dot,
+        .ws-status.error .status-dot {
+          background-color: #dc3545;
+        }
+
+        .success {
+          background-color: #d4edda;
+          color: #155724;
+          padding: 8px;
+          margin: 8px 0;
+          border-radius: 4px;
+          border-left: 4px solid #28a745;
+        }
+
+        .error {
+          background-color: #f8d7da;
+          color: #721c24;
+          padding: 8px;
+          margin: 8px 0;
+          border-radius: 4px;
+          border-left: 4px solid #dc3545;
+        }
+
+        .reconnect-button {
+          margin-left: 8px;
+          font-size: 12px;
+          padding: 2px 6px;
+          background: #007bff;
+          color: white;
+          border: none;
+          border-radius: 3px;
+          cursor: pointer;
+        }
+
+        .reconnect-button:hover {
+          background: #0069d9;
+        }
+
+        .connection-message {
+          background-color: #fff3cd;
+          border: 1px solid #ffeeba;
+          color: #856404;
+          padding: 12px;
+          margin: 10px 0;
+          border-radius: 4px;
+          text-align: center;
+        }
+
+        .connection-message p {
+          margin: 5px 0;
+        }
+
+        .prompt-input {
+          width: 100%;
+          padding: 10px;
+          margin-bottom: 10px;
+          border: 1px solid #ccc;
+          border-radius: 4px;
+          resize: vertical;
+          font-family: "Arial", sans-serif;
+        }
+
+        .generate-button {
+          background-color: #4a90e2;
+          color: white;
+          border: none;
+          padding: 10px 15px;
+          border-radius: 4px;
+          cursor: pointer;
+          font-weight: bold;
+          transition: background-color 0.3s;
+        }
+
+        .generate-button:hover:not(:disabled) {
+          background-color: #357ab8;
+        }
+
+        .generate-button:disabled {
+          background-color: #a0a0a0;
+          cursor: not-allowed;
+        }
+
+        .code-section {
+          display: flex;
+          flex-direction: column;
+          flex-grow: 1;
+          height: calc(100% - 240px);
+          margin-top: 10px;
+          border: 1px solid #ccc;
+          border-radius: 4px;
+          overflow: hidden;
+        }
+
+        .code-header {
+          background-color: #2d2d2d;
+          color: #ddd;
+          margin: 0;
+          padding: 8px 12px;
+          font-size: 14px;
+          border-bottom: 1px solid #444;
+        }
+
+        .loading-model {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          background-color: #e6f7ff;
+          border: 1px solid #91d5ff;
+          border-radius: 4px;
+          padding: 8px;
+          margin: 8px 0;
+        }
+
+        .loading-spinner {
+          display: inline-block;
+          width: 12px;
+          height: 12px;
+          border-radius: 50%;
+          border: 2px solid #1890ff;
+          border-top-color: transparent;
+          animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+          to {
+            transform: rotate(360deg);
+          }
+        }
+
+        .diff-toggle {
+          margin: 8px 0;
+        }
+
+        .diff-toggle button {
+          background: #6c757d;
+          color: white;
+          border: none;
+          padding: 5px 10px;
+          border-radius: 4px;
+          cursor: pointer;
+        }
+
+        .diff-toggle button:hover {
+          background: #5a6268;
+        }
+
+        .lint-overlay {
+          position: fixed;
+          top: 0;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          background-color: rgba(0, 0, 0, 0.5);
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          z-index: 1000;
+        }
+
+        .lint-overlay-content {
+          background-color: white;
+          border-radius: 4px;
+          padding: 20px;
+          width: 80%;
+          max-width: 800px;
+          max-height: 80vh;
+          overflow-y: auto;
+          position: relative;
+        }
+
+        .close-button {
+          position: absolute;
+          top: 10px;
+          right: 10px;
+          background: none;
+          border: none;
+          font-size: 20px;
+          cursor: pointer;
+        }
+
+        .lint-errors-list {
+          list-style: none;
+          padding: 0;
+          margin: 0;
+        }
+
+        .lint-error-item {
+          padding: 8px;
+          border-bottom: 1px solid #eee;
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+        }
+
+        .lint-error-location {
+          font-weight: bold;
+          color: #6200ee;
+          min-width: 80px;
+        }
+
+        .lint-error-message {
+          flex-grow: 1;
+          color: #333;
+        }
+
+        .lint-error-rule {
+          color: #718096;
+          font-size: 12px;
+        }
+
+        .screenshot-hint {
+          margin-top: 8px;
+          font-size: 12px;
+          color: #666;
+          display: flex;
+          align-items: center;
+          gap: 5px;
+        }
+
+        .camera-icon {
+          font-size: 14px;
+        }
+
+        @media (max-width: 768px) {
+          .editor-container {
+            flex-direction: column;
+          }
+
+          .sidebar {
+            width: 100%;
+            min-width: 0;
+            height: 50%;
+          }
+
+          .preview {
+            height: 50%;
+          }
+
+          .code-section {
+            height: 200px;
+          }
         }
       `}</style>
     </div>

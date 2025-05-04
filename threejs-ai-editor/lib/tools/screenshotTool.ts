@@ -1,197 +1,229 @@
 // 关键是：即使 canvas 元素在视觉上不可见或未挂载到 DOM 中，Three.js 仍然可以在其上渲染场景并获取截图。
 import { DynamicStructuredTool } from "@langchain/core/tools";
-import { HumanMessage } from "@langchain/core/messages";
 import { z } from "zod";
-import { createModelClient } from "../agents/agentFactory";
-import { extractTextContent } from "../processors/codeProcessor";
-import {
-  saveAnalysisToMemory,
-  prepareHistoryContext,
-} from "../memory/memoryManager";
+import { requestScreenshot } from "../../pages/api/socket";
+import { prepareHistoryContext } from "../memory/memoryManager";
+import { analyzeScreenshot } from "./screenshotAnalyzer";
 
 /**
- * Validates a base64 string to ensure it's properly formatted
- * @param base64String The base64 string to validate
- * @returns Whether the string appears to be valid base64
+ * 验证base64字符串是否合法
+ * @param base64String 需要验证的base64字符串
+ * @returns 是否是有效的base64图像数据
  */
 function isValidBase64Image(base64String: string): boolean {
-  // If it's already a data URL, extract just the base64 part
+  // 如果已经是Data URL，提取base64部分
   if (base64String.startsWith("data:image")) {
     const parts = base64String.split(",");
     if (parts.length !== 2) return false;
     base64String = parts[1];
   }
 
-  // Check if it follows base64 pattern (length is multiple of 4, valid chars)
+  // 检查是否符合base64模式（长度是4的倍数，有效字符）
   const regex = /^[A-Za-z0-9+/]+(=|==)?$/;
   return regex.test(base64String) && base64String.length % 4 === 0;
 }
 
 /**
- * Screenshot analysis tool - Analyzes the current scene screenshot and checks if it matches user requirements
+ * 截图分析工具 - 分析当前场景截图并检查是否符合用户要求
+ * Agent可以通过调用这个工具主动请求前端截图，并分析是否符合要求
  */
 export const screenshotTool = new DynamicStructuredTool({
   name: "analyze_screenshot",
   description:
-    "分析Three.js场景截图，判断当前场景是否符合用户需求，并提供改进建议",
+    "Analyzes a Three.js scene screenshot to determine if it meets user requirements. If no screenshot is provided, the tool will request one via Socket.IO from the frontend.",
   schema: z.object({
-    screenshotBase64: z.string().describe("Base64编码的场景截图"),
-    userRequirement: z.string().describe("用户的原始需求描述"),
+    userRequirement: z
+      .string()
+      .describe("User's original requirement description"),
+    // screenshotBase64现在是可选的 - 如果未提供，将通过Socket.IO获取
+    screenshotBase64: z
+      .string()
+      .optional()
+      .describe(
+        "Base64 encoded screenshot (optional, will be requested via Socket.IO if not provided)"
+      ),
+    forceWebSocket: z
+      .boolean()
+      .optional()
+      .describe(
+        "Force using Socket.IO to request a new screenshot, even if one is already provided"
+      ),
   }),
-  func: async ({ screenshotBase64, userRequirement }) => {
+  func: async ({
+    screenshotBase64,
+    userRequirement,
+    forceWebSocket = false,
+  }) => {
     const requestId = `tool_analysis_${Date.now()}`;
+    const timestamp = new Date().toISOString();
     console.log(
-      `[${requestId}] [Screenshot Tool] Started analysis at ${new Date().toISOString()}`
+      `[${requestId}] [Screenshot Tool] 🔍 Agent requesting screenshot analysis - ${timestamp}`
+    );
+    console.log(
+      `[${requestId}] [Screenshot Tool] 📝 User requirement: "${userRequirement.substring(
+        0,
+        50
+      )}${userRequirement.length > 50 ? "..." : ""}"`
     );
 
     try {
-      // Log information about the screenshot data to help with debugging
-      console.log(
-        `[${requestId}] [Screenshot Tool] Screenshot data type: ${typeof screenshotBase64}, ` +
-          `length: ${
-            screenshotBase64 ? screenshotBase64.length : 0
-          } characters, ` +
-          `is string: ${typeof screenshotBase64 === "string"}, ` +
-          `starts with data: ${
-            screenshotBase64 && screenshotBase64.startsWith("data:")
-          }`
-      );
+      let screenshot = screenshotBase64;
+      let wasRequested = false;
 
-      // Check if the screenshot data is a placeholder or missing
+      // 如果未提供截图或强制使用Socket.IO，则通过Socket.IO请求
       if (
-        !screenshotBase64 ||
-        screenshotBase64 === "<screenshot>" ||
-        screenshotBase64.length < 100
+        forceWebSocket ||
+        !screenshot ||
+        screenshot === "<screenshot>" ||
+        screenshot.length < 100
+      ) {
+        console.log(
+          `[${requestId}] [Screenshot Tool] 🔄 ${
+            forceWebSocket ? "Force" : "No valid screenshot data,"
+          } requesting screenshot via Socket.IO`
+        );
+
+        try {
+          // 通过Socket.IO从客户端请求截图
+          const wsRequestTime = Date.now();
+
+          // 使用Socket.IO实现请求截图
+          screenshot = await requestScreenshot(requestId);
+          wasRequested = true;
+
+          const wsResponseTime = Date.now();
+          console.log(
+            `[${requestId}] [Screenshot Tool] ✅ Successfully received screenshot via Socket.IO, time: ${
+              wsResponseTime - wsRequestTime
+            }ms, data size: ${screenshot.length} bytes`
+          );
+        } catch (wsError) {
+          console.error(
+            `[${requestId}] [Screenshot Tool] ❌ Socket.IO screenshot request failed:`,
+            wsError
+          );
+
+          // 增加更详细的错误报告
+          const errorMessage =
+            wsError instanceof Error ? wsError.message : String(wsError);
+          const errorReport = {
+            status: "error",
+            message: `Failed to get screenshot via Socket.IO: ${errorMessage}`,
+            error_type: "socket_request_failed",
+            request_id: requestId,
+            timestamp: new Date().toISOString(),
+            needs_improvements: true,
+          };
+
+          return JSON.stringify(errorReport);
+        }
+      } else {
+        console.log(
+          `[${requestId}] [Screenshot Tool] ℹ️ Valid screenshot data already provided, size: ${screenshot.length} chars`
+        );
+      }
+
+      // 检查Socket.IO请求后截图数据是否仍然无效
+      if (
+        !screenshot ||
+        screenshot === "<screenshot>" ||
+        (screenshot && screenshot.length < 100)
       ) {
         console.error(
-          `[${requestId}] [Screenshot Tool] Invalid screenshot data detected: ` +
+          `[${requestId}] [Screenshot Tool] ❌ ${
+            wasRequested ? "After Socket.IO attempt " : ""
+          }Screenshot data invalid: ` +
             `${
-              !screenshotBase64
+              !screenshot
                 ? "empty"
-                : screenshotBase64.length < 100
+                : screenshot.length < 100
                 ? "too short"
                 : "placeholder"
             }`
         );
-        throw new Error("Screenshot data is too short or empty");
+
+        const errorReport = {
+          status: "error",
+          message: "Screenshot data too short or empty",
+          error_type: "invalid_screenshot_data",
+          request_id: requestId,
+          timestamp: new Date().toISOString(),
+          needs_improvements: true,
+        };
+
+        return JSON.stringify(errorReport);
       }
 
-      // Check if the base64 data appears valid
+      // 检查base64数据是否有效
       if (
-        !isValidBase64Image(screenshotBase64) &&
-        !screenshotBase64.startsWith("data:image")
+        !isValidBase64Image(screenshot) &&
+        !screenshot.startsWith("data:image")
       ) {
         console.error(
-          `[${requestId}] [Screenshot Tool] Invalid image format detected. ` +
-            `Starts with: ${screenshotBase64.substring(0, 30)}...`
+          `[${requestId}] [Screenshot Tool] ❌ Invalid image format detected. ` +
+            `Starts with: ${screenshot.substring(0, 30)}...`
         );
-        throw new Error("Invalid image data format");
+
+        const errorReport = {
+          status: "error",
+          message: "Invalid image data format",
+          error_type: "invalid_image_format",
+          request_id: requestId,
+          timestamp: new Date().toISOString(),
+          needs_improvements: true,
+        };
+
+        return JSON.stringify(errorReport);
       }
 
       // 获取历史上下文
       const historyContext = await prepareHistoryContext();
 
-      // 构建分析提示词
-      const prompt = `Analyze this Three.js scene screenshot and determine if it meets the user requirements:
-      
-User requirements:
-${userRequirement || "No specific requirements provided"}
-
-${historyContext ? `Historical context:\n${historyContext}\n\n` : ""}
-
-Based on the screenshot, provide your analysis in the following structure:
-1. Overall Assessment: Does the scene match the user requirements? (Yes/No/Partially)
-2. Visual Elements: What objects are visible in the scene?
-3. Missing Components: What aspects of the requirements are missing or incomplete?
-4. Position/Scale Issues: Are there any problems with object positioning or scaling?
-5. Visual Quality: Evaluate lighting, colors, textures, and overall appearance
-6. Concrete Improvements: List specific, actionable changes needed
-
-Focus on being specific and precise. Your analysis will be used to decide if code modifications are needed.
-`;
-
-      // 创建图像 URL转格式
-      const imageUrl = screenshotBase64.startsWith("data:")
-        ? screenshotBase64
-        : `data:image/png;base64,${screenshotBase64}`;
-
       console.log(
-        `[${requestId}] [Screenshot Tool] Prepared image URL for analysis, format: ${
-          screenshotBase64.startsWith("data:")
-            ? "data URL"
-            : "Base64 converted to data URL"
-        }`
+        `[${requestId}] [Screenshot Tool] 🔍 Starting screenshot analysis, calling analyzer module...`
+      );
+      const analysisStartTime = Date.now();
+
+      // 使用共享的分析器模块
+      const analysisResult = await analyzeScreenshot(
+        screenshot,
+        userRequirement,
+        historyContext
       );
 
-      // 获取模型客户端
-      const model = createModelClient();
-
-      // 创建带图像的消息
-      const message = new HumanMessage({
-        content: [
-          { type: "text", text: prompt },
-          { type: "image_url", image_url: { url: imageUrl } },
-        ],
-      });
-
+      const analysisEndTime = Date.now();
       console.log(
-        `[${requestId}] [Screenshot Tool] Sending request to vision model`
-      );
-
-      // 调用模型
-      const result = await model.invoke([message]);
-      const analysis = extractTextContent(result.content);
-
-      console.log(
-        `[${requestId}] [Screenshot Tool] Analysis completed at ${new Date().toISOString()}`
+        `[${requestId}] [Screenshot Tool] ✅ Analysis complete, time: ${
+          analysisEndTime - analysisStartTime
+        }ms, status: ${analysisResult.status}`
       );
       console.log(
-        `[${requestId}] [Screenshot Tool] Analysis length: ${analysis.length} chars`
+        `[${requestId}] [Screenshot Tool] 📊 Analysis result: matches_requirements=${analysisResult.matches_requirements}, needs_improvements=${analysisResult.needs_improvements}`
       );
 
-      // 将分析保存到内存
-      await saveAnalysisToMemory(userRequirement, analysis);
+      // 添加来源信息以帮助Agent了解截图来源
+      const resultWithSource = {
+        ...analysisResult,
+        source: wasRequested ? "socket_io_request" : "provided_by_api",
+        timestamp: new Date().toISOString(),
+        request_id: requestId,
+      };
 
-      // 确定场景是否匹配需求
-      const matches =
-        analysis.toLowerCase().includes("yes") &&
-        (analysis.toLowerCase().includes("match") ||
-          analysis.toLowerCase().includes("符合需求"));
-
-      const needsImprovements =
-        analysis.toLowerCase().includes("no") ||
-        analysis.toLowerCase().includes("partially") ||
-        analysis.toLowerCase().includes("improve") ||
-        analysis.toLowerCase().includes("missing") ||
-        analysis.toLowerCase().includes("需要改进");
-
-      // 提取关键改进点
-      const improvementRegex = /Concrete Improvements:(.*?)(?:\n\n|\n$|$)/i;
-      const improvementMatch = analysis.match(improvementRegex);
-      const improvements = improvementMatch
-        ? improvementMatch[1].trim()
-        : "No specific improvements listed";
-
-      // 返回结构化分析结果
-      return JSON.stringify({
-        status: "success",
-        analysis: analysis,
-        matches_requirements: matches,
-        needs_improvements: needsImprovements,
-        key_improvements: improvements,
-        recommendation: needsImprovements
-          ? "场景需要调整，请使用generate_fix_code工具修改代码"
-          : "场景符合要求，无需大幅修改",
-      });
+      // 返回分析结果的JSON字符串
+      return JSON.stringify(resultWithSource);
     } catch (error) {
-      console.error(`[${requestId}] [Screenshot Tool] Error:`, error);
+      console.error(`[${requestId}] [Screenshot Tool] ❌ Error:`, error);
       return JSON.stringify({
         status: "error",
-        message: `Error analyzing screenshot: ${
+        message: `Screenshot analysis error: ${
           error instanceof Error ? error.message : String(error)
         }`,
+        error_type: "analysis_failure",
         needs_improvements: true, // 默认需要改进
-        recommendation: "截图分析出错，建议尝试修改代码或重新执行",
+        recommendation:
+          "Screenshot analysis failed, try modifying code or rerunning",
+        timestamp: new Date().toISOString(),
+        request_id: requestId,
       });
     }
   },

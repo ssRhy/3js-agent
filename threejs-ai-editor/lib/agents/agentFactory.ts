@@ -11,7 +11,7 @@ import {
   MessagesPlaceholder,
 } from "@langchain/core/prompts";
 import { CallbackManager } from "@langchain/core/callbacks/manager";
-import { Tool } from "langchain/tools";
+import { Tool } from "@langchain/core/tools";
 import { Runnable } from "@langchain/core/runnables";
 import { ChainValues } from "@langchain/core/utils/types";
 
@@ -27,8 +27,8 @@ import { LintError } from "../types/codeTypes";
 import { SceneStateObject, ModelHistoryEntry } from "../types/sceneTypes";
 
 /**
- * 创建 Azure OpenAI 模型客户端实例
- * @returns 配置好的 AzureChatOpenAI 实例
+ * 创建 OpenAI 模型客户端实例
+ * @returns 配置好的 ChatOpenAI 实例
  */
 export function createModelClient(): AzureChatOpenAI {
   return new AzureChatOpenAI({
@@ -42,7 +42,7 @@ export function createModelClient(): AzureChatOpenAI {
 }
 
 /**
- * 创建 Agent 的工厂函数 - 简化版
+ * 创建 Agent 的工厂函数 - 使用 LangChain.js 0.3 API
  * 创建一个能够使用所有注册工具的通用 Agent
  *
  * @param userPrompt 用户需求
@@ -71,7 +71,7 @@ export async function createAgent(
     sceneHistory = "",
   } = options;
 
-  // 初始化 Azure OpenAI 客户端
+  // 初始化 OpenAI 客户端
   const model = createModelClient();
 
   // 创建自定义回调处理器用于内存管理

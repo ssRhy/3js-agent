@@ -5,6 +5,8 @@ const nextConfig = {
     bodyParser: {
       sizeLimit: "8mb",
     },
+    // Add explicit WebSocket enabling
+    externalResolver: true,
   },
   /* config options here */
   reactStrictMode: true,
@@ -48,6 +50,33 @@ const nextConfig = {
     };
 
     return config;
+  },
+  // 添加CORS和WebSocket支持
+  async headers() {
+    return [
+      {
+        // 适用于所有路由，包括API和WebSocket
+        source: "/(.*)",
+        headers: [
+          {
+            key: "Access-Control-Allow-Origin",
+            value: "*",
+          },
+          {
+            key: "Access-Control-Allow-Methods",
+            value: "GET, POST, PUT, DELETE, OPTIONS",
+          },
+          {
+            key: "Access-Control-Allow-Headers",
+            value: "X-Requested-With, Content-Type, Authorization",
+          },
+          {
+            key: "Access-Control-Allow-Credentials",
+            value: "true",
+          },
+        ],
+      },
+    ];
   },
 };
 

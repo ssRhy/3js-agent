@@ -1,5 +1,5 @@
 // lib/tools/toolRegistry.ts
-import { Tool } from "langchain/tools";
+import { Tool } from "@langchain/core/tools";
 import { StructuredTool } from "@langchain/core/tools";
 import { codeGenTool } from "./codeGenTool";
 import { modelGenTool } from "./modelGenTool";
@@ -13,14 +13,18 @@ export enum ToolCategory {
   CODE = "code",
   MODEL = "model",
   UTILITY = "utility",
+  CODE_GEN = "codeGenTool",
+  MODEL_GEN = "modelGenTool",
+  SEARCH = "search",
 }
 
 /**
  * 工具注册中心
+ * 单例模式管理所有可用的Agent工具
  */
 export class ToolRegistry {
   private static instance: ToolRegistry;
-  private tools: Map<string, Tool | StructuredTool> = new Map();
+  private tools: Map<string, Tool> = new Map();
   private toolCategories: Map<string, ToolCategory> = new Map();
   private initialized: boolean = false;
 
@@ -65,10 +69,13 @@ export class ToolRegistry {
 
   /**
    * 注册工具
+   * @param name 工具名称
+   * @param tool 工具实例
+   * @param category 工具类别
    */
   public registerTool(
     name: string,
-    tool: Tool | StructuredTool,
+    tool: Tool,
     category: ToolCategory = ToolCategory.UTILITY
   ): void {
     this.tools.set(name, tool);
@@ -80,20 +87,24 @@ export class ToolRegistry {
 
   /**
    * 获取工具
+   * @param name 工具名称
+   * @returns 工具实例或undefined
    */
-  public getTool(name: string): Tool | StructuredTool | undefined {
+  public getTool(name: string): Tool | undefined {
     return this.tools.get(name);
   }
 
   /**
    * 获取所有工具
+   * @param category 可选的工具类别过滤
+   * @returns 工具数组
    */
   public getAllTools(category?: ToolCategory): Tool[] {
     const tools: Tool[] = [];
 
     this.tools.forEach((tool, name) => {
       if (!category || this.toolCategories.get(name) === category) {
-        tools.push(tool as Tool);
+        tools.push(tool);
       }
     });
 
@@ -102,6 +113,8 @@ export class ToolRegistry {
 
   /**
    * 获取特定类别的工具
+   * @param category 工具类别
+   * @returns 工具数组
    */
   public getToolsByCategory(category: ToolCategory): Tool[] {
     return this.getAllTools(category);
