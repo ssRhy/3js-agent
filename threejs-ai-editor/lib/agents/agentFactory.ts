@@ -3,8 +3,8 @@ import { AzureChatOpenAI } from "@langchain/openai";
 import {
   createOpenAIFunctionsAgent,
   AgentExecutor,
-  AgentAction,
   AgentFinish,
+  AgentAction,
 } from "langchain/agents";
 import {
   ChatPromptTemplate,
@@ -33,7 +33,6 @@ import { SceneStateObject, ModelHistoryEntry } from "../types/sceneTypes";
 export function createModelClient(): AzureChatOpenAI {
   return new AzureChatOpenAI({
     modelName: "gpt-4.1",
-    temperature: 0,
     azureOpenAIApiKey: process.env.AZURE_OPENAI_API_KEY,
     azureOpenAIApiDeploymentName: process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME,
     azureOpenAIApiVersion: "2024-12-01-preview",
@@ -80,6 +79,14 @@ export async function createAgent(
   // 设置回调管理器
   const callbackManager = new CallbackManager();
   callbackManager.addHandler(callbackHandler);
+
+  // 确保apply_patch工具有正确的描述
+  tools.forEach((tool) => {
+    if (tool.name === "apply_patch") {
+      tool.description =
+        "应用unified diff格式的补丁到内存中保存的代码。可以提交两种格式：1) 包含完整代码，用于初始化：{ code: string } 2) 包含标准unified diff补丁：{ patch: string }。初次必须先提交完整代码，之后只需提交补丁文本即可增量更新。也可以使用 { getCode: true } 来获取当前缓存的代码。";
+    }
+  });
 
   // 创建系统消息提示
   const systemMessage = createSystemPrompt(

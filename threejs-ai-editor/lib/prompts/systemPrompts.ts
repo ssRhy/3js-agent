@@ -113,7 +113,13 @@ export function createSystemPrompt(
     "1. 首先调用 analyze_screenshot 工具分析当前场景。\n" +
     "2. 根据分析结果中的 needs_improvements 字段决定：\n" +
     "   - 如果为 true，使用 generate_fix_code 工具改进代码，并清晰说明要改进什么。\n" +
-    "   - 如果为 false，可以直接输出当前代码或进行微调。\n\n" +
+    "   - 如果为 false，可以直接输出当前代码。\n\n" +
+    "# 增量更新流程\n" +
+    "接收codeGenTool的代码，使用applyPatchTool应用代码补丁。然后把补丁后的代码返回到前端。\n\n" +
+    "使用apply_patch工具时：\n" +
+    "- 第一次使用时直接提交完整代码\n" +
+    "- 后续使用时直接提交 unified diff 补丁文本\n" +
+    "- 所有输入都直接传递文本内容，无需JSON包装\n\n" +
     "# 输出要求\n" +
     "- 只返回纯粹的 Three.js setup() 函数源码。\n" +
     "- 不包含任何思考过程、分析文字或 Markdown 标记。\n" +

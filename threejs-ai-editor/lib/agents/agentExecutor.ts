@@ -36,6 +36,11 @@ import { screenshotTool } from "../tools/screenshotTool";
 import { ToolRegistry, ToolCategory } from "../tools/toolRegistry";
 import { codeGenTool } from "../tools/codeGenTool";
 import { modelGenTool } from "../tools/modelGenTool";
+import {
+  applyPatchTool,
+  getCachedCode,
+  updateCachedCode,
+} from "../tools/applyPatchTool";
 
 // 将screenshotTool转为Tool类型
 const screenshotToolInstance = screenshotTool as unknown as Tool;
@@ -167,6 +172,12 @@ export async function runInteractionFlow(
   );
 
   try {
+    // 首先缓存当前代码，如果缓存为空
+    if (!getCachedCode()) {
+      console.log(`[${requestId}] Initializing code cache with current code`);
+      updateCachedCode(currentCode);
+    }
+
     // 合并当前场景状态与之前存储的场景状态
     let combinedSceneState = sceneState || [];
 
@@ -230,11 +241,14 @@ export async function runInteractionFlow(
       systemInstructions =
         "你必须首先分析截图，然后根据分析结果进行代码生成或修改。" +
         "步骤1: 调用analyze_screenshot工具分析当前场景。调用时必须使用完整的截图数据，不要修改或替换。" +
-        "步骤2: 根据分析结果，如果需要改进，则生成改进代码；如果不需要改进，则直接返回当前代码。";
+        "步骤2: 根据分析结果，如果需要改进，则调用generate_fix_code工具；如果不需要改进，则直接返回当前代码。" +
+        "步骤3: 使用apply_patch工具应用增量更新，而不是替换整个代码。";
     } else {
       // 无截图的情况
-      systemInstructions = "根据用户需求生成或优化Three.js代码。";
-      suggestion = "根据用户需求生成代码，无需考虑当前场景状态。";
+      systemInstructions =
+        "根据用户需求生成或优化Three.js代码，使用增量更新方式。";
+      suggestion =
+        "根据用户需求生成代码，无需考虑当前场景状态，但使用增量更新方式。";
     }
 
     // 如果有场景状态，添加到系统指令中
@@ -254,6 +268,7 @@ export async function runInteractionFlow(
     // 转换modelSize为布尔值
     const modelRequired = modelSize !== undefined && modelSize > 0;
 
+    // 运行agent循环获取改进后的代码
     let improvedCode = (await runAgentLoop(
       suggestion,
       currentCode,
@@ -277,6 +292,47 @@ export async function runInteractionFlow(
       improvedCode = currentCode;
     }
 
+    // 使用apply_patch工具应用增量更新
+    console.log(`[${requestId}] Using incremental update with apply_patch`);
+
+    // 获取当前缓存代码
+    const cachedCode = getCachedCode();
+
+    if (!cachedCode) {
+      // 如果没有缓存代码，直接初始化
+      console.log(
+        `[${requestId}] No cached code found, initializing with current code`
+      );
+      const initResult = await applyPatchTool.invoke({
+        input: JSON.stringify({ code: improvedCode }),
+      });
+      console.log(
+        `[${requestId}] Code cache initialized: ${
+          JSON.parse(initResult).success
+        }`
+      );
+    } else {
+      // 如果有缓存代码，尝试应用补丁
+      try {
+        console.log(`[${requestId}] Applying incremental update`);
+        const patchResult = await applyPatchTool.invoke({
+          input: JSON.stringify({ code: improvedCode }),
+        });
+        const parsedResult = JSON.parse(patchResult);
+
+        if (parsedResult.success) {
+          console.log(`[${requestId}] Incremental update applied successfully`);
+          improvedCode = parsedResult.updatedCode || improvedCode;
+        } else {
+          console.warn(
+            `[${requestId}] Failed to apply incremental update: ${parsedResult.message}`
+          );
+        }
+      } catch (patchError) {
+        console.error(`[${requestId}] Error applying patch:`, patchError);
+      }
+    }
+
     // 提取结果中的模型信息
     const extractedModelInfo = extractModelUrls(improvedCode);
 
@@ -298,7 +354,9 @@ export async function runInteractionFlow(
       ...(modelUrls.length > 0 ? { modelUrls } : {}),
     };
 
-    console.log(`[${requestId}] Interaction flow completed successfully`);
+    console.log(
+      `[${requestId}] Interaction flow completed successfully with incremental update`
+    );
     return result;
   } catch (error) {
     console.error(`[${requestId}] Interaction flow failed:`, error);
@@ -458,23 +516,21 @@ export async function runAgentLoop(
       // 为简化起见，我们在这里不创建新的覆盖工具，而是依赖正确的输入参数
     }
 
-    // 准备系统指令，确保截图优先分析和场景保留
+    // 准备系统指令，确保截图优先分析和场景保留，并添加增量更新指导
     let systemInstructions = "";
 
     if (screenshot && renderingComplete) {
       systemInstructions =
-        "你必须首先分析截图，然后根据分析结果进行代码生成或修改。" +
-        "步骤1: 调用analyze_screenshot工具分析当前场景。调用时必须使用完整的截图数据，不要修改或替换。" +
-        "步骤2: 根据分析结果，如果需要改进，则调用generate_fix_code工具；如果不需要改进，则直接返回当前代码。";
+        "你必须按照增量更新流程工作：\n" +
+        "步骤1: 调用analyze_screenshot工具分析当前场景\n" +
+        "步骤2: 根据分析结果，生成改进代码（generate_fix_code）\n" +
+        "步骤3: 使用apply_patch工具应用增量更新，而不是替换整个代码";
     } else {
-      systemInstructions = "根据用户需求生成或优化Three.js代码。";
+      systemInstructions =
+        "按照增量更新流程工作，根据用户需求生成或优化Three.js代码。";
     }
 
-    // 如果有场景状态，添加场景保留指令
-    if (sceneState && sceneState.length > 0) {
-      systemInstructions +=
-        " 当前已有场景对象，您必须保留现有对象，并在其基础上添加或修改，而不是创建全新场景。";
-    }
+    // 保持现有的agent执行和结果处理逻辑
 
     // 准备输入和会话配置
     const inputForAgent = {
@@ -517,7 +573,7 @@ export async function runAgentLoop(
         memoryConfig
       );
 
-      // 处理结果
+      // 处理结果时确保使用增量更新
       const cleanedOutput = cleanCodeOutput(result.output);
       const modelInfo = extractModelUrls(cleanedOutput);
 
@@ -547,7 +603,7 @@ export async function runAgentLoop(
       return cleanedOutput;
     } catch (agentError) {
       console.error(`[${requestId}] Agent execution failed:`, agentError);
-      return currentCode; // 出错时返回原始代码
+      return currentCode;
     }
   } catch (error) {
     console.error(`[${requestId}] Error running agent loop:`, error);

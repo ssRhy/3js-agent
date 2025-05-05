@@ -32,10 +32,12 @@ screenshotTool:截图检查场景并且返回建议
 ##
 交互流程：
 用户输入自然语言提示
-AI代理分析请求并选择适当工具（直接threejs生成场景或者hyper3d生成，或者两个一起搭配使用）
-生成3d模型（只当请求modelGenTool）
-codeGenTool生成修改代码
-screenshotTool在前端截图检查场景并且返回建议给codeGenTool。如果符合标准，就可以直接渲染，不需要再改代码。注意：不是一开始就截图，而是等前端渲染完成之后，截图查看前端渲染情况，给出建议反馈
-codeGenTool接收建议然后修改
-更新场景并实时渲染结果
+-前端截图分析
+-AI代理分析请求并选择适当工具（直接threejs生成场景或者hyper3d生成，或者两个一起搭配使用）
+-生成3d模型（只当请求modelGenTool）
+-codeGenTool生成修改代码
+-agent调用screenshotTool请求前端截图检查场景并且返回建议给codeGenTool。如果符合标准，就可以直接渲染，不需要再改代码。注意：不是一开始就截图，而是等前端渲染完成之后，截图查看前端渲染情况，给出建议反馈
+-codeGenTool接收建议然后修改，把修改后的代码给applyPatchTool：应用代码补丁。然后把补丁后的代码返回到前端。
+-前端更新场景并实时渲染结果
+##
 项目使用了Azure OpenAI服务作为后端AI能力，采用React + NextJS构建前端，通过Zustand维护状态。代码结构清晰，实现了AI和3D创作的无缝结合，支持复杂的Three.js场景生成和编辑。
