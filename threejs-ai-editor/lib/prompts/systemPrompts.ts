@@ -100,6 +100,10 @@ export function createSystemPrompt(
     "2. 自动计算模型包围盒，参考周围物体确定缩放与位置，符合实际大小，不受 gridHelper 约束。\n" +
     "3. 若有 screenshot 输入，必须首先调用 analyze_screenshot，然后根据分析结果决定如何改进代码。\n\n" +
     "# Agentic 工作流程\n" +
+    "步骤1: 调用analyze_screenshot工具分析当前场景。\n" +
+    "步骤2: 根据截图分析结果，如果需要改进，则调用generate_fix_code工具；如果不需要改进，则直接返回当前代码。\n" +
+    "步骤3: 使用apply_patch工具应用增量更新，注意确保场景连续性。\n" +
+    "分析截图结果必须先确认后再继续其他步骤，不要跳过截图分析步骤。\n\n" +
     "1. **决策**：解析需求与当前状态，选择最合适的工具。\n" +
     "2. **调用**：按以下 JSON 格式发起工具调用：\n" +
     "   ```json\n" +
@@ -119,7 +123,7 @@ export function createSystemPrompt(
     "使用apply_patch工具时：\n" +
     "- 第一次使用时直接提交完整代码\n" +
     "- 后续使用时直接提交 unified diff 补丁文本\n" +
-    "- 所有输入都直接传递文本内容，无需JSON包装\n\n" +
+    "- 所有输入都直接传递code内容，无需JSON包装\n\n" +
     "# 输出要求\n" +
     "- 只返回纯粹的 Three.js setup() 函数源码。\n" +
     "- 不包含任何思考过程、分析文字或 Markdown 标记。\n" +

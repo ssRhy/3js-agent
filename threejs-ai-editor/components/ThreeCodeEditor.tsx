@@ -6,6 +6,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
 
 import { useSocketStore } from "../lib/socket";
+import { preprocessCode } from "../lib/processors/codeProcessor";
 
 interface SceneStateObject {
   id: string;
@@ -359,13 +360,25 @@ export default function ThreeCodeEditor() {
     try {
       setIsModelLoading(true);
 
-      if (loadedModels.some((model) => model.url === modelUrl)) {
-        console.log("Model already loaded:", modelUrl);
+      // 确保模型URL经过代理
+      let urlToLoad = modelUrl;
+
+      // 如果是外部URL且还未通过代理，则转换为代理URL
+      if (
+        modelUrl.startsWith("http") &&
+        !modelUrl.includes("/api/proxy-model")
+      ) {
+        console.log("[loadModel] 将外部URL转换为代理URL:", modelUrl);
+        urlToLoad = `/api/proxy-model?url=${encodeURIComponent(modelUrl)}`;
+      }
+
+      if (loadedModels.some((model) => model.url === urlToLoad)) {
+        console.log("Model already loaded:", urlToLoad);
         setIsModelLoading(false);
         return true;
       }
 
-      console.log("Loading 3D model from URL:", modelUrl);
+      console.log("Loading 3D model from URL:", urlToLoad);
       if (modelSize) {
         console.log(`将调整模型大小为: ${modelSize} 单位`);
       }
@@ -381,7 +394,7 @@ export default function ThreeCodeEditor() {
           headers: {
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ url: modelUrl }),
+          body: JSON.stringify({ url: urlToLoad }),
         })
           .then((response) => {
             if (!response.ok) {
@@ -635,7 +648,7 @@ export default function ThreeCodeEditor() {
                   model.userData.modelId = modelId;
                   setLoadedModels((prev) => [
                     ...prev,
-                    { id: modelId, url: modelUrl },
+                    { id: modelId, url: urlToLoad },
                   ]);
 
                   console.log("Model loaded successfully through proxy");
@@ -773,6 +786,19 @@ export default function ThreeCodeEditor() {
     })();
 
     return hasSetupFn && balancedBraces && hasValidSyntax;
+  };
+
+  // 预处理代码中的外部URL，防止CORS问题
+  const prepareCodeForExecution = (originalCode: string) => {
+    // 使用URL处理器预处理代码
+    const processedCode = preprocessCode(originalCode);
+
+    // 如果代码被修改，记录日志
+    if (originalCode !== processedCode) {
+      console.log("[代码处理] 已替换外部URL为代理URL");
+    }
+
+    return processedCode;
   };
 
   // 添加全局窗口函数，使Agent生成的代码可以直接调用自动缩放功能
@@ -933,7 +959,8 @@ export default function ThreeCodeEditor() {
       }
 
       try {
-        const sanitizedCode = code.trim();
+        // 预处理代码中的外部URL，防止CORS问题
+        const sanitizedCode = prepareCodeForExecution(code.trim());
 
         const functionBody = `
           let setup;
@@ -1137,7 +1164,14 @@ export default function ThreeCodeEditor() {
   const applySafelyToScene = async (codeToApply: string): Promise<boolean> => {
     try {
       console.log("[Rendering] Applying code to scene before screenshot");
-      if (!validateCode(codeToApply) || !threeRef.current) {
+
+      // 确保代码经过URL处理
+      const processedCode = preprocessCode(codeToApply);
+      if (processedCode !== codeToApply) {
+        console.log("[Rendering] 处理了代码中的外部URL引用");
+      }
+
+      if (!validateCode(processedCode) || !threeRef.current) {
         return false;
       }
 
@@ -1381,12 +1415,18 @@ export default function ThreeCodeEditor() {
       }
 
       if (data.directCode) {
+        // 使用URL处理器处理代码
+        const processedCode = preprocessCode(data.directCode);
+        if (processedCode !== data.directCode) {
+          console.log("[Generate] 已处理代码中的外部模型URL");
+        }
+
         // 更新代码并安全应用到场景
-        setCode(data.directCode);
+        setCode(processedCode);
         setSuccess("代码已更新，正在应用到场景...");
 
         try {
-          await applySafelyToScene(data.directCode);
+          await applySafelyToScene(processedCode);
           setSuccess("代码已成功应用到场景！");
         } catch (applyError) {
           console.error("[Generate] 应用代码到场景失败:", applyError);
@@ -1403,7 +1443,10 @@ export default function ThreeCodeEditor() {
         setSuccess(`已生成${data.modelUrls.length}个模型！正在加载...`);
 
         try {
-          // 加载第一个模型
+          // 处理并记录所有模型URL
+          console.log("[Generate] 处理模型URL:", data.modelUrls);
+
+          // 加载第一个模型 (loadModel函数已经内置了URL处理逻辑)
           await loadModel(data.modelUrls[0]);
           setSuccess("模型已成功加载！");
         } catch (loadError) {

@@ -1,3 +1,8 @@
+import {
+  processCodeAndReplaceUrls,
+  generateUrlDiagnostics,
+} from "./urlProcessor";
+
 /**
  * 提取文本内容 - 从LLM响应中获取
  */
@@ -121,4 +126,59 @@ export function cleanCodeOutput(output: unknown): string {
   }
 
   return codeOutput;
+}
+
+/**
+ * 代码处理器接口
+ */
+export interface CodeProcessorResult {
+  processedCode: string;
+  diagnostics: {
+    urlProcessing?: {
+      foundUrls: Array<{ url: string; name: string; proxied: string }>;
+      diagnosticMessage: string;
+    };
+    // 将来可以添加其他诊断信息
+  };
+  meta: {
+    wasModified: boolean;
+    processingTime: number;
+  };
+}
+
+/**
+ * 处理代码并返回处理后的结果
+ * 目前只实现了URL处理，将来可以扩展添加其他处理器
+ */
+export function processCode(code: string): CodeProcessorResult {
+  const startTime = Date.now();
+
+  // 进行URL处理
+  const urlDiagnostics = generateUrlDiagnostics(code);
+  const processedCode = processCodeAndReplaceUrls(code);
+
+  // 检查代码是否被修改
+  const wasModified = code !== processedCode;
+
+  // 计算处理时间
+  const processingTime = Date.now() - startTime;
+
+  return {
+    processedCode,
+    diagnostics: {
+      urlProcessing: urlDiagnostics,
+    },
+    meta: {
+      wasModified,
+      processingTime,
+    },
+  };
+}
+
+/**
+ * 针对可能导致CORS问题的代码进行预处理
+ * 这是一个简化的接口，只返回处理后的代码
+ */
+export function preprocessCode(code: string): string {
+  return processCodeAndReplaceUrls(code);
 }

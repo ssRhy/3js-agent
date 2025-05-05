@@ -53,7 +53,7 @@ class MemoryManager {
       inputKey: "userPrompt",
       returnMessages: false,
       outputKey: "codeStateContext",
-      k: 1, // 只保留最近一次交互
+      k: 5, // 只保留最近一次交互
     });
 
     this._sceneMemory = new BufferWindowMemory({
@@ -61,7 +61,7 @@ class MemoryManager {
       inputKey: "userPrompt",
       returnMessages: false,
       outputKey: "sceneHistoryContext",
-      k: 1, // 只保留最近一次交互
+      k: 5, // 只保留最近一次交互
     });
   }
 
@@ -637,3 +637,30 @@ export const clearSessionState = (): void => {
 
 // Helper function that would be imported from elsewhere
 import { getCachedCode } from "@/lib/tools/applyPatchTool";
+
+/**
+ * Load the current scene state from memory
+ * @returns Current scene state objects
+ */
+export const loadSceneStateFromMemory = async (): Promise<
+  SceneObject[]
+> => {
+  try {
+    const memoryVars = await memoryManager.sceneMemory.loadMemoryVariables({});
+    const historyContext = memoryVars.sceneHistoryContext || {};
+
+    if (historyContext.history && historyContext.history.length > 0) {
+      // Get the most recent history entry
+      const latestEntry =
+        historyContext.history[historyContext.history.length - 1];
+
+      if (latestEntry.objects && latestEntry.objects.length > 0) {
+        return latestEntry.objects;
+      }
+    }
+  } catch (error) {
+    console.error("Failed to load scene state from memory:", error);
+  }
+
+  return [];
+};
