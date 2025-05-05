@@ -3,75 +3,16 @@ description:
 globs: 
 alwaysApply: false
 ---
-## 架构概览
-单一 Socket.IO 连接
-在 Next.js 的 API 路由（/api/socket）里初始化一个 socket.io 服务器，它会与前端共享同一个 HTTP 端口和进程，并自动处理协议升级和心跳重连。
-
-## 单事件驱动
-后端只发一次：
-
-
-socket.emit('request_screenshot', { requestId });
-前端只回一次：
-
-socket.emit('provide_screenshot', { requestId, screenshot });
-无需维护房间、广播或命名空间，协议更轻量、事件更直观。
-
-
-## 闭环流程
-客户端连接 → 前端组件加载后 io('/api/socket') 建立长连接。
-
-Agent 启动 → 后端在 io.on('connection', socket) 回调里，调用 runAgentWithScreenshotTool(socket)。
-
-按需下发截屏 → Agent 内部触发 socket.emit('request_screenshot', { requestId })。
-
-前端截屏并回传 → Client Component 接到 request_screenshot，用 html2canvas 或 Three.js toDataURL() 截图，然后 socket.emit('provide_screenshot', {...})。
-
-Agent 分析 → Promise resolve 后，工具返回 Base64 字符串给 Agent，Agent 调用 analyzeScreenshot({ screenshot }) 并根据结果继续下一步（如调用 codeGenTool 或返回最终输出）。
-
-## 后端实现（Next.js + Socket.IO）
-自动升级：不需要手动处理 upgrade，Socket.IO 内部打通 HMR 冲突。
-
-心跳 & 重连：Socket.IO 自动管理，无需额外配置。
-
-前端实现（Socket.IO 客户端 + html2canvas）事件名称直观：不用自己解析 JSON，socket.on('request_screenshot', …)。
-
-
-
-## LangChainJS Agent 集成思路
-
-Promise + socket.once：保证单次截屏请求和回传的闭环。
-
-工具内触发：Agent 执行时可随时发起截图，无需外部调度。
-
-## 流程解析
-连接建立：前端 io('/api/socket') → 后端 io.on('connection')。
-
-Agent 启动：在 connection 里执行 runAgentWithScreenshotTool(socket)。
-
-Agent 决策：需要截图时调用 screenshotTool，触发一次性请求/回传。
-
-前端截屏：on('request_screenshot') → html2canvas → emit('provide_screenshot')。
-
-Agent 分析：Promise resolve 后返回 Base64，Agent 调用 LLM 分析并产出最终建议。
-
-## 小结
-单一长连接：Socket.IO 一次 connection，会话级别复用。
-
-按需截屏：Agent 内部工具即可随时下发请求。
-
-简洁高效：前后端仅两种自定义事件，无复杂频道或轮询。
-
-自动重连：Socket.IO 解决了心跳与网络抖动问题。
-
-这样 LangChainJS Agent 在 Next.js 环境下，能够自主、按需地从后端主动驱动前端截屏，并回传图像以进行智能分析和下一步决策。
-
-
-
-
-
-
-
-
-
-
+Agent-initiated screenshot:
+Agent calls screenshotTool
+screenshotTool calls socket-client.requestScreenshot()
+socket-client uses global SocketIOServer to request screenshot
+Client returns screenshot via socket.ts
+screenshotTool analyzes the screenshot
+##
+Result returns to agent
+Client-initiated analysis:
+Client calls screenshot.ts API with screenshot data
+screenshot.ts calls screenshotTool with useProvidedScreenshot=true
+screenshotTool analyzes without requesting via WebSocket
+Result returns to client

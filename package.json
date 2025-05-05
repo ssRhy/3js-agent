@@ -4,6 +4,7 @@
     "@types/diff": "^7.0.2",
     "@types/uuid": "^10.0.0",
     "diff": "^8.0.0-beta",
+    "langsmith": "^0.3.25",
     "socket.io": "^4.8.1",
     "socket.io-client": "^4.8.1",
     "uuid": "^11.1.0"

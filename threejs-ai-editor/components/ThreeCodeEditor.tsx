@@ -111,7 +111,7 @@ export default function ThreeCodeEditor() {
       if (socket && socket.connected) {
         socket.emit("ping");
       }
-    }, 30000); // 30秒一次心跳
+    }, 60000); // 60秒一次心跳，减少不必要的网络通信
 
     // 清理函数
     return () => {
@@ -1258,13 +1258,17 @@ export default function ThreeCodeEditor() {
       };
       // #endregion
 
-      // 添加事件监听器
+      // 添加事件监听器 - 简化和优化
       socket.on("agent_result", handleAgentResult);
       socket.on("request_screenshot", handleScreenshotRequest);
 
-      // 添加分析结果监听，便于调试
+      // 移除不必要的分析结果处理，仅保留日志记录
       socket.on("screenshot_analysis", (data) => {
-        console.log("[Socket.IO] Received screenshot analysis:", data);
+        // 简化为仅记录日志，不执行其他操作
+        console.log(
+          "[Socket.IO] Received analysis info for request:",
+          data.requestId
+        );
       });
 
       // 清理函数

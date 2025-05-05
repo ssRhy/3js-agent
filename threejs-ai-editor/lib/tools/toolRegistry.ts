@@ -1,5 +1,6 @@
 // lib/tools/toolRegistry.ts
-import { Tool } from "langchain/tools";
+import { Tool } from "@langchain/core/tools";
+
 import { codeGenTool } from "./codeGenTool";
 import { modelGenTool } from "./modelGenTool";
 import { applyPatchTool } from "./applyPatchTool";

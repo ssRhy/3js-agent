@@ -1,5 +1,4 @@
 import { NextApiRequest, NextApiResponse } from "next";
-// import { saveAnalysisToMemory } from "../../lib/memory/memoryManager";
 import { screenshotTool } from "../../lib/tools/screenshotTool";
 
 /**
@@ -79,10 +78,11 @@ export async function analyzeScreenshot(
   console.log(`[${requestId}] Running screenshot analysis`);
 
   try {
-    // 使用screenshotTool进行分析 - 保持agent自主调用analyze_screenshot工具的能力
+    // 使用更新的screenshotTool进行分析，明确指定使用提供的截图
     const analysisResult = await screenshotTool.invoke({
-      screenshotBase64: screenshotData,
       userRequirement: userRequirement || "",
+      useProvidedScreenshot: true, // 使用API提供的截图而非通过WebSocket请求新截图
+      screenshotBase64: screenshotData,
     });
 
     // 解析工具返回的JSON结果
@@ -110,35 +110,3 @@ export async function analyzeScreenshot(
     };
   }
 }
-
-// /**
-//  * 直接分析截图并返回文本建议 (为兼容旧代码保留)
-//  *
-//  * 此函数供内部代码直接调用
-//  */
-// export async function analyzeScreenshotDirectly(
-//   screenshotBase64: string,
-//   userPrompt: string = "",
-//   requestId: string = `analysis_${Date.now()}`
-// ): Promise<string> {
-//   try {
-//     const result = await analyzeScreenshot(
-//       screenshotBase64,
-//       userPrompt,
-//       requestId
-//     );
-
-//     // 保存分析结果到内存
-//     if (result.analysis && typeof result.analysis === "string") {
-//       await saveAnalysisToMemory(userPrompt, result.analysis);
-//     }
-
-//     // 返回分析文本或完整的JSON字符串
-//     return result.analysis && typeof result.analysis === "string"
-//       ? result.analysis
-//       : JSON.stringify(result);
-//   } catch (error) {
-//     console.error(`[${requestId}] Direct analysis failed:`, error);
-//     return "Could not analyze the screenshot. Please try again.";
-//   }
-// }
