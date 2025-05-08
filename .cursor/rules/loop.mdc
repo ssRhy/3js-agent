@@ -10,13 +10,7 @@ alwaysApply: false
 核心功能和结构：
 三维场景编辑：通过Three.js实现3D场景的可视化和交互，支持模型加载、渲染和操作。
 代码编辑：集成Monaco编辑器，允许用户直接编写和修改Three.js代码，实现对场景的编程控制。
-##
-AI助手系统：
-使用LangChain 0.3版本构建Agent系统
-支持代码生成和优化(codeGenTool)
-支持3D模型生成(modelGenTool)
-支持代码修改和应用(applyPatchTool)
-截图screenshotTool
+
 ##
 状态管理：
 使用Zustand管理全局状态，包括场景对象、执行历史和用户意图
@@ -26,18 +20,40 @@ AI助手系统：
 ##
 工具链：
 codeGenTool：基于用户提示生成或修复Three.js代码
-modelGenTool：基于文本提示或图像生成3D模型
-applyPatchTool：应用代码补丁，管理代码状态
-screenshotTool:截图检查场景并且返回建议
+modelGenTool：基于用户需求生成3D模型
+applyPatchTool：应用代码补丁，管理代码状态。专管在原始代码上打补丁，无须关心内容
+screenshotTool:截图检查场景并且返回建议，专管前端渲染后的视觉验证
+retrievalTool & writeChromaTool：构建历史上下文库，为 Agent 提供持久化记忆与语义检索。Three.js 
+
 ##
 交互流程：
-用户输入自然语言提示
--前端截图分析
--AI代理分析请求并选择适当工具（直接threejs生成场景或者hyper3d生成，或者两个一起搭配使用）
--生成3d模型（只当请求modelGenTool）
--codeGenTool生成修改代码
--agent调用screenshotTool请求前端截图检查场景并且返回建议给codeGenTool。如果符合标准，就可以直接渲染，不需要再改代码。注意：不是一开始就截图，而是等前端渲染完成之后，截图查看前端渲染情况，给出建议反馈
--codeGenTool接收建议然后修改，把修改后的代码给applyPatchTool：应用代码补丁。然后把补丁后的代码返回到前端。
--前端更新场景并实时渲染结果
+## 用户提示
+前端将用户的自然语言指令（包含上下文）发给 Agent。
+## 策略决策
+Agent 根据指令判断要调用哪种生成：
+modelGenTool：仅生成 GLTF/OBJ 等模型文件。
+threejsGenTool：直接产出 Three.js 场景初始化 + Mesh 代码。
+双策略：先模型再场景，或并行生成。
+## 初版代码生产
+由 codeGenTool生成一段 Three.js 场景代码，并返回给前端。
+## 前端渲染
+前端把这段代码注入 Canvas 中执行，完整渲染出 3D 画面。
+## 截图与反馈
+前端调用 screenshotTool 截取 Canvas（或指定视角）并将图像发回 Agent。
+Agent 分析截图（借助视觉模型或规则）判断效果是否符合预期。
+## 分支处理
+符合：跳到步骤 9，直接渲染给用户，无需再改代码。
+不符：生成反馈给 codeGenTool，形成补丁指令。
+## 补丁应用
+codeGenTool 根据截图反馈输出一段代码补丁（diff 或完整替换片段）。
+applyPatchTool 在源代码上应用该补丁，形成新版本代码。
+## 持久化与历史检索
+writeChromaTool 将新版本中新增/修改的物件 JSON 写入本地 ChromaDB。
+retrievalTool 可随时按 ID、语义或标签从 ChromaDB 拉取历史物件 JSON，并将它们注入到下一轮 codeGenTool 的 Prompt 中，保证上下文完整。s
+## 最终渲染
+前端用最终代码渲染场景，用户看到稳定、持久化的结果。
+
 ##
-项目使用了Azure OpenAI服务作为后端AI能力，采用React + NextJS构建前端，通过Zustand维护状态。代码结构清晰，实现了AI和3D创作的无缝结合，支持复杂的Three.js场景生成和编辑。
+-agent循环：循环反馈：渲染→截图→反馈→补丁→渲染，直到视觉校验通过。
+-场景持久和稳定性：精准执行、实时校验、可持续演进，并且所有生成的物体都存入本地化 ChromaDB，随时可被检索、复用和组合，保障 Three.js 场景的稳定性与可维护性。
+-持久化上下文：每次补丁后的物件都写到 ChromaDB，Agent 下次生成时可一键拉回，确保版本不丢失。

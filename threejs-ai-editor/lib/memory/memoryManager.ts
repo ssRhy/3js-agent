@@ -1,12 +1,14 @@
 // Memory Management Module
-// Using BufferWindowMemory to only keep the most recent conversation turns
-// BufferWindowMemory with k=1 ensures we only keep the last turn, which:
-// 1. Prevents context window/token overflow in long conversations
+// Using ConversationSummaryBufferMemory to maintain context through summaries
+// ConversationSummaryBufferMemory ensures we keep important context while:
+// 1. Preventing context window/token overflow in long conversations
 // 2. Keeps AI responses more focused on recent inputs
-// 3. Reduces overall memory usage
-import { BufferWindowMemory } from "langchain/memory";
+// 3. Reduces overall memory usage with summarization
+import { ConversationSummaryBufferMemory } from "langchain/memory";
+import { AzureChatOpenAI } from "@langchain/openai";
 import { createPatch } from "diff";
 import { BaseCallbackHandler } from "@langchain/core/callbacks/base";
+import { chromaService } from "../services/chromaService";
 
 // Type definitions
 interface SceneObject {
@@ -40,42 +42,55 @@ interface ModelGenResult {
  */
 class MemoryManager {
   // Memory instances
-  private _codeMemory: BufferWindowMemory;
-  private _sceneMemory: BufferWindowMemory;
+  private _codeMemory: ConversationSummaryBufferMemory;
+  private _sceneMemory: ConversationSummaryBufferMemory;
 
   // Current states
   private _currentCodeState = "";
+  private _currentUserPrompt: string = "";
 
   constructor() {
-    // Initialize memory systems with BufferWindowMemory
-    this._codeMemory = new BufferWindowMemory({
+    // Initialize LLM for summarization
+    const llm = new AzureChatOpenAI({
+      modelName: "gpt-4.1",
+      azureOpenAIApiKey: process.env.AZURE_OPENAI_API_KEY,
+      azureOpenAIApiDeploymentName:
+        process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME,
+      azureOpenAIApiVersion: "2024-12-01-preview",
+      azureOpenAIApiInstanceName: process.env.AZURE_OPENAI_API_INSTANCE_NAME,
+    });
+
+    // Initialize memory systems with ConversationSummaryBufferMemory
+    this._codeMemory = new ConversationSummaryBufferMemory({
       memoryKey: "codeState",
       inputKey: "userPrompt",
       returnMessages: false,
       outputKey: "codeStateContext",
-      k: 5, // 只保留最近一次交互
+      maxTokenLimit: 30000, // Limit token usage
+      llm, // Use LLM for summarization
     });
 
-    this._sceneMemory = new BufferWindowMemory({
+    this._sceneMemory = new ConversationSummaryBufferMemory({
       memoryKey: "scene_history",
       inputKey: "userPrompt",
       returnMessages: false,
       outputKey: "sceneHistoryContext",
-      k: 5, // 只保留最近一次交互
+      maxTokenLimit: 30000, // Limit token usage
+      llm, // Use LLM for summarization
     });
   }
 
   /**
    * Get the code memory instance
    */
-  get codeMemory(): BufferWindowMemory {
+  get codeMemory(): ConversationSummaryBufferMemory {
     return this._codeMemory;
   }
 
   /**
    * Get the scene memory instance
    */
-  get sceneMemory(): BufferWindowMemory {
+  get sceneMemory(): ConversationSummaryBufferMemory {
     return this._sceneMemory;
   }
 
@@ -310,6 +325,16 @@ class MemoryManager {
     this._sceneMemory.clear();
     console.log("[Memory] Memory cleared");
   }
+
+  // 设置当前用户提示
+  setCurrentUserPrompt(prompt: string): void {
+    this._currentUserPrompt = prompt;
+  }
+
+  // 获取当前用户提示
+  getCurrentUserPrompt(): string {
+    return this._currentUserPrompt;
+  }
 }
 
 /**
@@ -317,14 +342,14 @@ class MemoryManager {
  */
 class MemoryCallbackHandler extends BaseCallbackHandler {
   currentCodeState: string;
-  agentMemory: BufferWindowMemory;
+  agentMemory: ConversationSummaryBufferMemory;
   userPrompt: string;
   memoryManager: MemoryManager;
   name = "MemoryCallbackHandler";
 
   constructor(
     initialCode: string,
-    memory: BufferWindowMemory,
+    memory: ConversationSummaryBufferMemory,
     userPrompt: string,
     memoryManager: MemoryManager
   ) {
@@ -578,21 +603,21 @@ export const saveSceneStateToMemory = async (
   userPromptOrState: string | SceneObject[],
   sceneState?: SceneObject[]
 ) => {
-  // 确定正确的参数
-  let userPrompt: string;
-  let state: SceneObject[];
+  const isPrompt = typeof userPromptOrState === "string";
+  const actualState = isPrompt ? sceneState || [] : userPromptOrState;
+  const actualPrompt = isPrompt ? userPromptOrState : "";
 
-  if (Array.isArray(userPromptOrState)) {
-    // 单参数调用，第一个参数是sceneState
-    userPrompt = "Scene update " + new Date().toISOString();
-    state = userPromptOrState;
-  } else {
-    // 双参数调用，第一个参数是userPrompt，第二个是sceneState
-    userPrompt = userPromptOrState;
-    state = sceneState || [];
+  if (actualPrompt) {
+    memoryManager.setCurrentUserPrompt(actualPrompt);
   }
 
-  return memoryManager.saveSceneStateToMemory(userPrompt, state);
+  await memoryManager.saveSceneStateToMemory(
+    actualPrompt || memoryManager.getCurrentUserPrompt(),
+    actualState
+  );
+
+  // 保存到ChromaDB
+  // 移除直接调用ChromaDB的代码，让Agent使用write_to_chroma工具写入
 };
 
 export const loadSceneHistoryFromMemory = async () => {
@@ -619,8 +644,9 @@ export const getCodeDigest = (code: string) => {
 };
 
 // Export memory instances for direct access if needed
-export const getCodeMemory = (): BufferWindowMemory => memoryManager.codeMemory;
-export const getSceneMemory = (): BufferWindowMemory =>
+export const getCodeMemory = (): ConversationSummaryBufferMemory =>
+  memoryManager.codeMemory;
+export const getSceneMemory = (): ConversationSummaryBufferMemory =>
   memoryManager.sceneMemory;
 
 // Define ModelHistoryEntry type
@@ -642,9 +668,7 @@ import { getCachedCode } from "@/lib/tools/applyPatchTool";
  * Load the current scene state from memory
  * @returns Current scene state objects
  */
-export const loadSceneStateFromMemory = async (): Promise<
-  SceneObject[]
-> => {
+export const loadSceneStateFromMemory = async (): Promise<SceneObject[]> => {
   try {
     const memoryVars = await memoryManager.sceneMemory.loadMemoryVariables({});
     const historyContext = memoryVars.sceneHistoryContext || {};
@@ -663,4 +687,32 @@ export const loadSceneStateFromMemory = async (): Promise<
   }
 
   return [];
+};
+
+// 从ChromaDB检索对象
+export const retrieveObjectsFromChromaDB = async (
+  query: string,
+  limit: number = 10
+): Promise<SceneObject[]> => {
+  try {
+    console.log(`[ChromaDB] Retrieving objects with query: "${query}"`);
+    return await chromaService.retrieveSceneObjects(query, limit);
+  } catch (error) {
+    console.error(
+      "[ChromaDB] Failed to retrieve objects from ChromaDB:",
+      error
+    );
+    return [];
+  }
+};
+
+// 添加新方法，用于初始化ChromaDB
+export const initializeChromaDB = async (): Promise<void> => {
+  try {
+    console.log("[ChromaDB] Initializing ChromaDB...");
+    await chromaService.initialize();
+    console.log("[ChromaDB] ChromaDB initialized successfully");
+  } catch (error) {
+    console.error("[ChromaDB] Failed to initialize ChromaDB:", error);
+  }
 };

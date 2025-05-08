@@ -11,12 +11,15 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@langchain/core": "^0.3.49",
-    "@langchain/openai": "^0.5.7",
+    "@langchain/community": "^0.3.42",
+    "@langchain/core": "^0.3.54",
+    "@langchain/openai": "^0.5.10",
     "@monaco-editor/react": "^4.6.0",
     "@react-three/drei": "^9.122.0",
     "@react-three/fiber": "^8.18.0",
     "@vercel/analytics": "^1.2.2",
+    "chromadb": "^2.4.3",
+    "chromadb-default-embed": "^2.14.0",
     "diff": "^5.2.0",
     "eslint": "^8.57.0",
     "html2canvas": "^1.4.1",
@@ -31,7 +34,7 @@
     "three": "^0.161.0",
     "typescript-string-operations": "^1.5.1",
     "ws": "^8.16.0",
-    "zod": "^3.24.3",
+    "zod": "^3.24.4",
     "zustand": "^4.5.1"
   },
   "devDependencies": {

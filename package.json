@@ -1,12 +1,22 @@
 {
+  "name": "3js-agent",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
   "dependencies": {
-    "@langchain/community": "^0.3.42",
-    "@types/diff": "^7.0.2",
-    "@types/uuid": "^10.0.0",
-    "diff": "^8.0.0-beta",
-    "langsmith": "^0.3.25",
-    "socket.io": "^4.8.1",
-    "socket.io-client": "^4.8.1",
-    "uuid": "^11.1.0"
-  }
+    "chromadb": "^2.4.3",
+    "next": "^14.1.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "description": "This project combines Three.js with LangChain agents to create a 3D scene editor with AI capabilities. The system includes ChromaDB for vector storage of 3D objects.",
+  "main": "list_collections.js",
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
 }

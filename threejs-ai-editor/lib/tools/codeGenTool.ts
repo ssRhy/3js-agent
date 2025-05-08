@@ -228,25 +228,32 @@ ${modelHistorySection}
       }
 
       // 返回生成的代码
-      return JSON.stringify({
+      const finalResponse = JSON.stringify({
         code: improvedCode,
         originalCode: originalCode,
         status: "success",
         message: "Successfully generated Three.js code",
         isFirstGeneration: true,
       });
+
+      // After code generation, add a hint to the agent about object persistence
+      const sceneState = {
+        // Add scene state extraction logic here
+      };
+      const userPrompt = instruction;
+      const persistenceHint =
+        `\n\n// 注意：生成代码后，调用write_to_chroma工具将场景对象保存到ChromaDB\n` +
+        `// 示例: { \"tool\": \"write_to_chroma\", \"params\": { \"objects\": ${JSON.stringify(
+          sceneState
+        )}, \"prompt\": "${userPrompt}" } }`;
+
+      return finalResponse + persistenceHint;
     } catch (error) {
       const totalTime = Date.now() - startTime;
       console.error(
-        `[${requestId}] [CodeGen Tool] ❌ 代码生成失败，总耗时: ${totalTime}ms, 错误:`,
-        error
+        `[${requestId}] [CodeGen Tool] ❌ 代码生成失败，错误: ${error}, 耗时: ${totalTime}ms`
       );
-      return JSON.stringify({
-        status: "error",
-        message: `Failed to generate or modify Three.js code: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      });
+      throw error;
     }
   },
 });

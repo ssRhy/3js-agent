@@ -16,6 +16,13 @@ import { LintError } from "../../lib/types/codeTypes";
 import { SceneStateObject } from "../../lib/types/sceneTypes";
 import { AgentRequest } from "./agent";
 
+export const config = {
+  api: {
+    bodyParser: {
+      sizeLimit: "10mb",
+    },
+  },
+};
 /**
  * Agent API 的主要处理函数
  * 负责协调各种 AI 操作，包括截图分析、代码优化等

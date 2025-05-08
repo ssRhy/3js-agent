@@ -8,7 +8,7 @@ import { BaseChatMessageHistory } from "@langchain/core/chat_history";
 import { Tool } from "langchain/tools";
 import { NextApiResponse } from "next";
 import { ChatMessageHistory } from "langchain/stores/message/in_memory";
-import { BufferWindowMemory } from "langchain/memory";
+import { ConversationSummaryBufferMemory } from "langchain/memory";
 
 // 导入 agent 创建工厂
 import { createAgent, createAgentExecutor } from "./agentFactory";
@@ -41,6 +41,9 @@ import {
   getCachedCode,
   updateCachedCode,
 } from "../tools/applyPatchTool";
+import { retrievalTool } from "../tools/retrievalTool";
+import { writeChromaTool } from "../tools/writeChromaTool";
+import { chromaService } from "../services/chromaService";
 
 // 将screenshotTool转为Tool类型
 const screenshotToolInstance = screenshotTool as unknown as Tool;
@@ -126,6 +129,17 @@ async function saveInteractionToMemory(
   );
 }
 
+// 初始化 ChromaDB 并确保服务可用
+async function initializeChromaDB(): Promise<void> {
+  try {
+    console.log(`[ChromaDB] Initializing ChromaDB service...`);
+    await chromaService.initialize();
+    console.log(`[ChromaDB] ChromaDB service initialized successfully`);
+  } catch (error) {
+    console.error(`[ChromaDB] Failed to initialize ChromaDB:`, error);
+  }
+}
+
 /**
  * 运行交互流程
  * 整合了代码优化、截图分析等功能的完整流程
@@ -172,6 +186,9 @@ export async function runInteractionFlow(
   );
 
   try {
+    // 确保 ChromaDB 服务已初始化
+    await initializeChromaDB();
+
     // 首先缓存当前代码，如果缓存为空
     if (!getCachedCode()) {
       console.log(`[${requestId}] Initializing code cache with current code`);
@@ -242,19 +259,26 @@ export async function runInteractionFlow(
         "你必须首先分析截图，然后根据分析结果进行代码生成或修改。" +
         "步骤1: 调用analyze_screenshot工具分析当前场景。调用时必须使用完整的截图数据，不要修改或替换。" +
         "步骤2: 根据分析结果，如果需要改进，则调用generate_fix_code工具；如果不需要改进，则直接返回当前代码。" +
-        "步骤3: 使用apply_patch工具应用增量更新，而不是替换整个代码。";
+        "步骤3: 使用apply_patch工具应用增量更新，而不是替换整个代码。" +
+        "步骤4: 使用write_to_chroma工具将新生成的Three.js对象保存到持久化存储中。每个对象必须包含完整的几何体、材质和变换信息。";
     } else {
       // 无截图的情况
       systemInstructions =
-        "根据用户需求生成或优化Three.js代码，使用增量更新方式。";
+        "根据用户需求生成或优化Three.js代码，使用增量更新方式。" +
+        "如果需要重用之前场景中的对象，请使用retrieve_objects工具查询。" +
+        "最后，使用write_to_chroma工具保存新生成的Three.js对象到持久化存储。确保保存对象时包含完整的几何体、材质和变换信息。";
       suggestion =
-        "根据用户需求生成代码，无需考虑当前场景状态，但使用增量更新方式。";
+        "1. 使用retrieve_objects工具查找相关的场景对象\n" +
+        "2. 根据用户需求生成代码，保留已有对象\n" +
+        "3. 使用增量更新方式更新代码\n" +
+        "4. 使用write_to_chroma工具将生成的对象完整保存到ChromaDB持久化存储";
     }
 
     // 如果有场景状态，添加到系统指令中
     if (combinedSceneState && combinedSceneState.length > 0) {
       systemInstructions +=
-        "\n\n当前场景中已有对象，请保留已有对象并根据需求进行修改或添加，避免重新创建整个场景。";
+        "\n\n当前场景中已有对象，请保留已有对象并根据需求进行修改或添加，避免重新创建整个场景。" +
+        "可以使用retrieve_objects工具获取历史场景对象详情。每次生成或修改场景后，务必使用write_to_chroma工具保存完整的对象数据，包括几何体、材质和变换信息。";
     }
 
     // 运行agent循环
@@ -472,7 +496,8 @@ export async function runAgentLoop(
     if (screenshot && renderingComplete === true) {
       enhancedHistoryContext +=
         "\n\n场景截图已提供，你必须首先使用analyze_screenshot工具分析当前场景是否符合需求，然后根据分析结果决定下一步行动。" +
-        "调用analyze_screenshot工具时，必须使用完整的screenshot参数，切勿替换或修改。";
+        "调用analyze_screenshot工具时，必须使用完整的screenshot参数，切勿替换或修改。" +
+        "场景渲染完成后，需要使用write_to_chroma工具将场景中的对象完整保存，确保包含几何体、材质和变换信息。";
     }
 
     // 确保lintErrors是一个数组
@@ -524,10 +549,12 @@ export async function runAgentLoop(
         "你必须按照增量更新流程工作：\n" +
         "步骤1: 调用analyze_screenshot工具分析当前场景\n" +
         "步骤2: 根据分析结果，生成改进代码（generate_fix_code）\n" +
-        "步骤3: 使用apply_patch工具应用增量更新，而不是替换整个代码";
+        "步骤3: 使用apply_patch工具应用增量更新，而不是替换整个代码\n" +
+        "步骤4: 使用write_to_chroma工具将场景中的对象保存到持久化存储中，确保包含完整的几何体、材质和变换信息";
     } else {
       systemInstructions =
-        "按照增量更新流程工作，根据用户需求生成或优化Three.js代码。";
+        "按照增量更新流程工作，根据用户需求生成或优化Three.js代码。\n" +
+        "在完成场景修改后，务必使用write_to_chroma工具将所有重要对象保存到持久化存储中，确保包含完整的几何体、材质和变换信息，以便未来可以准确重建这些对象。";
     }
 
     // 保持现有的agent执行和结果处理逻辑

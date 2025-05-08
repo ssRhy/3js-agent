@@ -9,7 +9,7 @@ alwaysApply: true
 
 ##
 注意：使用langchainjs0.3的agent的api构建代理自主规划执行路径，使用多个工具完成复杂任务，而不是通过外部代码硬编码执行流程。
-   
+    -nextjs的pages目录结构
     -不要随意增加功能和文件
     -使用langchainjs0.3的agent的api
     -代码结构化，精简有效，保持代码简洁

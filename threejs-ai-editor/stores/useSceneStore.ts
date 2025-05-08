@@ -351,6 +351,7 @@ export const useSceneStore = create<SceneState>((set, get) => ({
           scale: number[];
           isVisible: boolean;
           metadata: Record<string, unknown> | undefined;
+          objectData?: string; // Full JSON serialized data
         }[] = [];
 
     // 递归处理组中的所有对象
@@ -361,7 +362,18 @@ export const useSceneStore = create<SceneState>((set, get) => ({
         const objState =
           state.objectStates.get(obj.uuid) || extractObjectState(obj);
 
-        serializedObjects.push({
+        // Create base object metadata
+        const baseObject: {
+          id: string;
+          name: string;
+          type: string;
+          position: number[];
+          rotation: number[];
+          scale: number[];
+          isVisible: boolean;
+          metadata: Record<string, unknown> | undefined;
+          objectData?: string;
+        } = {
           id: obj.uuid,
           name: registry.name,
           type: registry.type,
@@ -378,7 +390,25 @@ export const useSceneStore = create<SceneState>((set, get) => ({
           scale: [objState.scale.x, objState.scale.y, objState.scale.z],
           isVisible: registry.isVisible,
           metadata: registry.metadata,
-        });
+        };
+
+        // Add full serialized object data if the object supports toJSON
+        try {
+          if (
+            obj instanceof Mesh ||
+            obj instanceof Group ||
+            obj instanceof Light
+          ) {
+            // Use toJSON to capture complete object definition including geometry, materials, etc.
+            const objectData = obj.toJSON();
+            // Convert to string to ensure it's stored completely
+            baseObject.objectData = JSON.stringify(objectData);
+          }
+        } catch (error) {
+          console.error(`Error serializing object ${obj.uuid}:`, error);
+        }
+
+        serializedObjects.push(baseObject);
       }
 
       // 递归处理子对象

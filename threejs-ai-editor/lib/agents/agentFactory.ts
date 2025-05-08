@@ -20,7 +20,14 @@ import { createSystemPrompt } from "../prompts/systemPrompts";
 import { createHumanPrompt } from "../prompts/humanPrompts";
 
 // 导入内存管理功能
-import { createMemoryCallbackHandler } from "../memory/memoryManager";
+import {
+  createMemoryCallbackHandler,
+  initializeChromaDB,
+} from "../memory/memoryManager";
+
+// 导入工具
+import { retrievalTool } from "../tools/retrievalTool";
+import { writeChromaTool } from "../tools/writeChromaTool";
 
 // 导入类型
 import { LintError } from "../types/codeTypes";
@@ -39,6 +46,11 @@ export function createModelClient(): AzureChatOpenAI {
     azureOpenAIApiInstanceName: process.env.AZURE_OPENAI_API_INSTANCE_NAME,
   });
 }
+
+// 初始化 ChromaDB
+initializeChromaDB().catch((error) => {
+  console.error("[AgentFactory] Failed to initialize ChromaDB:", error);
+});
 
 /**
  * 创建 Agent 的工厂函数 - 使用 LangChain.js 0.3 API
@@ -60,6 +72,7 @@ export async function createAgent(
     modelHistory?: ModelHistoryEntry[];
     sceneState?: SceneStateObject[];
     sceneHistory?: string;
+    useChromaDB?: boolean;
   } = {}
 ) {
   const {
@@ -68,6 +81,7 @@ export async function createAgent(
     modelHistory = [],
     sceneState = [],
     sceneHistory = "",
+    useChromaDB = true,
   } = options;
 
   // 初始化 OpenAI 客户端
@@ -80,6 +94,26 @@ export async function createAgent(
   const callbackManager = new CallbackManager();
   callbackManager.addHandler(callbackHandler);
 
+  // 确保 ChromaDB 工具已添加
+  if (useChromaDB) {
+    const hasRetrievalTool = tools.some(
+      (tool) => tool.name === retrievalTool.name
+    );
+    const hasWriteTool = tools.some(
+      (tool) => tool.name === writeChromaTool.name
+    );
+
+    if (!hasRetrievalTool) {
+      console.log("[AgentFactory] Adding retrieval tool for ChromaDB");
+      tools.push(retrievalTool as unknown as Tool);
+    }
+
+    if (!hasWriteTool) {
+      console.log("[AgentFactory] Adding write tool for ChromaDB");
+      tools.push(writeChromaTool as unknown as Tool);
+    }
+  }
+
   // 确保apply_patch工具有正确的描述
   tools.forEach((tool) => {
     if (tool.name === "apply_patch") {
@@ -88,10 +122,19 @@ export async function createAgent(
     }
   });
 
+  // 添加 ChromaDB 相关提示到系统消息
+  let enhancedHistoryContext = historyContext;
+  if (useChromaDB) {
+    enhancedHistoryContext +=
+      "\n\n你可以使用retrieve_objects工具从ChromaDB中搜索和检索已存储的Three.js对象，" +
+      "以便在新场景中重用这些对象。搜索可以基于对象的语义描述（如'红色立方体'）或对象ID（如'id:cube_1'）。" +
+      "检索到对象后，你可以在新代码中引用它们的属性。每次生成新对象后，使用write_to_chroma工具将其保存到持久化存储。";
+  }
+
   // 创建系统消息提示
   const systemMessage = createSystemPrompt(
     lintErrors,
-    historyContext,
+    enhancedHistoryContext,
     false, // 是否需要模型生成 - 由 Agent 在运行时使用工具决定
     modelHistory,
     sceneState,

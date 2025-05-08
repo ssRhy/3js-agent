@@ -5,6 +5,8 @@ import { codeGenTool } from "./codeGenTool";
 import { modelGenTool } from "./modelGenTool";
 import { applyPatchTool } from "./applyPatchTool";
 import { screenshotTool } from "./screenshotTool";
+import { retrievalTool } from "./retrievalTool";
+import { writeChromaTool } from "./writeChromaTool";
 
 /**
  * 工具类别枚举
@@ -16,6 +18,7 @@ export enum ToolCategory {
   CODE_GEN = "codeGenTool",
   MODEL_GEN = "modelGenTool",
   SEARCH = "search",
+  STORAGE = "storage",
 }
 
 /**
@@ -73,6 +76,20 @@ export class ToolRegistry {
       screenshotTool.name,
       screenshotTool as unknown as Tool,
       ToolCategory.UTILITY
+    );
+
+    // 注册ChromaDB检索工具
+    this.registerTool(
+      retrievalTool.name,
+      retrievalTool as unknown as Tool,
+      ToolCategory.SEARCH
+    );
+
+    // 注册ChromaDB写入工具
+    this.registerTool(
+      writeChromaTool.name,
+      writeChromaTool as unknown as Tool,
+      ToolCategory.STORAGE
     );
 
     console.log("[ToolRegistry] Initialized tools");

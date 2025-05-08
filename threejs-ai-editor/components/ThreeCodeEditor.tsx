@@ -1120,8 +1120,8 @@ export default function ThreeCodeEditor() {
       renderer.render(scene, camera);
 
       try {
-        // Capture the canvas content as PNG base64
-        const imageBase64 = threeCanvas.toDataURL("image/png", 1.0);
+        // Set a lower quality value (0.5-0.7 instead of 1.0)
+        const imageBase64 = threeCanvas.toDataURL("image/jpeg", 0.5);
 
         console.log(
           "[Screenshot] Base64 data captured, length:",
@@ -1133,7 +1133,7 @@ export default function ThreeCodeEditor() {
         if (
           !imageBase64 ||
           imageBase64 === "data:," ||
-          !imageBase64.startsWith("data:image/png;base64,") ||
+          !imageBase64.startsWith("data:image/jpeg;base64,") ||
           imageBase64.length < 1000
         ) {
           console.error(
@@ -1317,38 +1317,81 @@ export default function ThreeCodeEditor() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [code, prompt]);
 
-  // 更新handleGenerate函数，加强前端用户请求的截图分析功能
-  const handleGenerate = async () => {
-    if (isLoading) return;
-    setIsLoading(true);
-    setError("");
+  // Add a function to capture the scene state after rendering
+  const captureSceneStateForChromaDB = async () => {
+    console.log(
+      "[SceneCapture] Capturing scene state for ChromaDB persistence..."
+    );
+    if (!threeRef.current) {
+      console.warn("[SceneCapture] Failed: Three.js scene not initialized");
+      return null;
+    }
 
     try {
-      // 获取当前渲染状态
-      const isThreeJSReady =
-        threeRef.current !== null && renderingCompleteRef.current;
-
-      let screenshotData = "";
-
-      // 用户发起请求时，始终尝试获取截图数据用于分析（而不是仅在renderingComplete时）
-      if (isThreeJSReady) {
-        try {
-          // 确保场景已完全渲染
-          await applySafelyToScene(code);
-          // 捕获最新场景截图
-          const capturedScreenshot = await captureScreenshot();
-          if (capturedScreenshot) {
-            screenshotData = capturedScreenshot;
-            console.log("[Generate] 成功捕获前端场景截图用于分析");
-          } else {
-            console.warn("[Generate] 截图捕获失败，将继续处理但无截图分析");
-          }
-        } catch (screenshotError) {
-          console.error("[Generate] 捕获截图时出错:", screenshotError);
-        }
-      } else {
-        console.log("[Generate] 场景未就绪，将跳过截图分析");
+      const { scene, renderer, camera } = threeRef.current;
+      if (!scene || !renderer || !camera) {
+        console.warn("[SceneCapture] Three.js components incomplete");
+        return null;
       }
+
+      // Force a render to ensure the scene is up-to-date
+      renderer.render(scene, camera);
+
+      // Get the serialized scene state - this will now include full object data
+      // thanks to our updated serializeSceneState function in useSceneStore
+      const sceneState = serializeSceneState();
+
+      if (sceneState.length === 0) {
+        console.log("[SceneCapture] No objects found in scene");
+        return null;
+      }
+
+      console.log(
+        `[SceneCapture] Successfully captured ${sceneState.length} objects from the scene`
+      );
+      return sceneState;
+    } catch (err) {
+      console.error("[SceneCapture] Error capturing scene state:", err);
+      setError(
+        "Cannot capture scene state: " +
+          (err instanceof Error ? err.message : String(err))
+      );
+      return null;
+    }
+  };
+
+  // Modify the handleGenerate function to include scene capture
+  const handleGenerate = async () => {
+    try {
+      // 清除错误状态
+      setError("");
+      setSuccess("");
+      setIsLoading(true);
+
+      // 确保场景已完全渲染好
+      const isThreeJSReady = await applySafelyToScene(code);
+      if (!isThreeJSReady) {
+        throw new Error("Three.js场景无法正确渲染，请检查代码");
+      }
+
+      // 等待一小段时间确保渲染完成
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      // 先清空服务器端缓存
+      await fetch("/api/clearCache", { method: "POST" });
+
+      // 捕获截图
+      const screenshotData = await captureScreenshot();
+
+      // Capture full scene state with serialized objects
+      const sceneState = await captureSceneStateForChromaDB();
+
+      if (!screenshotData) {
+        console.warn("[Generate] No screenshot data available");
+      }
+
+      // 更新渲染完成标志
+      renderingCompleteRef.current = true;
 
       // 准备发送到API的数据
       const requestBody: {
@@ -1378,18 +1421,15 @@ export default function ThreeCodeEditor() {
         requestBody.screenshot = screenshotData;
       }
 
-      // 如果有场景对象，添加到请求中
-      if (threeRef.current?.dynamicGroup) {
-        const sceneState = serializeSceneState();
-        if (sceneState.length > 0) {
-          requestBody.sceneState = sceneState as unknown as SceneStateObject[];
-        }
+      // 如果有场景对象，添加到请求中 - 使用我们新捕获的完整对象数据
+      if (sceneState && sceneState.length > 0) {
+        requestBody.sceneState = sceneState as unknown as SceneStateObject[];
       }
 
       console.log(
         `[Generate] 发送请求到API，${
           screenshotData ? "包含" : "不包含"
-        }截图数据`
+        }截图数据，包含${sceneState?.length || 0}个场景对象`
       );
 
       // 发送请求到API
