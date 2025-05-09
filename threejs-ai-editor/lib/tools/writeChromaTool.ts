@@ -88,11 +88,8 @@ export const writeChromaTool = tool(
         console.log(`  ... and ${validObjects.length - 5} more objects`);
       }
 
-      // 存储对象到 ChromaDB
-      const success = await chromaService.storeSceneObjects(
-        validObjects,
-        prompt
-      );
+      // 存储对象到 ChromaDB - no longer passing prompt parameter
+      const success = await chromaService.storeSceneObjects(validObjects);
 
       // 获取更新后的对象数量
       if (success) {

@@ -23,8 +23,6 @@ interface ChromaMetadata {
   type: string;
   name: string;
   objectType: string;
-  prompt: string;
-  timestamp: string;
   hasFullData?: boolean;
   [key: string]: unknown;
 }
@@ -116,12 +114,10 @@ class ChromaService {
   /**
    * Store Three.js objects in ChromaDB
    * @param objects Scene objects to store
-   * @param prompt User prompt that generated these objects
    * @returns Success status
    */
   public async storeSceneObjects(
-    objects: SceneStateObject[],
-    prompt: string
+    objects: SceneStateObject[]
   ): Promise<boolean> {
     try {
       await this.ensureInitialized();
@@ -174,8 +170,7 @@ class ChromaService {
           type: obj.type,
           name: obj.name || "unnamed",
           objectType: obj.type,
-          prompt: prompt,
-          timestamp: new Date().toISOString(),
+
           hasFullData: Boolean(hasFullData), // Ensure it's a boolean
         };
 

@@ -1,4 +1,6 @@
-import { Tool } from "@langchain/core/tools";
+// lib/tools/retrievalTool.ts
+import { tool } from "@langchain/core/tools";
+import { z } from "zod";
 import { chromaService } from "../services/chromaService";
 
 // Define enhanced interface for objects with full data
@@ -13,30 +15,29 @@ interface EnhancedSceneObject {
   [key: string]: unknown;
 }
 
+// 定义检索工具的输入模式
+const RetrievalToolInputSchema = z.object({
+  query: z
+    .string()
+    .describe("搜索查询，可以是语义搜索词或者对象ID（使用'id:'前缀）"),
+  limit: z.number().optional().default(10).describe("要返回的最大结果数量"),
+});
+
 /**
  * RetrievalTool for fetching objects from ChromaDB
  * Used to retrieve Three.js objects from persistent storage based on semantic search
  */
-class RetrievalTool extends Tool {
-  name = "retrieve_objects";
-  description =
-    "Retrieves Three.js objects from persistent storage based on semantic search or object ID. Use this when you need to find existing objects in the scene history to reuse them. For ID lookup, prefix the query with 'id:'. Example: 'id:cube_1' or 'red sphere'";
-
-  async _call(input: string): Promise<string> {
+export const retrievalTool = tool(
+  async ({ query, limit = 10 }) => {
     try {
-      console.log(`[RetrievalTool Debug] Tool called with input: ${input}`);
-
-      // Parse the input
-      const parsedInput = JSON.parse(input);
-      const { query, limit = 10 } = parsedInput;
-
+      const requestId = `retrieve_${Date.now()}`;
       console.log(
-        `[RetrievalTool Debug] Retrieving objects with query: "${query}", limit: ${limit}`
+        `[${requestId}] [RetrievalTool] Tool called with query: "${query}", limit: ${limit}`
       );
 
-      // Validate the query
-      if (!query || typeof query !== "string") {
-        console.log(`[RetrievalTool Debug] Invalid query: ${query}`);
+      // 验证查询
+      if (!query || query.trim() === "") {
+        console.log(`[${requestId}] [RetrievalTool] Empty query provided`);
         return JSON.stringify({
           success: false,
           message: "Query must be a non-empty string",
@@ -44,29 +45,31 @@ class RetrievalTool extends Tool {
         });
       }
 
-      // Get current objects count in ChromaDB before retrieval
+      // 获取当前对象数量
       const objectIdsBeforeRetrieval = await chromaService.getAllObjectIds();
       console.log(
-        `[RetrievalTool Debug] Current object count in ChromaDB: ${objectIdsBeforeRetrieval.length}`
+        `[${requestId}] [RetrievalTool] Current object count in ChromaDB: ${objectIdsBeforeRetrieval.length}`
       );
 
-      // Retrieve objects from ChromaDB
+      // 从 ChromaDB 检索对象
       const objects = await chromaService.retrieveSceneObjects(query, limit);
 
       console.log(
-        `[RetrievalTool Debug] Retrieved ${objects.length} objects from ChromaDB matching query: "${query}"`
+        `[${requestId}] [RetrievalTool] Retrieved ${objects.length} objects from ChromaDB matching query: "${query}"`
       );
 
-      // Log detailed object info if objects were found
+      // 记录找到的对象的详细信息
       if (objects.length > 0) {
-        console.log("[RetrievalTool Debug] First few objects retrieved:");
+        console.log(
+          `[${requestId}] [RetrievalTool] First few objects retrieved:`
+        );
         objects.slice(0, 3).forEach((obj, index) => {
           console.log(`  Object ${index + 1}:`);
           console.log(`    ID: ${obj.id}`);
           console.log(`    Type: ${obj.type}`);
           console.log(`    Name: ${obj.name || "unnamed"}`);
 
-          // Check for full object data
+          // 检查是否有完整的对象数据
           const enhancedObj = obj as EnhancedSceneObject;
           if (enhancedObj.objectData) {
             console.log(
@@ -75,22 +78,20 @@ class RetrievalTool extends Tool {
               )} KB)`
             );
 
-            // Log additional helpful information for usage
+            // 记录额外的有用信息
             try {
               const objectData = JSON.parse(enhancedObj.objectData);
               if (objectData.geometries) {
                 console.log(
                   `    Geometry types: ${objectData.geometries
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    .map((g: any) => g.type)
+                    .map((g: { type: string }) => g.type)
                     .join(", ")}`
                 );
               }
               if (objectData.materials) {
                 console.log(
                   `    Material types: ${objectData.materials
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    .map((m: any) => m.type)
+                    .map((m: { type: string }) => m.type)
                     .join(", ")}`
                 );
               }
@@ -107,7 +108,7 @@ class RetrievalTool extends Tool {
         }
       }
 
-      // Format and return the results
+      // 格式化并返回结果
       return JSON.stringify({
         success: true,
         count: objects.length,
@@ -121,7 +122,7 @@ class RetrievalTool extends Tool {
             : "No objects found matching the query",
       });
     } catch (error) {
-      console.error("[RetrievalTool Debug] Error retrieving objects:", error);
+      console.error("[RetrievalTool] Error retrieving objects:", error);
       return JSON.stringify({
         success: false,
         message: `Error retrieving objects: ${
@@ -130,9 +131,11 @@ class RetrievalTool extends Tool {
         objects: [],
       });
     }
+  },
+  {
+    name: "retrieve_objects",
+    description:
+      "Retrieves Three.js objects from persistent storage based on semantic search or object ID. Use this when you need to find existing objects in the scene history to reuse them. For ID lookup, prefix the query with 'id:'. Example: 'id:cube_1' or 'red sphere'",
+    schema: RetrievalToolInputSchema,
   }
-}
-
-// Export both the class and the instance
-export { RetrievalTool };
-export const retrievalTool = new RetrievalTool();
+);

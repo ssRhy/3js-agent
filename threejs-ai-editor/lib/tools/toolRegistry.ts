@@ -3,7 +3,7 @@ import { Tool } from "@langchain/core/tools";
 
 import { codeGenTool } from "./codeGenTool";
 import { modelGenTool } from "./modelGenTool";
-import { applyPatchTool } from "./applyPatchTool";
+import { applyPatchTool } from "@/lib/tools/applyPatchTool";
 import { screenshotTool } from "./screenshotTool";
 import { retrievalTool } from "./retrievalTool";
 import { writeChromaTool } from "./writeChromaTool";

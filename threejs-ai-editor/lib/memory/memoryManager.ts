@@ -662,7 +662,7 @@ export const clearSessionState = (): void => {
 };
 
 // Helper function that would be imported from elsewhere
-import { getCachedCode } from "@/lib/tools/applyPatchTool";
+import { getCachedCode } from "../tools/applyPatchTool";
 
 /**
  * Load the current scene state from memory

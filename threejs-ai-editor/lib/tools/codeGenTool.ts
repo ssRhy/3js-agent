@@ -1,7 +1,7 @@
 import { DynamicStructuredTool } from "@langchain/core/tools";
 import { AzureChatOpenAI } from "@langchain/openai";
 import { z } from "zod";
-import { getCachedCode } from "./applyPatchTool";
+import { getCachedCode } from "@/lib/tools/applyPatchTool";
 import { loadModelHistoryFromMemory } from "@/lib/memory/memoryManager";
 
 // Initialize Azure OpenAI client for code generation
