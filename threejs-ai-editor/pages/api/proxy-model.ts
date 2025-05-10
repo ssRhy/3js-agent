@@ -38,9 +38,9 @@ export default async function handler(
 
     // Ensure URL is absolute
     try {
-      // Check if modelUrl starts with /api, meaning it's a relative path that needs conversion
-      if (modelUrl.startsWith("/api/")) {
-        // This is a client error where they passed a relative URL, try to convert to absolute
+      // Check if modelUrl starts with /api/proxy-model, meaning it's a relative path that needs conversion
+      if (modelUrl.startsWith("/api/proxy-model")) {
+        // This is a client error where they passed a recursive proxy URL, try to convert to absolute
         console.warn(
           "Received relative URL, attempting to convert to absolute"
         );

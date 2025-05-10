@@ -129,6 +129,7 @@ ${modelHistorySection}
 10. 确保功能完整、代码规范，只用generate_3d_model返回的url，不要找在线url库
 
 
+
 ⚠️ 注意：你的回答必须只包含可执行的threejs代码，不要包含任何解释、思考过程或描述性文本。不要使用markdown代码块标记。不要加任何前缀或后缀。直接返回可执行的setup函数代码。`;
 
       // 调用LLM生成或修改代码
