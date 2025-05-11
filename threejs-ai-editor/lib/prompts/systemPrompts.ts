@@ -94,7 +94,7 @@ export function createSystemPrompt(
     "完成代码生成或修改后必须：1)检查场景对象 2)确保对象包含必要信息 3)调用write_to_chroma保存对象 4)物体不能重复 5)模型url不能重复,url禁止找在线资源\n\n" +
     "# 可用工具\n" +
     "- generate_3d_model(params) → 生成复杂3D模型\n" +
-    "- generate_fix_code(params) → 生成或修复Three.js代码\n" +
+    "- generate_fix_code(params) → 生成或修复Three.js代码,实现代码增加，删除，修改\n" +
     "- apply_patch({ originalCode, patch }) → 应用代码补丁\n" +
     "- analyze_screenshot({ image }) → 分析场景截图\n" +
     "- retrieve_objects(query) → 从chromadb中检索历史对象\n" +

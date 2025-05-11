@@ -330,11 +330,15 @@ export async function runInteractionFlow(
       const initResult = await applyPatchTool.invoke({
         input: JSON.stringify({ code: improvedCode }),
       });
+      const parsedInitResult = JSON.parse(initResult);
       console.log(
-        `[${requestId}] Code cache initialized: ${
-          JSON.parse(initResult).success
-        }`
+        `[${requestId}] Code cache initialized: ${parsedInitResult.success}`
       );
+
+      // 如果初始化返回了完整代码，使用它
+      if (parsedInitResult.success && parsedInitResult.updatedCode) {
+        improvedCode = parsedInitResult.updatedCode;
+      }
     } else {
       // 如果有缓存代码，尝试应用补丁
       try {

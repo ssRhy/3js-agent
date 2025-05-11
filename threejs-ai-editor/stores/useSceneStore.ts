@@ -1,6 +1,14 @@
 // 全局前端状态管理，记录 Three.js 场景对象、执行历史、意图等
 import { create } from "zustand";
-import { Scene, Object3D, Mesh, Group, Light } from "three";
+import {
+  Scene,
+  Object3D,
+  Mesh,
+  Group,
+  Light,
+  Vector3,
+  Quaternion,
+} from "three";
 import { v4 as uuidv4 } from "uuid";
 
 // 场景快照接口，用于历史记录
@@ -44,6 +52,7 @@ interface SceneState {
   selectedObject: Object3D | null;
   errors: string[]; // 添加错误跟踪数组
   history: HistoryEntry[]; // 历史记录数组
+  isDraggingOrSelecting: boolean; // 添加物体操作模式状态
 
   // 对象注册表 - UUID到对象的映射
   objectRegistry: Map<string, ObjectRegistryEntry>;
@@ -57,6 +66,13 @@ interface SceneState {
   setDynamicGroup: (group: Group) => void;
   addToHistory: (code: string) => void;
   selectObject: (object: Object3D | null) => void;
+  setIsDraggingOrSelecting: (value: boolean) => void; // 添加设置操作模式的方法
+
+  // 组合对象相关方法
+  createGroup: (objects: Object3D[], name?: string) => Group; // 创建一个新组
+  addToGroup: (group: Group, object: Object3D) => void; // 添加对象到组
+  removeFromGroup: (group: Group, object: Object3D) => void; // 从组中移除对象
+  ungroupObjects: (group: Group) => Object3D[]; // 解组
 
   // 历史记录管理
   addHistoryEntry: (code: string, modelUrls?: string[]) => void;
@@ -137,6 +153,7 @@ export const useSceneStore = create<SceneState>((set, get) => ({
   selectedObject: null,
   errors: [], // 初始化为空数组
   history: [], // 初始化历史记录数组
+  isDraggingOrSelecting: false, // 初始化为false
 
   // 初始化对象注册表和状态映射
   objectRegistry: new Map(),
@@ -151,6 +168,8 @@ export const useSceneStore = create<SceneState>((set, get) => ({
       historyCode: [...state.historyCode, code],
     })),
   selectObject: (object: Object3D | null) => set({ selectedObject: object }),
+  setIsDraggingOrSelecting: (value: boolean) =>
+    set({ isDraggingOrSelecting: value }),
 
   // 错误处理方法
   addError: (error: string) =>
@@ -186,6 +205,11 @@ export const useSceneStore = create<SceneState>((set, get) => ({
     type?: string,
     metadata?: Record<string, unknown>
   ) => {
+    // Skip registering transform controls
+    if (object.userData.isTransformControl) {
+      return object.uuid;
+    }
+
     // 使用对象自身的UUID或生成新的
     const uuid = object.uuid || uuidv4();
 
@@ -215,7 +239,10 @@ export const useSceneStore = create<SceneState>((set, get) => ({
 
     // 递归注册所有子对象
     object.children.forEach((child) => {
-      get().registerObject(child);
+      // Skip children of transform controls
+      if (!object.userData.isTransformControl) {
+        get().registerObject(child);
+      }
     });
 
     set({ objectRegistry: new Map(registry) });
@@ -444,5 +471,166 @@ export const useSceneStore = create<SceneState>((set, get) => ({
       }
     });
     return uuids;
+  },
+
+  // 组合对象相关方法
+  createGroup: (objects: Object3D[], name?: string) => {
+    const group = new Group();
+
+    // 设置名称
+    group.name = name || `Group_${Date.now()}`;
+
+    // 添加对象到组
+    objects.forEach((obj) => {
+      // 保存原始位置
+      const worldPosition = new Vector3();
+      const worldQuaternion = new Quaternion();
+      const worldScale = new Vector3();
+
+      // 获取对象的世界变换
+      obj.getWorldPosition(worldPosition);
+      obj.getWorldQuaternion(worldQuaternion);
+      obj.getWorldScale(worldScale);
+
+      // 从原始父级移除
+      if (obj.parent) {
+        obj.parent.remove(obj);
+      }
+
+      // 添加到新组
+      group.add(obj);
+
+      // 重置对象的世界变换以保持外观不变
+      obj.position.copy(worldPosition);
+      obj.position.sub(group.position);
+      obj.quaternion.copy(worldQuaternion);
+      obj.scale.copy(worldScale);
+    });
+
+    // 添加组到场景
+    const { scene } = get();
+    if (scene) {
+      scene.add(group);
+    }
+
+    // 注册组
+    get().registerObject(group, "group");
+
+    console.log(`创建新组 "${group.name}" 包含 ${objects.length} 个对象`);
+    return group;
+  },
+
+  addToGroup: (group: Group, object: Object3D) => {
+    const worldPosition = new Vector3();
+    const worldQuaternion = new Quaternion();
+    const worldScale = new Vector3();
+
+    // 获取对象的世界变换
+    object.getWorldPosition(worldPosition);
+    object.getWorldQuaternion(worldQuaternion);
+    object.getWorldScale(worldScale);
+
+    // 从原始父级移除
+    if (object.parent) {
+      object.parent.remove(object);
+    }
+
+    // 添加到组
+    group.add(object);
+
+    // 重置对象的位置以保持外观不变
+    object.position.copy(worldPosition);
+    object.position.sub(group.position);
+    object.quaternion.copy(worldQuaternion);
+    object.scale.copy(worldScale);
+
+    // 更新组的状态
+    get().updateObjectState(group.uuid);
+
+    console.log(
+      `对象 "${object.name || object.uuid}" 已添加到组 "${group.name}"`
+    );
+  },
+
+  removeFromGroup: (group: Group, object: Object3D) => {
+    const worldPosition = new Vector3();
+    const worldQuaternion = new Quaternion();
+    const worldScale = new Vector3();
+
+    // 获取对象的世界变换
+    object.getWorldPosition(worldPosition);
+    object.getWorldQuaternion(worldQuaternion);
+    object.getWorldScale(worldScale);
+
+    // 从组中移除
+    group.remove(object);
+
+    // 添加到场景
+    const { scene } = get();
+    if (scene) {
+      scene.add(object);
+
+      // 重置对象的世界变换以保持外观不变
+      object.position.copy(worldPosition);
+      object.quaternion.copy(worldQuaternion);
+      object.scale.copy(worldScale);
+    }
+
+    // 更新组和对象的状态
+    get().updateObjectState(group.uuid);
+    get().updateObjectState(object.uuid);
+
+    console.log(
+      `对象 "${object.name || object.uuid}" 已从组 "${group.name}" 移除`
+    );
+  },
+
+  ungroupObjects: (group: Group) => {
+    const removedObjects: Object3D[] = [];
+    const { scene } = get();
+
+    if (!scene) {
+      console.warn("场景不存在，无法解组");
+      return removedObjects;
+    }
+
+    // 复制子对象数组，因为我们将修改它
+    const children = [...group.children];
+
+    children.forEach((child) => {
+      const worldPosition = new Vector3();
+      const worldQuaternion = new Quaternion();
+      const worldScale = new Vector3();
+
+      // 获取对象的世界变换
+      child.getWorldPosition(worldPosition);
+      child.getWorldQuaternion(worldQuaternion);
+      child.getWorldScale(worldScale);
+
+      // 从组中移除
+      group.remove(child);
+
+      // 添加到场景
+      scene.add(child);
+
+      // 重置对象的世界变换以保持外观不变
+      child.position.copy(worldPosition);
+      child.quaternion.copy(worldQuaternion);
+      child.scale.copy(worldScale);
+
+      // 更新对象状态
+      get().updateObjectState(child.uuid);
+
+      removedObjects.push(child);
+    });
+
+    // 从场景中移除空组
+    scene.remove(group);
+    get().unregisterObject(group.uuid);
+
+    console.log(
+      `组 "${group.name}" 已解组，${removedObjects.length} 个对象已移至场景`
+    );
+    return removedObjects;
   },
 }));

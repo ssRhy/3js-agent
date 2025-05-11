@@ -31,7 +31,7 @@ retrievalTool & writeChromaTool：构建历史上下文库，为 Agent 提供持
 前端将用户的自然语言指令（包含上下文）发给 Agent。
 ## 策略决策
 Agent 根据指令判断要调用哪种生成：
-modelGenTool：仅生成 GLTF/OBJ 等模型文件。
+modelGenTool：仅生成 GLTF 等模型文件。
 threejsGenTool：直接产出 Three.js 场景初始化 + Mesh 代码。
 双策略：先模型再场景，或并行生成。
 ## 初版代码生产
@@ -40,7 +40,7 @@ threejsGenTool：直接产出 Three.js 场景初始化 + Mesh 代码。
 前端把这段代码注入 Canvas 中执行，完整渲染出 3D 画面。
 ## 截图与反馈
 前端调用 screenshotTool 截取 Canvas（或指定视角）并将图像发回 Agent。
-Agent 分析截图（借助视觉模型或规则）判断效果是否符合预期。
+Agent 分析截图（借助视觉模型）判断效果是否符合预期。
 ## 分支处理
 符合：跳到步骤 9，直接渲染给用户，无需再改代码。
 不符：生成反馈给 codeGenTool，形成补丁指令。
@@ -49,9 +49,9 @@ codeGenTool 根据截图反馈输出一段代码补丁（diff 或完整替换片
 applyPatchTool 在源代码上应用该补丁，形成新版本代码。
 ## 持久化与历史检索
 writeChromaTool 将新版本中新增/修改的物件 JSON 写入本地 ChromaDB。
-retrievalTool 可随时按 ID、语义或标签从 ChromaDB 拉取历史物件 JSON，并将它们注入到下一轮 codeGenTool 的 Prompt 中，保证上下文完整。s
+retrievalTool 可随时按 ID、语义或标签从 ChromaDB 拉取历史物件 JSON，并将它们注入到下一轮 codeGenTool 的 Prompt 中，保证上下文完整。
 ## 最终渲染
-前端用最终代码渲染场景，用户看到稳定、持久化的结果。
+前端用最终代码渲染场景，用户看到稳定、持久化，实时的结果。
 
 ##
 -agent循环：循环反馈：渲染→截图→反馈→补丁→渲染，直到视觉校验通过。

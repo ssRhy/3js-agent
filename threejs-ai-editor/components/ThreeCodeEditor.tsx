@@ -4,6 +4,7 @@ import { useSceneStore } from "../stores/useSceneStore";
 import { Editor, OnMount } from "@monaco-editor/react";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
+import ObjectManipulationControls from "./ObjectManipulationControls";
 
 import { useSocketStore } from "../lib/socket";
 import { preprocessCode } from "../lib/processors/codeProcessor";
@@ -189,8 +190,9 @@ export default function ThreeCodeEditor() {
     addToHistory,
     setScene,
     setDynamicGroup,
-
     serializeSceneState,
+    isDraggingOrSelecting,
+    setIsDraggingOrSelecting,
   } = useSceneStore();
 
   // Add rendering complete flag
@@ -212,10 +214,10 @@ export default function ThreeCodeEditor() {
     }
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0xf0f0f0);
+    scene.background = new THREE.Color(0x1e1e1e);
 
     const dynamicGroup = new THREE.Group();
-    dynamicGroup.name = "ai-generated-objects";
+    dynamicGroup.name = "dynamicObjects";
     scene.add(dynamicGroup);
 
     const camera = new THREE.PerspectiveCamera(
@@ -224,14 +226,16 @@ export default function ThreeCodeEditor() {
       0.1,
       1000
     );
-    camera.position.z = 10;
-    camera.position.y = 5;
-    camera.position.x = 5;
+    camera.position.set(5, 5, 5);
     camera.lookAt(0, 0, 0);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      alpha: true,
+      preserveDrawingBuffer: true, // Needed for screenshots
+    });
     renderer.setSize(container.clientWidth, container.clientHeight);
-    renderer.shadowMap.enabled = true;
+    renderer.setPixelRatio(window.devicePixelRatio);
     container.appendChild(renderer.domElement);
 
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
@@ -253,6 +257,11 @@ export default function ThreeCodeEditor() {
     controls.dampingFactor = 0.25;
     controls.screenSpacePanning = false;
     controls.maxPolarAngle = Math.PI / 2;
+
+    // Store important references in scene.userData for access by manipulation controls
+    scene.userData.camera = camera;
+    scene.userData.renderer = renderer;
+    scene.userData.orbitControls = controls;
 
     const gltfLoader = new GLTFLoader();
 
@@ -929,29 +938,46 @@ export default function ThreeCodeEditor() {
         return;
       }
 
-      let customControlsCreated = false;
+      // 清理场景中的所有对象
+      const clearScene = () => {
+        console.log("开始清理场景...");
 
-      const objectsToRemove: THREE.Mesh[] = [];
-      scene.children.forEach((child) => {
-        if (
-          child instanceof THREE.Mesh &&
-          !(child instanceof THREE.GridHelper)
-        ) {
-          objectsToRemove.push(child);
-        }
-      });
+        // 收集要移除的对象
+        const objectsToRemove: THREE.Object3D[] = [];
 
-      objectsToRemove.forEach((obj) => {
-        scene.remove(obj);
-        if (obj.geometry) obj.geometry.dispose();
-        if (obj.material) {
-          if (Array.isArray(obj.material)) {
-            obj.material.forEach((m: THREE.Material) => m.dispose());
-          } else {
-            obj.material.dispose();
+        // 遍历scene的直接子对象，排除基础组件如灯光、网格和dynamicGroup
+        scene.children.forEach((child) => {
+          // 保留gridHelper, 灯光和dynamicGroup
+          if (
+            child instanceof THREE.GridHelper ||
+            child instanceof THREE.Light ||
+            child === dynamicGroup
+          ) {
+            return;
           }
+
+          // 如果不是保留的组件，则加入移除列表
+          objectsToRemove.push(child);
+        });
+
+        // 移除收集的对象
+        objectsToRemove.forEach((obj) => {
+          scene.remove(obj);
+          console.log(`从场景移除: ${obj.name || "unnamed object"}`);
+        });
+
+        // 清空dynamicGroup
+        while (dynamicGroup.children.length > 0) {
+          const obj = dynamicGroup.children[0];
+          dynamicGroup.remove(obj);
+          console.log(`从dynamicGroup移除: ${obj.name || "unnamed object"}`);
         }
-      });
+
+        console.log("场景清理完成");
+      };
+
+      // 执行场景清理
+      clearScene();
 
       if (!validateCode(code)) {
         setError("代码不完整或包含语法错误，请检查代码");
@@ -981,7 +1007,6 @@ export default function ThreeCodeEditor() {
             if (threeRef.current && threeRef.current.controls) {
               return threeRef.current.controls;
             }
-            customControlsCreated = true;
             return new OrbitControls(cam, domElement);
           },
         };
@@ -1041,6 +1066,9 @@ export default function ThreeCodeEditor() {
         }
 
         try {
+          // 添加日志说明清空了场景
+          console.log("已清空场景中的所有对象，准备重新构建场景...");
+
           // Note: We execute the setup function but we ignore its return value
           // Instead, we will continue to use the existing scene/dynamicGroup which is already part of the render loop
           setupFn(
@@ -1052,20 +1080,13 @@ export default function ThreeCodeEditor() {
             GLTFLoader
           );
 
+          console.log("场景重建完成，渲染新场景");
+
           // This ensures we render whatever was added to the scene or dynamicGroup
           renderer.render(scene, camera);
           addToHistory(code);
 
           if (error) setError("");
-          if (
-            customControlsCreated &&
-            threeRef.current &&
-            threeRef.current.controls
-          ) {
-            console.warn(
-              "警告: 检测到同时存在多个OrbitControls实例，可能会导致控制冲突"
-            );
-          }
         } catch (e) {
           console.error("代码执行错误:", e);
           setError(
@@ -1083,6 +1104,103 @@ export default function ThreeCodeEditor() {
       setError("场景处理错误: " + (e instanceof Error ? e.message : String(e)));
     }
   }, [code, addToHistory, error]);
+
+  // 添加清除特定名称对象的函数
+  const removeObjectsByName = (names: string[]) => {
+    if (!threeRef.current) return;
+    const { scene, dynamicGroup } = threeRef.current;
+
+    if (!scene) return;
+
+    // 查找并移除指定名称的对象的函数
+    const findAndRemove = (parent: THREE.Object3D) => {
+      const objectsToRemove: THREE.Object3D[] = [];
+
+      // 先收集需要移除的对象
+      parent.children.forEach((child) => {
+        if (names.includes(child.name)) {
+          objectsToRemove.push(child);
+        } else {
+          // 递归检查子对象
+          findAndRemove(child);
+        }
+      });
+
+      // 移除收集到的对象
+      objectsToRemove.forEach((obj) => {
+        parent.remove(obj);
+        console.log(`已移除对象: ${obj.name}`);
+
+        // 释放资源
+        if (obj instanceof THREE.Mesh) {
+          if (obj.geometry) obj.geometry.dispose();
+          if (obj.material) {
+            if (Array.isArray(obj.material)) {
+              obj.material.forEach((m: THREE.Material) => m.dispose());
+            } else {
+              obj.material.dispose();
+            }
+          }
+        }
+      });
+    };
+
+    // 在场景中查找并移除
+    findAndRemove(scene);
+
+    // 如果dynamicGroup存在，也在其中查找并移除
+    if (dynamicGroup) {
+      findAndRemove(dynamicGroup);
+    }
+
+    console.log(`已尝试移除指定名称的对象: ${names.join(", ")}`);
+
+    // 触发渲染以更新场景
+    if (threeRef.current.renderer) {
+      threeRef.current.renderer.render(scene, threeRef.current.camera);
+    }
+  };
+
+  // 添加为全局函数，便于控制台调试
+  useEffect(() => {
+    // @ts-expect-error - 添加到window对象上供调试使用
+    window.removeObjectsByName = (names: string[]) => {
+      removeObjectsByName(Array.isArray(names) ? names : [names]);
+      return "移除对象操作已执行";
+    };
+
+    // @ts-expect-error - 添加场景重置函数
+    window.resetScene = () => {
+      if (!threeRef.current) return "场景未初始化";
+
+      const { scene, dynamicGroup, camera, renderer } = threeRef.current;
+      if (!scene || !dynamicGroup || !camera || !renderer) {
+        return "场景组件未完全初始化";
+      }
+
+      // 清空dynamicGroup
+      while (dynamicGroup.children.length > 0) {
+        const obj = dynamicGroup.children[0];
+        dynamicGroup.remove(obj);
+      }
+
+      // 重置摄像机位置
+      camera.position.set(5, 5, 10);
+      camera.lookAt(0, 0, 0);
+
+      // 渲染更新后的场景
+      renderer.render(scene, camera);
+
+      return "场景已重置";
+    };
+
+    return () => {
+      // @ts-expect-error - 从window对象上删除
+      delete window.removeObjectsByName;
+      // @ts-expect-error - 从window对象上删除
+      delete window.resetScene;
+    };
+  }, []);
 
   // 使用原生Three.js渲染器和备用html2canvas结合的截图方法
   const captureScreenshot = async () => {
@@ -1590,6 +1708,15 @@ export default function ThreeCodeEditor() {
     }
   }, []);
 
+  // 在组件初始化时将操作模式设置为永久启用
+  useEffect(() => {
+    // 确保操作模式始终为启用状态
+    if (!isDraggingOrSelecting) {
+      setIsDraggingOrSelecting(true);
+      console.log("操作模式已自动启用");
+    }
+  }, [isDraggingOrSelecting, setIsDraggingOrSelecting]);
+
   return (
     <div className="editor-container">
       <div className="sidebar">
@@ -1729,6 +1856,28 @@ export default function ThreeCodeEditor() {
           </div>
         </div>
       )}
+
+      {/* 状态显示区域 - 移除操作模式切换按钮 */}
+      <div className="status-bar">
+        {/* 显示Socket.IO连接状态 */}
+        <div className="connection-status">
+          <span className={`status-indicator ${socketConnectionStatus}`}></span>
+          <span>{socketConnectionStatus === "open" ? "已连接" : "未连接"}</span>
+          {socketConnectionStatus === "error" && (
+            <button className="reconnect-button" onClick={manualReconnect}>
+              重连
+            </button>
+          )}
+        </div>
+
+        {/* 信息提示部分 */}
+        <div className="mode-info">
+          <span className="info-text">对象操作模式已启用</span>
+        </div>
+      </div>
+
+      {/* 始终显示操作控制面板 */}
+      <ObjectManipulationControls />
 
       <style jsx>{`
         .editor-container {
@@ -2053,6 +2202,71 @@ export default function ThreeCodeEditor() {
 
         .camera-icon {
           font-size: 14px;
+        }
+
+        /* 状态栏样式优化 */
+        .status-bar {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: 5px 10px;
+          background-color: #252525;
+          color: #ccc;
+          font-size: 0.8rem;
+          border-top: 1px solid #333;
+          position: absolute;
+          bottom: 0;
+          left: 0;
+          right: 0;
+          z-index: 90;
+        }
+
+        .connection-status {
+          display: flex;
+          align-items: center;
+          gap: 5px;
+        }
+
+        .status-indicator {
+          width: 8px;
+          height: 8px;
+          border-radius: 50%;
+          display: inline-block;
+        }
+
+        .status-indicator.open {
+          background-color: #4caf50;
+        }
+
+        .status-indicator.closed,
+        .status-indicator.connecting {
+          background-color: #ff9800;
+        }
+
+        .status-indicator.error {
+          background-color: #f44336;
+        }
+
+        .reconnect-button {
+          background-color: #3d5afe;
+          color: white;
+          border: none;
+          border-radius: 4px;
+          padding: 3px 8px;
+          margin-left: 5px;
+          cursor: pointer;
+          font-size: 0.7rem;
+        }
+
+        .mode-info {
+          display: flex;
+          align-items: center;
+          gap: 5px;
+        }
+
+        .info-text {
+          color: #ccc;
+          font-size: 0.8rem;
         }
 
         @media (max-width: 768px) {

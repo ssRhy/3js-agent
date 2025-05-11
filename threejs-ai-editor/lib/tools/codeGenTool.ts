@@ -3,6 +3,7 @@ import { AzureChatOpenAI } from "@langchain/openai";
 import { z } from "zod";
 import { getCachedCode } from "@/lib/tools/applyPatchTool";
 import { loadModelHistoryFromMemory } from "@/lib/memory/memoryManager";
+import { ensureValidUrlsInCode } from "@/lib/processors/codeUrlValidator";
 
 // Initialize Azure OpenAI client for code generation
 const codeGenModel = new AzureChatOpenAI({
@@ -124,11 +125,15 @@ ${modelHistorySection}
 5. 永远不要直接使用new OrbitControls()，必须通过OrbitControls.create(camera, renderer.domElement)创建或获取控制器
 6. 保持setup函数结构不变
 7. 记住，模型不要重复放在同一个地方
-8. 场景可以保留多个模型，确保generate_3d_model生成的模型不会重叠在一起，根据模型实际包围盒大小，自动计算合适的缩放因子，参考周围物体
+8. 场景可以保留多个模型，确保generate_3d_model生成的模型不会重叠在一起，根据模型实际包围盒大小，自动计算合适的缩放因子，参考周围物体，模型位置摆放符合生活实际。
 9. 返回scene对象或主要mesh
-10. 确保功能完整、代码规范，只用generate_3d_model返回的url，不要找在线url库
-
-
+10. 确保功能完整、代码规范，只用generate_3d_model返回的url。
+11. 不要重复声明变量名，多个材质，建议使用不同名字区分
+12.threejs代码构建简单物体可以寻找在线有效的url库
+13. 确保所有URL正确有效，可以通过浏览器访问。无效URL会导致场景无法加载
+14. 如果用户要求删除场景中的特定物体，请识别该物体并在代码中移除相关创建和添加语句
+15. 删除物体时，请确保从场景或其父对象中正确移除 (使用parent.remove(object))
+16. 当需要识别物体时，可以使用物体的类型、颜色、位置或其他特征进行匹配
 
 ⚠️ 注意：你的回答必须只包含可执行的threejs代码，不要包含任何解释、思考过程或描述性文本。不要使用markdown代码块标记。不要加任何前缀或后缀。直接返回可执行的setup函数代码。`;
 
@@ -216,6 +221,23 @@ ${modelHistorySection}
           console.log(`[${requestId}] [CodeGen Tool] ✅ 已保留历史模型URL`);
         }
       }
+
+      // URL验证：检查代码中的URL是否可访问，如果不可访问则清理
+      console.log(`[${requestId}] [CodeGen Tool] 🔍 验证代码中的URL...`);
+      const validationStartTime = Date.now();
+      const validatedCode = await ensureValidUrlsInCode(improvedCode);
+
+      if (validatedCode !== improvedCode) {
+        console.log(`[${requestId}] [CodeGen Tool] ⚠️ 检测到无效URL并已修正`);
+        improvedCode = validatedCode;
+      } else {
+        console.log(`[${requestId}] [CodeGen Tool] ✅ 代码中所有URL验证通过`);
+      }
+      console.log(
+        `[${requestId}] [CodeGen Tool] URL验证耗时: ${
+          Date.now() - validationStartTime
+        }ms`
+      );
 
       const totalTime = Date.now() - startTime;
       console.log(
