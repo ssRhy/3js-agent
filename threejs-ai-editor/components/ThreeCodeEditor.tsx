@@ -150,7 +150,7 @@ export default function ThreeCodeEditor() {
   } | null>(null);
 
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
-  const [prompt, setPrompt] = useState("添加一个旋转的红色立方体");
+  const [prompt, setPrompt] = useState<string>("");
   const [code, setCode] =
     useState(`function setup(scene, camera, renderer, THREE, OrbitControls) {
   // Create OrbitControls
@@ -167,7 +167,7 @@ export default function ThreeCodeEditor() {
 }`);
   // ... existing code ...
   const [previousCode] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState("");
   const [showDiff, setShowDiff] = useState(false);
 
@@ -182,9 +182,13 @@ export default function ThreeCodeEditor() {
   >([]);
   const [lintOverlayVisible, setLintOverlayVisible] = useState(false);
   const [loadedModels, setLoadedModels] = useState<
-    Array<{ id: string; url: string }>
+    { id: string; url: string }[]
   >([]);
-  const [isModelLoading, setIsModelLoading] = useState(false);
+  const [isModelLoading, setIsModelLoading] = useState<boolean>(false);
+  // 添加一个新的状态用于存储所有用过的模型URL，包括加载失败的
+  const [allModelUrls, setAllModelUrls] = useState<
+    { url: string; lastUsed: Date }[]
+  >([]);
 
   const {
     addToHistory,
@@ -367,7 +371,42 @@ export default function ThreeCodeEditor() {
     }
 
     try {
+      // 无论加载成功与否，先将URL添加到allModelUrls中
+      setAllModelUrls((prev) => {
+        // 检查URL是否已存在
+        const exists = prev.some((item) => item.url === modelUrl);
+        if (!exists) {
+          // 如果不存在则添加
+          return [...prev, { url: modelUrl, lastUsed: new Date() }];
+        } else {
+          // 如果存在则更新使用时间
+          return prev.map((item) =>
+            item.url === modelUrl ? { ...item, lastUsed: new Date() } : item
+          );
+        }
+      });
+
       setIsModelLoading(true);
+
+      // 检查是否已经加载了这个URL的模型
+      const existingModel = loadedModels.find(
+        (model) => model.url === modelUrl
+      );
+      if (existingModel) {
+        // 如果模型已存在，直接返回成功
+        console.log("模型已加载，使用现有实例:", modelUrl);
+        setIsModelLoading(false);
+
+        // 确保模型在场景中可见
+        threeRef.current.scene.traverse((obj) => {
+          if (obj.userData && obj.userData.modelId === existingModel.id) {
+            obj.visible = true;
+            console.log("确保模型可见:", obj.name);
+          }
+        });
+
+        return true;
+      }
 
       // 确保模型URL经过代理
       let urlToLoad = modelUrl;
@@ -379,12 +418,6 @@ export default function ThreeCodeEditor() {
       ) {
         console.log("[loadModel] 将外部URL转换为代理URL:", modelUrl);
         urlToLoad = `/api/proxy-model?url=${encodeURIComponent(modelUrl)}`;
-      }
-
-      if (loadedModels.some((model) => model.url === urlToLoad)) {
-        console.log("Model already loaded:", urlToLoad);
-        setIsModelLoading(false);
-        return true;
       }
 
       console.log("Loading 3D model from URL:", urlToLoad);
@@ -425,214 +458,32 @@ export default function ThreeCodeEditor() {
                   console.log("Model parsed successfully:", gltf);
                   const model = gltf.scene;
 
-                  // 为每个新模型计算唯一位置
-                  const existingModels = scene.children.filter(
-                    (child) => child.userData.modelId
-                  );
-
-                  // 如果指定了模型大小，则使用指定值，否则使用默认值(5)
-                  autoScaleModel(model, modelSize || 5);
-
                   // 计算模型的包围盒以确定其大小
                   const boundingBox = new THREE.Box3().setFromObject(model);
                   const size = boundingBox.getSize(new THREE.Vector3());
 
-                  // 计算模型的高度和最大维度
+                  // 计算模型的高度
                   const modelHeight = size.y;
-                  const modelMaxDim = Math.max(size.x, size.y, size.z);
+
+                  // 如果指定了模型大小，则使用指定值，否则使用默认值(5)
+                  autoScaleModel(model, modelSize || 5);
 
                   // 默认位置：保持垂直居中，将模型放在y=0平面上
-                  let position = { x: 0, y: modelHeight / 2, z: 0 };
-
-                  // 如果已有模型，计算新位置
-                  if (existingModels.length > 0) {
-                    // 根据模型大小动态确定放置半径
-                    // 对于较大的模型使用更大的间距，避免模型重叠
-                    const modelScale = Math.max(1, modelMaxDim / 2);
-
-                    // 使用更大更自由的范围，不再局限于固定半径的圆
-                    let angle = Math.random() * Math.PI * 2;
-                    const minRadius = modelMaxDim * 2.0; // 增加最小距离为模型最大尺寸的2.0倍
-                    const maxRadius =
-                      minRadius + 12 + existingModels.length * 1.5; // 更大的扩展范围
-
-                    let radius =
-                      minRadius + Math.random() * (maxRadius - minRadius);
-
-                    // 初始计算在xz平面上的位置
-                    position = {
-                      x:
-                        Math.cos(angle) * radius +
-                        (Math.random() - 0.5) * modelScale,
-                      y: modelHeight / 2, // 保持垂直居中
-                      z:
-                        Math.sin(angle) * radius +
-                        (Math.random() - 0.5) * modelScale,
-                    };
-
-                    // 添加一些随机性到y坐标，不再总是对齐到地面
-                    if (Math.random() > 0.7) {
-                      // 30%的概率
-                      position.y += (Math.random() - 0.5) * modelScale * 0.5;
-                    }
-
-                    // 检查并避免与现有模型重叠
-                    const maxAttempts = 30; // 增加尝试次数
-                    let attempts = 0;
-                    let overlapping = true;
-
-                    // 用于存储避开方向的映射
-                    const avoidDirections: Record<
-                      string,
-                      { dx: number; dz: number }
-                    > = {};
-
-                    while (overlapping && attempts < maxAttempts) {
-                      overlapping = false;
-
-                      // 为当前位置计算潜在的边界盒
-                      const tempModel = model.clone();
-                      tempModel.position.set(
-                        position.x,
-                        position.y,
-                        position.z
-                      );
-                      const tempBox = new THREE.Box3().setFromObject(tempModel);
-
-                      // 检查与现有模型的碰撞
-                      for (const existingModel of existingModels) {
-                        if (
-                          existingModel.userData &&
-                          existingModel.userData.modelId
-                        ) {
-                          const existingBox = new THREE.Box3().setFromObject(
-                            existingModel
-                          );
-
-                          // 获取现有模型的中心点
-                          const existingCenter = existingBox.getCenter(
-                            new THREE.Vector3()
-                          );
-
-                          // 如果边界盒相交，则表示有重叠
-                          if (tempBox.intersectsBox(existingBox)) {
-                            overlapping = true;
-
-                            // 计算当前位置到碰撞物体的方向向量
-                            const avoidDirection = {
-                              dx: position.x - existingCenter.x,
-                              dz: position.z - existingCenter.z,
-                            };
-
-                            // 规范化方向向量
-                            const length = Math.sqrt(
-                              avoidDirection.dx * avoidDirection.dx +
-                                avoidDirection.dz * avoidDirection.dz
-                            );
-                            if (length > 0) {
-                              avoidDirection.dx /= length;
-                              avoidDirection.dz /= length;
-                            }
-
-                            // 记录这个物体的避开方向
-                            const objId = existingModel.userData.modelId;
-                            avoidDirections[objId] = avoidDirection;
-
-                            // 尝试新位置 - 增加半径并使用智能避开方向
-                            radius += modelMaxDim * 1.0; // 更积极地增加半径
-
-                            // 根据已有的避开方向计算综合方向
-                            let sumDx = 0,
-                              sumDz = 0;
-                            let count = 0;
-
-                            for (const dir of Object.values(avoidDirections)) {
-                              sumDx += dir.dx;
-                              sumDz += dir.dz;
-                              count++;
-                            }
-
-                            if (count > 0) {
-                              // 使用综合避开方向计算新角度
-                              angle = Math.atan2(sumDz, sumDx);
-                              // 添加一些随机性避免卡在困难位置
-                              angle += ((Math.random() - 0.5) * Math.PI) / 8;
-                            } else {
-                              // 如果没有避开方向，随机尝试新方向
-                              angle +=
-                                (Math.PI / 4) * (Math.random() * 0.5 + 0.75);
-                            }
-
-                            position = {
-                              x:
-                                Math.cos(angle) * radius +
-                                (Math.random() - 0.5) * modelScale * 0.5, // 减小随机性
-                              y: position.y, // 保持相同的y坐标
-                              z:
-                                Math.sin(angle) * radius +
-                                (Math.random() - 0.5) * modelScale * 0.5, // 减小随机性
-                            };
-
-                            break;
-                          }
-                        }
-                      }
-
-                      attempts++;
-
-                      // 释放临时对象
-                      tempModel.clear(); // 只需要清除子对象
-
-                      // 如果尝试次数过多但仍然重叠，增加y轴高度尝试避开
-                      if (attempts > maxAttempts * 0.7 && overlapping) {
-                        position.y += modelHeight * 0.5;
-                        console.log(
-                          "Increasing height to avoid overlap:",
-                          position.y
-                        );
-                      }
-                    }
-
-                    // 如果仍然重叠，则选择一个安全距离远的位置
-                    if (overlapping) {
-                      console.log(
-                        "Could not find non-overlapping position, using fallback positioning"
-                      );
-                      // 计算场景中所有模型的最远距离
-                      let maxDistanceX = 0;
-                      let maxDistanceZ = 0;
-
-                      existingModels.forEach((existingModel) => {
-                        const pos = existingModel.position;
-                        maxDistanceX = Math.max(maxDistanceX, Math.abs(pos.x));
-                        maxDistanceZ = Math.max(maxDistanceZ, Math.abs(pos.z));
-                      });
-
-                      // 放置在最远距离外加上模型尺寸的2倍
-                      const safeDistance =
-                        Math.max(maxDistanceX, maxDistanceZ) + modelMaxDim * 2;
-                      const safeAngle = Math.random() * Math.PI * 2;
-
-                      position = {
-                        x: Math.cos(safeAngle) * safeDistance,
-                        y: modelHeight / 2 + Math.random() * modelHeight, // 稍微抬高
-                        z: Math.sin(safeAngle) * safeDistance,
-                      };
-                    }
-
-                    console.log(
-                      `Position found after ${attempts}/${maxAttempts} attempts, overlapping: ${overlapping}`
-                    );
-                  }
+                  const position = { x: 0, y: modelHeight / 2, z: 0 };
 
                   // 应用计算出的位置
                   model.position.set(position.x, position.y, position.z);
 
-                  // 随机旋转，使场景更自然
-                  if (Math.random() > 0.5) {
-                    // 50%的概率
-                    model.rotation.y = Math.random() * Math.PI * 2;
-                  }
+                  // 将模型注册到场景状态管理器中以确保持久化
+                  const modelId = `model_${Date.now()}`;
+                  model.userData.modelId = modelId;
+                  model.userData.isModelObject = true; // 添加新标记
+                  model.userData.originalModelUrl = modelUrl; // Store URL directly on the model
+                  model.userData.originalUrl = modelUrl; // 为兼容性添加
+                  model.name = `model_${Date.now()}`;
+
+                  // 其余的模型加载和处理代码保持不变
+                  // ... existing code ...
 
                   model.traverse((node: THREE.Object3D) => {
                     if ((node as THREE.Mesh).isMesh) {
@@ -642,6 +493,11 @@ export default function ThreeCodeEditor() {
                       );
                       (node as THREE.Mesh).castShadow = true;
                       (node as THREE.Mesh).receiveShadow = true;
+
+                      // Add modelId to all child meshes for better preservation
+                      node.userData.modelId = modelId;
+                      // Store original model URL in userData for better persistence
+                      node.userData.originalModelUrl = modelUrl;
                     }
                   });
 
@@ -653,8 +509,21 @@ export default function ThreeCodeEditor() {
 
                   fitCameraToModel(camera, model);
 
-                  const modelId = `model_${Date.now()}`;
-                  model.userData.modelId = modelId;
+                  // 使用场景状态管理器注册模型 - 增强元数据以确保持久化
+                  if (useSceneStore.getState().registerObject) {
+                    const uuid = useSceneStore
+                      .getState()
+                      .registerObject(model, "GLTFModel", {
+                        originalUrl: modelUrl,
+                        loadTimestamp: Date.now(),
+                        modelSize: modelSize || 5,
+                        isLoadedModel: true, // 标记为已加载模型，便于识别
+                        modelId: modelId, // 保存modelId到元数据中
+                        originalModelUrl: modelUrl, // Add direct URL reference
+                      });
+                    console.log(`模型已注册到场景状态管理器，UUID: ${uuid}`);
+                  }
+
                   setLoadedModels((prev) => [
                     ...prev,
                     { id: modelId, url: urlToLoad },
@@ -942,17 +811,37 @@ export default function ThreeCodeEditor() {
       const clearScene = () => {
         console.log("开始清理场景...");
 
+        if (
+          !threeRef.current ||
+          !threeRef.current.scene ||
+          !threeRef.current.dynamicGroup
+        ) {
+          console.warn("无法获取场景或动态组，跳过清理");
+          return;
+        }
+
+        const { scene, dynamicGroup } = threeRef.current;
+
         // 收集要移除的对象
         const objectsToRemove: THREE.Object3D[] = [];
 
-        // 遍历scene的直接子对象，排除基础组件如灯光、网格和dynamicGroup
+        // 遍历scene的直接子对象，排除基础组件如灯光、网格、dynamicGroup，以及已加载的模型
         scene.children.forEach((child) => {
-          // 保留gridHelper, 灯光和dynamicGroup
+          // 保留gridHelper, 灯光, dynamicGroup和已加载的3D模型
           if (
             child instanceof THREE.GridHelper ||
             child instanceof THREE.Light ||
-            child === dynamicGroup
+            child === dynamicGroup ||
+            (child.userData &&
+              (child.userData.modelId || child.userData.isModelObject)) // 保留已加载的3D模型
           ) {
+            console.log(
+              `保留对象: ${child.name || "unnamed"} (${
+                child.userData && child.userData.modelId
+                  ? "modelId: " + child.userData.modelId
+                  : "基础组件"
+              })`
+            );
             return;
           }
 
@@ -966,14 +855,40 @@ export default function ThreeCodeEditor() {
           console.log(`从场景移除: ${obj.name || "unnamed object"}`);
         });
 
-        // 清空dynamicGroup
-        while (dynamicGroup.children.length > 0) {
-          const obj = dynamicGroup.children[0];
+        // 只清除dynamicGroup中不是3D模型的对象
+        const dynamicObjectsToRemove: THREE.Object3D[] = [];
+        dynamicGroup.children.forEach((child) => {
+          if (
+            !(
+              child.userData &&
+              (child.userData.modelId || child.userData.isModelObject)
+            )
+          ) {
+            dynamicObjectsToRemove.push(child);
+          }
+        });
+
+        // 移除dynamicGroup中的非模型对象
+        dynamicObjectsToRemove.forEach((obj) => {
           dynamicGroup.remove(obj);
           console.log(`从dynamicGroup移除: ${obj.name || "unnamed object"}`);
-        }
+        });
 
-        console.log("场景清理完成");
+        console.log(
+          `场景清理完成，保留了${
+            scene.children.length - objectsToRemove.length
+          }个对象`
+        );
+
+        // 记录保留的模型数量
+        const modelCount = scene.children.filter(
+          (child) =>
+            child.userData &&
+            (child.userData.modelId || child.userData.isModelObject)
+        ).length;
+
+        console.log(`保留了${modelCount}个3D模型`);
+        console.log(`系统中有${allModelUrls.length}个模型URL记录`);
       };
 
       // 执行场景清理
@@ -995,6 +910,20 @@ export default function ThreeCodeEditor() {
             if (typeof setup !== 'function') {
               throw new Error('setup function not defined in code');
             }
+            
+            // 对于新的用法，我们要包装原始的setup函数，使其能访问setupContext
+            const originalSetup = setup;
+            setup = function(scene, camera, renderer, THREE, OrbitControls, GLTFLoader, context) {
+              // 如果有上下文且包含已加载的模型，将其添加到全局scope
+              if (context && context.loadedModels) {
+                console.log('Setup函数接收到已加载的模型信息:', context.loadedModels.length + '个模型');
+                // 可以在这里访问context.loadedModels和context.getModelById
+              }
+              
+              // 调用原始setup函数
+              return originalSetup(scene, camera, renderer, THREE, OrbitControls, GLTFLoader);
+            };
+            
             return setup;
           } catch(e) {
             console.error("Setup function parsing error:", e);
@@ -1027,6 +956,7 @@ export default function ThreeCodeEditor() {
             "THREE",
             "OrbitControls",
             "GLTFLoader",
+            "setupContext", // 添加模型上下文参数
             functionBody
           );
         } catch (syntaxError) {
@@ -1048,7 +978,8 @@ export default function ThreeCodeEditor() {
             null,
             ExtendedTHREE,
             OrbitControlsWrapper,
-            GLTFLoader
+            GLTFLoader,
+            null // 初始空值，稍后在调用setup时传入真实值
           );
         } catch (execError) {
           console.error("Setup函数执行错误:", execError);
@@ -1067,20 +998,87 @@ export default function ThreeCodeEditor() {
 
         try {
           // 添加日志说明清空了场景
-          console.log("已清空场景中的所有对象，准备重新构建场景...");
+          console.log(
+            "已清空场景中的可更改对象，准备重新构建场景，但保留已加载的模型..."
+          );
 
-          // Note: We execute the setup function but we ignore its return value
-          // Instead, we will continue to use the existing scene/dynamicGroup which is already part of the render loop
+          // 获取已加载的模型列表，便于setupFn访问
+          const loadedModelsData = loadedModels.map((model) => {
+            // 找到对应的模型对象
+            let modelObject: THREE.Object3D | null = null;
+            scene.traverse((obj) => {
+              if (obj.userData && obj.userData.modelId === model.id) {
+                modelObject = obj;
+              }
+            });
+            return {
+              id: model.id,
+              url: model.url,
+              object: modelObject,
+            };
+          });
+
+          // 向setupFn传递已加载的模型信息
+          const setupContext = {
+            loadedModels: loadedModelsData,
+            // 提供获取模型的辅助函数
+            getModelById: (id: string) => {
+              let foundModel: THREE.Object3D | null = null;
+              scene.traverse((obj) => {
+                if (obj.userData && obj.userData.modelId === id) {
+                  foundModel = obj;
+                }
+              });
+              return foundModel;
+            },
+            // 新增：获取所有模型的辅助函数
+            getAllModels: () => {
+              const models: THREE.Object3D[] = [];
+              scene.traverse((obj) => {
+                if (obj.userData && obj.userData.modelId) {
+                  models.push(obj);
+                }
+              });
+              return models;
+            },
+            // 新增：提供模型信息
+            modelCount: loadedModelsData.length,
+          };
+
+          // 仅在存在场景状态序列化函数时记录状态
+          if (typeof serializeSceneState === "function") {
+            // 在调用setup前，保存当前场景状态以便比较变化
+            const sceneBefore = serializeSceneState();
+            console.log(
+              `Setup函数执行前场景包含 ${sceneBefore.length} 个对象，其中已加载模型 ${setupContext.modelCount} 个`
+            );
+          }
+
+          // 执行setup函数，传入当前场景上下文，包括已加载的模型
           setupFn(
             dynamicGroup,
             camera,
             renderer,
             ExtendedTHREE,
             OrbitControlsWrapper,
-            GLTFLoader
+            GLTFLoader,
+            setupContext // 新增参数，传入模型上下文
           );
 
-          console.log("场景重建完成，渲染新场景");
+          // 记录场景状态变化但不保存到服务器
+          try {
+            // 仅在存在场景状态序列化函数时记录状态
+            if (typeof serializeSceneState === "function") {
+              const sceneAfter = serializeSceneState();
+              console.log(
+                `Setup函数执行后场景包含 ${sceneAfter.length} 个对象`
+              );
+            }
+          } catch (err) {
+            console.error("尝试序列化场景状态时出错:", err);
+          }
+
+          console.log("场景重建完成，渲染新场景，保留了已加载的模型");
 
           // This ensures we render whatever was added to the scene or dynamicGroup
           renderer.render(scene, camera);
@@ -1480,122 +1478,96 @@ export default function ThreeCodeEditor() {
 
   // Modify the handleGenerate function to include scene capture
   const handleGenerate = async () => {
+    if (isLoading || isModelLoading) return;
+
+    setIsLoading(true);
+    setError("");
+    setSuccess("");
+
     try {
-      // 清除错误状态
-      setError("");
-      setSuccess("");
-      setIsLoading(true);
-
-      // 确保场景已完全渲染好
-      const isThreeJSReady = await applySafelyToScene(code);
-      if (!isThreeJSReady) {
-        throw new Error("Three.js场景无法正确渲染，请检查代码");
-      }
-
-      // 等待一小段时间确保渲染完成
-      await new Promise((resolve) => setTimeout(resolve, 200));
-
-      // 先清空服务器端缓存
-      await fetch("/api/clearCache", { method: "POST" });
-
-      // 捕获截图
-      const screenshotData = await captureScreenshot();
-
-      // Capture full scene state with serialized objects
-      const sceneState = await captureSceneStateForChromaDB();
-
-      if (!screenshotData) {
-        console.warn("[Generate] No screenshot data available");
-      }
-
-      // 更新渲染完成标志
-      renderingCompleteRef.current = true;
-
-      // 准备发送到API的数据
-      const requestBody: {
-        action: string;
-        code: string;
-        prompt: string;
-        lintErrors: {
-          ruleId: string | null;
-          severity: number;
-          message: string;
-          line: number;
-          column: number;
-        }[];
-        renderingComplete: boolean;
-        screenshot?: string;
-        sceneState?: SceneStateObject[];
-      } = {
-        action: "analyze-screenshot",
-        code,
-        prompt,
-        lintErrors,
-        renderingComplete: isThreeJSReady,
-      };
-
-      // 如果有截图数据，添加到请求中
-      if (screenshotData) {
-        requestBody.screenshot = screenshotData;
-      }
-
-      // 如果有场景对象，添加到请求中 - 使用我们新捕获的完整对象数据
-      if (sceneState && sceneState.length > 0) {
-        requestBody.sceneState = sceneState as unknown as SceneStateObject[];
-      }
-
-      console.log(
-        `[Generate] 发送请求到API，${
-          screenshotData ? "包含" : "不包含"
-        }截图数据，包含${sceneState?.length || 0}个场景对象`
+      // 更新allModelUrls中的最后使用时间
+      setAllModelUrls((prev) =>
+        prev.map((item) => ({ ...item, lastUsed: new Date() }))
       );
 
-      // 发送请求到API
+      // 捕获当前场景状态
+      const currentSceneState = await captureSceneStateForChromaDB();
+      console.log(`当前场景有 ${currentSceneState?.length || 0} 个对象`);
+
+      // 确保场景已完全渲染好
+      if (!renderingCompleteRef.current && threeRef.current) {
+        try {
+          console.log("[Generate] 等待场景渲染完成...");
+          // 强制渲染几帧以确保场景更新
+          for (let i = 0; i < 3; i++) {
+            threeRef.current.renderer.render(
+              threeRef.current.scene,
+              threeRef.current.camera
+            );
+            await new Promise((resolve) => setTimeout(resolve, 100));
+          }
+          renderingCompleteRef.current = true;
+        } catch (renderError) {
+          console.warn("[Generate] 渲染场景时出错:", renderError);
+        }
+      }
+
+      // 获取截图以帮助AI理解场景
+      let screenshotDataUrl = null;
+      try {
+        console.log("[Generate] 生成场景截图...");
+        screenshotDataUrl = await captureScreenshot();
+      } catch (screenError) {
+        console.warn("[Generate] 生成截图失败:", screenError);
+      }
+
+      // 创建请求负载
+      const payload: RequestPayload = {
+        action: "analyze-screenshot",
+        code: code,
+        prompt: prompt,
+        lintErrors: lintErrors,
+        renderingComplete: renderingCompleteRef.current,
+        sceneState: currentSceneState
+          ? (currentSceneState as unknown as SceneStateObject[])
+          : [],
+      };
+
+      // 如果有截图，添加到请求中
+      if (screenshotDataUrl) {
+        payload.screenshot = screenshotDataUrl;
+      }
+
+      console.log("[Generate] 发送请求到后端...", {
+        prompt,
+        codeLength: code.length,
+        hasScreenshot: !!screenshotDataUrl,
+        sceneStateSize: currentSceneState?.length || 0,
+      });
+
+      // 发送请求到后端
       const response = await fetch("/api/agentHandler", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(requestBody),
+        body: JSON.stringify(payload),
       });
 
       if (!response.ok) {
-        throw new Error(
-          `API请求失败: ${response.status} ${response.statusText}`
-        );
+        throw new Error(`服务器返回错误: ${response.status}`);
       }
 
       const data = await response.json();
+      console.log("[Generate] 收到后端响应:", data);
 
-      // 处理API响应
-      if (data.error) {
-        throw new Error(`API错误: ${data.error}`);
-      }
-
+      // 处理响应
       if (data.directCode) {
-        // 使用URL处理器处理代码
-        const processedCode = preprocessCode(data.directCode);
-        if (processedCode !== data.directCode) {
-          console.log("[Generate] 已处理代码中的外部模型URL");
-        }
-
-        // 更新代码并安全应用到场景
-        setCode(processedCode);
-        setSuccess("代码已更新，正在应用到场景...");
-
-        try {
-          await applySafelyToScene(processedCode);
-          setSuccess("代码已成功应用到场景！");
-        } catch (applyError) {
-          console.error("[Generate] 应用代码到场景失败:", applyError);
-          setError(
-            `应用代码失败: ${
-              applyError instanceof Error
-                ? applyError.message
-                : String(applyError)
-            }`
-          );
-        }
+        // 如果有直接代码，应用到编辑器
+        const code = data.directCode.trim();
+        setCode(code);
+        setSuccess("已生成代码");
+        console.log("[Generate] 设置新代码至编辑器");
       } else if (data.modelUrls && data.modelUrls.length > 0) {
         // 处理生成的模型URL
         setSuccess(`已生成${data.modelUrls.length}个模型！正在加载...`);
@@ -1604,9 +1576,55 @@ export default function ThreeCodeEditor() {
           // 处理并记录所有模型URL
           console.log("[Generate] 处理模型URL:", data.modelUrls);
 
-          // 加载第一个模型 (loadModel函数已经内置了URL处理逻辑)
-          await loadModel(data.modelUrls[0]);
-          setSuccess("模型已成功加载！");
+          // 检查是否模型URL已经存在于allModelUrls中
+          const firstModelUrl = data.modelUrls[0];
+          const existingModelUrl = allModelUrls.find(
+            (item) => item.url === firstModelUrl
+          );
+
+          if (existingModelUrl) {
+            console.log(
+              "[Generate] 使用已存储的模型URL:",
+              existingModelUrl.url
+            );
+          }
+
+          // 无论是否存在，都尝试加载第一个模型
+          const modelLoaded = await loadModel(data.modelUrls[0]);
+
+          if (modelLoaded) {
+            setSuccess("模型已成功加载！");
+
+            // 确保模型加载后更新场景状态
+            const updatedSceneState = await captureSceneStateForChromaDB();
+            console.log(
+              `[Generate] 更新的场景状态包含 ${
+                updatedSceneState?.length || 0
+              } 个对象`
+            );
+
+            // 强制渲染一次确保模型可见
+            if (
+              threeRef.current &&
+              threeRef.current.renderer &&
+              threeRef.current.scene &&
+              threeRef.current.camera
+            ) {
+              threeRef.current.renderer.render(
+                threeRef.current.scene,
+                threeRef.current.camera
+              );
+            }
+
+            // 传回更新的场景状态到后端，确保状态持久化
+            if (updatedSceneState && updatedSceneState.length > 0) {
+              console.log(
+                `[Generate] 场景状态已更新，包含 ${updatedSceneState.length} 个对象`
+              );
+            }
+          } else {
+            throw new Error("模型加载失败");
+          }
         } catch (loadError) {
           console.error("[Generate] 加载模型失败:", loadError);
           setError(

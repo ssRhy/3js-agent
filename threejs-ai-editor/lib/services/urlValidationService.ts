@@ -1,19 +1,9 @@
-import fetch from "node-fetch";
-import type { RequestInit } from "node-fetch";
-
 // URL validation configuration
 interface ValidationOptions {
-  timeoutMs: number; // Timeout for URL validation in milliseconds
-  retries: number; // Number of retry attempts for validation
-  retryDelayMs: number; // Delay between retries in milliseconds
+  timeoutMs: number;
+  retries: number;
+  retryDelayMs: number;
 }
-
-// Default validation options
-const defaultOptions: ValidationOptions = {
-  timeoutMs: 10000, // 10 seconds timeout
-  retries: 3, // 3 retry attempts
-  retryDelayMs: 1000, // 1 second delay between retries
-};
 
 // Response from URL validation
 interface ValidationResult {
@@ -27,25 +17,15 @@ interface ValidationResult {
 }
 
 /**
- * Promisified timeout that rejects after the specified milliseconds
- */
-function timeout(ms: number): Promise<never> {
-  return new Promise((_, reject) => {
-    setTimeout(() => reject(new Error(`Request timed out after ${ms}ms`)), ms);
-  });
-}
-
-/**
- * Validates a URL by checking if it's accessible
+ * Validates a URL - 不再执行实际验证，总是返回URL有效
+ * 仅检查基本格式以避免明显无效的URL
  */
 export async function validateUrl(
   url: string,
-  options: Partial<ValidationOptions> = {}
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _options: Partial<ValidationOptions> = {}
 ): Promise<ValidationResult> {
-  // Merge options with defaults
-  const config = { ...defaultOptions, ...options };
-
-  // Basic URL format validation
+  // 仅做最基本的字符串格式检查
   if (!url || typeof url !== "string") {
     return {
       isValid: false,
@@ -54,7 +34,7 @@ export async function validateUrl(
     };
   }
 
-  // Ensure URL has proper protocol
+  // 仅检查URL是否具有有效的协议
   if (!url.startsWith("http://") && !url.startsWith("https://")) {
     return {
       isValid: false,
@@ -64,8 +44,14 @@ export async function validateUrl(
   }
 
   try {
-    // Validate URL format
+    // 仅验证URL格式
     new URL(url);
+    // 直接返回URL有效的结果
+    return {
+      isValid: true,
+      url,
+      responseTimeMs: 0,
+    };
   } catch (error) {
     return {
       isValid: false,
@@ -75,151 +61,55 @@ export async function validateUrl(
       }`,
     };
   }
-
-  let retriesLeft = config.retries;
-  let lastError: string | undefined;
-  let responseTime = 0;
-
-  // Try URL validation with retries
-  while (retriesLeft > 0) {
-    const startTime = Date.now();
-
-    try {
-      const fetchOptions: RequestInit = {
-        method: "HEAD", // Use HEAD request to avoid downloading full content
-        redirect: "follow",
-        timeout: config.timeoutMs, // Use the built-in timeout option of node-fetch
-        headers: {
-          "User-Agent": "ThreeJS-AI-Editor-URL-Validator/1.0",
-        },
-      };
-
-      // Use Promise.race to implement timeout if built-in timeout doesn't work
-      const response = await Promise.race([
-        fetch(url, fetchOptions),
-        timeout(config.timeoutMs),
-      ]);
-
-      responseTime = Date.now() - startTime;
-
-      if (response.ok) {
-        // URL is valid and accessible
-        return {
-          isValid: true,
-          url,
-          statusCode: response.status,
-          contentType: response.headers.get("content-type") || undefined,
-          contentLength:
-            parseInt(response.headers.get("content-length") || "0", 10) ||
-            undefined,
-          responseTimeMs: responseTime,
-        };
-      } else {
-        // URL is accessible but returned an error status
-        lastError = `Server responded with status: ${response.status} ${response.statusText}`;
-      }
-    } catch (error) {
-      responseTime = Date.now() - startTime;
-
-      // Handle specific error types
-      if (error instanceof Error) {
-        if (error.message.includes("timed out")) {
-          lastError = `Request timeout after ${config.timeoutMs}ms`;
-        } else {
-          lastError = error.message;
-        }
-      } else {
-        lastError = "Unknown error occurred";
-      }
-    }
-
-    // Decrement retry counter and wait before next attempt
-    retriesLeft--;
-
-    if (retriesLeft > 0) {
-      await new Promise((resolve) => setTimeout(resolve, config.retryDelayMs));
-    }
-  }
-
-  // All validation attempts failed
-  return {
-    isValid: false,
-    url,
-    error: lastError || "URL validation failed after multiple attempts",
-  };
 }
 
 /**
- * Validates a collection of URLs and returns the results for each
+ * Validates a collection of URLs - 不执行实际验证
  */
 export async function validateUrls(
   urls: string[],
-  options: Partial<ValidationOptions> = {}
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _options: Partial<ValidationOptions> = {}
 ): Promise<ValidationResult[]> {
   if (!urls || !Array.isArray(urls)) return [];
-
-  // Validate all URLs in parallel
-  return Promise.all(urls.map((url) => validateUrl(url, options)));
+  return Promise.all(urls.map((url) => validateUrl(url, _options)));
 }
 
 /**
- * Filters an array of objects containing URLs, removing any with invalid URLs
+ * 不过滤URL，返回所有输入项
  */
 export async function filterValidUrlItems<T extends Record<string, unknown>>(
   items: T[],
-  urlProperty: keyof T = "url" as keyof T,
-  options: Partial<ValidationOptions> = {}
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _urlProperty: keyof T = "url" as keyof T,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _options: Partial<ValidationOptions> = {}
 ): Promise<T[]> {
-  if (!items || !Array.isArray(items) || items.length === 0) {
-    return [];
-  }
-
-  // Create validation tasks for all items
-  const validationTasks = items.map(async (item) => {
-    const url = item[urlProperty];
-
-    if (typeof url !== "string") {
-      return { item, isValid: false };
-    }
-
-    const validation = await validateUrl(url as string, options);
-    return { item, isValid: validation.isValid };
-  });
-
-  // Process all validation tasks
-  const results = await Promise.all(validationTasks);
-
-  // Return only items with valid URLs
-  return results
-    .filter((result) => result.isValid)
-    .map((result) => result.item);
+  // 不执行过滤，返回所有项目
+  return items || [];
 }
 
 /**
- * Process model URLs from Hyper3D API response
- * Validates and filters model URLs to ensure they're accessible
+ * Process model URLs - 不执行验证，返回所有URL
  */
 export async function processModelUrls(
   downloadUrls: Array<{ name: string; url: string }>,
-  options: Partial<ValidationOptions> = {}
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _options: Partial<ValidationOptions> = {}
 ): Promise<Array<{ name: string; url: string }>> {
   if (
     !downloadUrls ||
     !Array.isArray(downloadUrls) ||
     downloadUrls.length === 0
   ) {
-    console.warn("No download URLs provided for validation");
+    console.warn("No download URLs provided");
     return [];
   }
 
-  console.log(`Validating ${downloadUrls.length} model URLs...`);
-
-  // Validate URLs and filter out invalid ones
-  const validUrls = await filterValidUrlItems(downloadUrls, "url", options);
-
   console.log(
-    `Validation complete: ${validUrls.length}/${downloadUrls.length} URLs are valid`
+    `收到 ${downloadUrls.length} 个模型URL - 已跳过验证，保留所有URL`
   );
 
-  return validUrls;
+  // 返回所有URL，不执行验证
+  return downloadUrls;
 }

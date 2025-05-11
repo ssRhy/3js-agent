@@ -1,6 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import fetch from "node-fetch";
-import { validateUrl } from "../../lib/services/urlValidationService";
 
 // Set a higher bodyParser limit for large models
 export const config = {
@@ -78,30 +77,9 @@ export default async function handler(
       });
     }
 
-    console.log("Validating URL before proxying:", modelUrl);
+    console.log("Attempting to proxy model from URL:", modelUrl);
 
-    // Validate URL accessibility before proxying
-    const urlValidation = await validateUrl(modelUrl, {
-      timeoutMs: 15000, // 15 seconds timeout for model files which can be large
-      retries: 2,
-    });
-
-    if (!urlValidation.isValid) {
-      console.error(`URL validation failed: ${urlValidation.error}`);
-      return res.status(404).json({
-        error: `Resource unavailable: ${urlValidation.error}`,
-      });
-    }
-
-    console.log(`URL validation successful: ${modelUrl}`);
-    console.log(
-      `Content type: ${urlValidation.contentType}, Size: ${
-        urlValidation.contentLength || "unknown"
-      } bytes`
-    );
-
-    console.log("Proxying model request for URL:", modelUrl);
-
+    // 直接尝试获取模型，不进行URL验证
     // Fetch the model file with timeout and retry logic
     let modelResponse;
     let retries = 3;

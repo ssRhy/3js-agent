@@ -1,62 +1,25 @@
 /**
- * URL Validator for Three.js code
+ * URL Validator for Three.js code - 完全禁用验证
  *
- * Extracts and validates URLs found in generated Three.js code to ensure
- * they are accessible before the code is sent to the frontend.
+ * 所有URL都不经过验证直接通过，因为模型生成工具生成的URL必须是完整的，不能被过滤。
  */
-import { validateUrl } from "../services/urlValidationService";
 import { extractModelUrls } from "./modelExtractor";
 
-// URL patterns to detect in code
-const URL_PATTERNS = [
-  // Standard model URLs (glb, gltf, obj)
-  /['"`](https?:\/\/[^'"`]+\.(glb|gltf|obj)(\?[^'"`]*)?)[`'"]/g,
-
-  // Texture and image URLs
-  /['"`](https?:\/\/[^'"`]+\.(jpe?g|png|webp|svg|bmp)(\?[^'"`]*)?)[`'"]/g,
-
-  // Audio URLs
-  /['"`](https?:\/\/[^'"`]+\.(mp3|wav|ogg)(\?[^'"`]*)?)[`'"]/g,
-
-  // Other common asset URLs
-  /['"`](https?:\/\/[^'"`]+\.(json|bin)(\?[^'"`]*)?)[`'"]/g,
-
-  // Variable assignments with URLs (no quotes)
-  /(\w+)\s*=\s*(https?:\/\/[^;]+\.(glb|gltf|obj|jpe?g|png|webp|svg|bmp|mp3|wav|ogg|json|bin)(\?[^;]*)?)[;\s]/g,
-];
-
 /**
- * Extract all URLs from code
+ * 仅用于记录的URL提取功能
  */
 export function extractUrlsFromCode(code: string): string[] {
   if (!code || typeof code !== "string") {
     return [];
   }
 
-  // First use dedicated model extractor
+  // 使用专门的模型提取器
   const { modelUrls } = extractModelUrls(code);
-  const extractedUrls = new Set<string>(
-    modelUrls ? modelUrls.map((item) => item.url) : []
-  );
-
-  // Then use generic URL patterns
-  URL_PATTERNS.forEach((pattern) => {
-    const matches = code.matchAll(pattern);
-    for (const match of matches) {
-      // The URL is in capture group 1 for quoted URLs
-      // and in capture group 2 for variable assignments
-      const url = match[1]?.startsWith("http") ? match[1] : match[2];
-      if (url && url.startsWith("http")) {
-        extractedUrls.add(url);
-      }
-    }
-  });
-
-  return Array.from(extractedUrls);
+  return modelUrls ? modelUrls.map((item) => item.url) : [];
 }
 
 /**
- * Validates all URLs in code and returns details
+ * 不执行验证 - 返回所有URL都有效
  */
 export async function validateCodeUrls(code: string): Promise<{
   isValid: boolean;
@@ -64,104 +27,34 @@ export async function validateCodeUrls(code: string): Promise<{
   invalidUrls: Array<{ url: string; error: string }>;
   validatedCode: string;
 }> {
-  // Extract all URLs from code
+  // 仅提取URL用于日志记录
   const urls = extractUrlsFromCode(code);
-  if (urls.length === 0) {
-    return {
-      isValid: true,
-      validUrls: [],
-      invalidUrls: [],
-      validatedCode: code,
-    };
+
+  if (urls.length > 0) {
+    console.log(
+      `在代码中发现 ${urls.length} 个URL - URL验证已禁用，所有URL都视为有效`
+    );
   }
 
-  console.log(`Found ${urls.length} URLs in code, validating...`);
-
-  // Validate each URL
-  const validationResults = await Promise.all(
-    urls.map((url) => validateUrl(url, { timeoutMs: 10000, retries: 2 }))
-  );
-
-  // Separate valid and invalid URLs
-  const validUrls: string[] = [];
-  const invalidUrls: Array<{ url: string; error: string }> = [];
-
-  validationResults.forEach((result) => {
-    if (result.isValid) {
-      validUrls.push(result.url);
-    } else {
-      invalidUrls.push({
-        url: result.url,
-        error: result.error || "Unknown validation error",
-      });
-    }
-  });
-
-  // If we have invalid URLs, clean up the code
-  let validatedCode = code;
-
-  if (invalidUrls.length > 0) {
-    // Remove or comment out invalid URLs
-    invalidUrls.forEach(({ url }) => {
-      const escapedUrl = url.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-      // Comment out URL assignments or uses
-      const regex = new RegExp(`(['"\`])(${escapedUrl})(['"\`])`, "g");
-      validatedCode = validatedCode.replace(
-        regex,
-        `$1/* INVALID URL REMOVED: ${url} */$3`
-      );
-
-      // Handle variable assignments without quotes
-      const assignmentRegex = new RegExp(
-        `(\\w+\\s*=\\s*)(${escapedUrl})([;\\s])`,
-        "g"
-      );
-      validatedCode = validatedCode.replace(
-        assignmentRegex,
-        `$1/* INVALID URL REMOVED: ${url} */''//$3`
-      );
-    });
-
-    // Add a comment explaining the validation
-    validatedCode = `// URL validation performed: ${invalidUrls.length} invalid URLs were removed\n${validatedCode}`;
-  }
-
+  // 返回所有URL都有效的结果
   return {
-    isValid: invalidUrls.length === 0,
-    validUrls,
-    invalidUrls,
-    validatedCode,
+    isValid: true,
+    validUrls: urls,
+    invalidUrls: [],
+    validatedCode: code,
   };
 }
 
 /**
- * Check if the code contains any URLs and validate them
- * Returns cleaned code with invalid URLs removed
+ * 始终返回原始代码，不做任何验证或修改
  */
 export async function ensureValidUrlsInCode(code: string): Promise<string> {
-  try {
-    const validation = await validateCodeUrls(code);
-
-    if (!validation.isValid) {
-      console.warn(
-        `Found ${validation.invalidUrls.length} invalid URLs in code:`
-      );
-      validation.invalidUrls.forEach(({ url, error }) => {
-        console.warn(`- ${url}: ${error}`);
-      });
-
-      console.log("Cleaned code to remove invalid URLs");
-      return validation.validatedCode;
-    }
-
-    if (validation.validUrls.length > 0) {
-      console.log(`All ${validation.validUrls.length} URLs in code are valid`);
-    }
-
-    return code;
-  } catch (error) {
-    console.error("Error validating URLs in code:", error);
-    return code;
+  // 记录URL但不验证
+  const urls = extractUrlsFromCode(code);
+  if (urls.length > 0) {
+    console.log(`代码包含 ${urls.length} 个URL - URL验证已禁用，保持代码不变`);
   }
+
+  // 始终返回原始代码
+  return code;
 }
