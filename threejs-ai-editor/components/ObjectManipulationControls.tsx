@@ -70,7 +70,7 @@ export default function ObjectManipulationControls() {
       // If clearing selection and not in multi-select mode, remove all highlights
       if (!object && (!event || !event.shiftKey)) {
         selectedObjects.forEach((obj) => {
-          removeHighlight(obj);
+          if (obj) removeHighlight(obj);
         });
         selectObject(null);
         setSelectedObjects([]);
@@ -79,6 +79,15 @@ export default function ObjectManipulationControls() {
 
       // Skip if object is null (should only happen in multi-select mode)
       if (!object) return;
+
+      // Skip helper objects, outlines, and transform controls
+      if (
+        object.userData?.isHelper ||
+        object.userData?.isOutline ||
+        object.userData?.isTransformControl
+      ) {
+        return;
+      }
 
       const isShiftPressed = event && event.shiftKey;
 
@@ -141,8 +150,8 @@ export default function ObjectManipulationControls() {
 
     try {
       if (object instanceof THREE.Mesh) {
-        // Only add highlight if not already highlighted
-        if (!object.userData.isHighlighted) {
+        // Only add highlight if not already highlighted and not an outline itself
+        if (!object.userData.isHighlighted && !object.userData.isOutline) {
           const material = Array.isArray(object.material)
             ? object.material[0]
             : (object.material as THREE.Material);
@@ -160,25 +169,39 @@ export default function ObjectManipulationControls() {
             material.color.copy(color);
           }
 
-          // Add outline effect
-          if (!object.userData.outlineEffect) {
-            const outlineMaterial = new THREE.MeshBasicMaterial({
-              color: 0x00ffff,
-              wireframe: true,
-              transparent: true,
-              opacity: 0.5,
-            });
+          // Remove any old outline effect if it exists (cleanup)
+          if (object.userData.outlineEffect) {
+            try {
+              object.remove(object.userData.outlineEffect);
+            } catch (e) {
+              console.warn("Could not remove old outline effect:", e);
+            }
+            delete object.userData.outlineEffect;
+          }
 
-            const outlineMesh = new THREE.Mesh(
-              object.geometry,
-              outlineMaterial
-            );
-            outlineMesh.scale.multiplyScalar(1.03);
-            outlineMesh.userData.isHelper = true;
-            outlineMesh.userData.isOutline = true;
+          // Add new outline effect
+          try {
+            if (object.geometry) {
+              const outlineMaterial = new THREE.MeshBasicMaterial({
+                color: 0x00ffff,
+                wireframe: true,
+                transparent: true,
+                opacity: 0.5,
+              });
 
-            object.add(outlineMesh);
-            object.userData.outlineEffect = outlineMesh;
+              const outlineMesh = new THREE.Mesh(
+                object.geometry,
+                outlineMaterial
+              );
+              outlineMesh.scale.multiplyScalar(1.03);
+              outlineMesh.userData.isHelper = true;
+              outlineMesh.userData.isOutline = true;
+
+              object.add(outlineMesh);
+              object.userData.outlineEffect = outlineMesh;
+            }
+          } catch (outlineError) {
+            console.warn("Could not create outline effect:", outlineError);
           }
 
           object.userData.isHighlighted = true;
@@ -186,7 +209,11 @@ export default function ObjectManipulationControls() {
       } else if (object instanceof THREE.Group) {
         // Apply highlight to all meshes in the group
         object.traverse((child) => {
-          if (child instanceof THREE.Mesh && !child.userData.isOutline) {
+          if (
+            child instanceof THREE.Mesh &&
+            !child.userData.isOutline &&
+            !child.userData.isHelper
+          ) {
             addHighlight(child);
           }
         });
@@ -221,7 +248,14 @@ export default function ObjectManipulationControls() {
 
         // Remove outline mesh if it exists
         if (object.userData.outlineEffect) {
-          object.remove(object.userData.outlineEffect);
+          try {
+            const outlineEffect = object.userData.outlineEffect;
+            if (outlineEffect && outlineEffect.parent === object) {
+              object.remove(outlineEffect);
+            }
+          } catch (e) {
+            console.warn("Error removing outline:", e);
+          }
           delete object.userData.outlineEffect;
         }
 
@@ -292,15 +326,66 @@ export default function ObjectManipulationControls() {
       transformControls.attach(selectedObject);
     }
 
+    // Get all selectable objects from the scene, filtering out controls and helpers
+    const selectableObjects = getAllObjectsInScene(dynamicGroup).filter(
+      (obj) =>
+        !obj.userData?.isHelper &&
+        !obj.userData?.isOutline &&
+        !obj.userData?.isTransformControl
+    );
+
     // Create drag controls (used only for object selection, not actual dragging)
-    const objects = dynamicGroup.children;
-    const dragControls = new DragControls(objects, camera, canvas);
+    const dragControls = new DragControls(selectableObjects, camera, canvas);
     dragControls.enabled = false; // Disable default behavior, we handle selection manually
     dragControlsRef.current = dragControls;
+
+    // Function to update the list of objects the DragControls tracks
+    // Note: DragControls doesn't have a direct setObjects method, so we create a new instance
+    const updateSelectableObjects = () => {
+      if (dragControlsRef.current) {
+        // Dispose of the current controls
+        dragControlsRef.current.dispose();
+
+        // Create a new instance with updated objects
+        const updatedObjects = getAllObjectsInScene(dynamicGroup).filter(
+          (obj) =>
+            !obj.userData?.isHelper &&
+            !obj.userData?.isOutline &&
+            !obj.userData?.isTransformControl
+        );
+
+        dragControlsRef.current = new DragControls(
+          updatedObjects,
+          camera,
+          canvas
+        );
+        dragControlsRef.current.enabled = false; // Keep the same setting
+      }
+    };
 
     // Handle object selection via clicking
     const handleClick = (event: MouseEvent) => {
       if (isDragging) return;
+
+      // If right-click, cancel selection and return
+      if (event.button === 2) {
+        // Use explicit highlight removal method
+        if (selectedObjects.length > 0) {
+          selectedObjects.forEach((obj) => {
+            if (obj) removeHighlight(obj);
+          });
+        }
+
+        // Also remove highlight from the currently selected object if it exists
+        if (selectedObject && !selectedObjects.includes(selectedObject)) {
+          removeHighlight(selectedObject);
+        }
+
+        // Clear selection state
+        selectObject(null);
+        setSelectedObjects([]);
+        return;
+      }
 
       // Create normalized mouse coordinates
       const mouse = new THREE.Vector2();
@@ -309,11 +394,14 @@ export default function ObjectManipulationControls() {
       mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
 
       // Update raycaster
-      raycaster.setFromCamera(mouse, camera);
+      raycasterRef.current.setFromCamera(mouse, camera);
 
       // Get all selectable objects in scene
       const allObjects = getAllObjectsInScene(dynamicGroup);
-      const intersects = raycaster.intersectObjects(allObjects, true);
+      const intersects = raycasterRef.current.intersectObjects(
+        allObjects,
+        true
+      );
 
       if (intersects.length > 0) {
         // Get clicked object
@@ -321,6 +409,11 @@ export default function ObjectManipulationControls() {
 
         // Find appropriate parent object to select
         const targetObject = findSelectableParent(clickedObject);
+
+        // Don't reselect the same object if already selected and not in multi-select mode
+        if (selectedObject === targetObject && !event.shiftKey) {
+          return;
+        }
 
         // Select the object
         handleObjectSelection(targetObject, event);
@@ -339,10 +432,13 @@ export default function ObjectManipulationControls() {
       mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
       mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
 
-      raycaster.setFromCamera(mouse, camera);
+      raycasterRef.current.setFromCamera(mouse, camera);
 
       const allObjects = getAllObjectsInScene(dynamicGroup);
-      const intersects = raycaster.intersectObjects(allObjects, true);
+      const intersects = raycasterRef.current.intersectObjects(
+        allObjects,
+        true
+      );
 
       if (intersects.length > 0) {
         // Hovering over an object - change cursor accordingly
@@ -353,35 +449,31 @@ export default function ObjectManipulationControls() {
       }
     };
 
-    // Get all selectable objects from the scene
-    function getAllObjectsInScene(root: THREE.Object3D): THREE.Object3D[] {
-      if (!root) return [];
-
-      const objects: THREE.Object3D[] = [];
-
-      try {
-        // Skip transform controls
-        if (!root.userData?.isTransformControl) {
-          objects.push(root);
-
-          // Add all children recursively
-          if (root.children && Array.isArray(root.children)) {
-            root.children.forEach((child) => {
-              // Skip helper objects
-              if (child.userData && child.userData.isHelper) return;
-              objects.push(...getAllObjectsInScene(child));
-            });
-          }
-        }
-      } catch (error) {
-        console.error("Error getting scene objects:", error);
-      }
-
-      return objects;
-    }
-
     // Setup event listeners
     canvas.addEventListener("click", handleClick);
+
+    const handleContextMenu = (event: MouseEvent) => {
+      event.preventDefault(); // Prevent default context menu
+      if (!isDragging) {
+        // Explicitly remove highlights from all selected objects
+        if (selectedObjects.length > 0) {
+          selectedObjects.forEach((obj) => {
+            if (obj) removeHighlight(obj);
+          });
+        }
+
+        // Also remove highlight from the currently selected object if it exists
+        if (selectedObject && !selectedObjects.includes(selectedObject)) {
+          removeHighlight(selectedObject);
+        }
+
+        // Clear selection state
+        selectObject(null);
+        setSelectedObjects([]);
+      }
+    };
+
+    canvas.addEventListener("contextmenu", handleContextMenu);
     canvas.addEventListener("mousemove", handleMouseMove);
 
     // Set up keyboard listeners for Shift key (multi-select mode)
@@ -402,42 +494,52 @@ export default function ObjectManipulationControls() {
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("keyup", handleKeyUp);
 
-    // Cleanup function
-    return () => {
-      // Remove event listeners
-      canvas.removeEventListener("click", handleClick);
-      canvas.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("keydown", handleKeyDown);
-      window.removeEventListener("keyup", handleKeyUp);
+    // Add scene change event listener to update objects
+    if (scene) {
+      // Update selectable objects periodically
+      const updateInterval = setInterval(updateSelectableObjects, 2000);
 
-      // Dispose controls
-      if (transformControlsRef.current) {
-        transformControlsRef.current.removeEventListener(
-          "dragging-changed",
-          () => {}
-        );
-        transformControlsRef.current.removeEventListener(
-          "objectChange",
-          () => {}
-        );
-        transformControlsRef.current.detach();
-        transformControlsRef.current.dispose();
-        transformControlsRef.current.removeFromParent();
-        transformControlsRef.current = null;
-      }
+      return () => {
+        // Cleanup
+        clearInterval(updateInterval);
+        // Remove event listeners
+        canvas.removeEventListener("click", handleClick);
+        canvas.removeEventListener("contextmenu", handleContextMenu);
+        canvas.removeEventListener("mousemove", handleMouseMove);
+        window.removeEventListener("keydown", handleKeyDown);
+        window.removeEventListener("keyup", handleKeyUp);
 
-      if (dragControlsRef.current) {
-        dragControlsRef.current.dispose();
-        dragControlsRef.current = null;
-      }
+        // Dispose controls
+        if (transformControlsRef.current) {
+          transformControlsRef.current.removeEventListener(
+            "dragging-changed",
+            () => {}
+          );
+          transformControlsRef.current.removeEventListener(
+            "objectChange",
+            () => {}
+          );
+          transformControlsRef.current.detach();
+          transformControlsRef.current.dispose();
+          transformControlsRef.current.removeFromParent();
+          transformControlsRef.current = null;
+        }
 
-      document.body.style.cursor = "auto";
+        if (dragControlsRef.current) {
+          dragControlsRef.current.dispose();
+          dragControlsRef.current = null;
+        }
 
-      // Re-enable orbit controls
-      if (scene.userData.orbitControls) {
-        scene.userData.orbitControls.enabled = true;
-      }
-    };
+        document.body.style.cursor = "auto";
+
+        // Re-enable orbit controls
+        if (scene.userData.orbitControls) {
+          scene.userData.orbitControls.enabled = true;
+        }
+      };
+    }
+
+    return undefined;
   }, [
     scene,
     dynamicGroup,
@@ -448,6 +550,9 @@ export default function ObjectManipulationControls() {
     isDragging,
     handleObjectSelection,
     findSelectableParent,
+    selectedObjects,
+    removeHighlight,
+    selectObject,
   ]);
 
   // Update transform controls when selected object changes
@@ -503,6 +608,45 @@ export default function ObjectManipulationControls() {
       setSelectedObjects([]);
     }
   };
+
+  // Get all selectable objects from the scene
+  function getAllObjectsInScene(root: THREE.Object3D): THREE.Object3D[] {
+    if (!root) return [];
+
+    const objects: THREE.Object3D[] = [];
+
+    try {
+      // Skip transform controls and outline meshes
+      if (
+        !root.userData?.isTransformControl &&
+        !root.userData?.isOutline &&
+        !root.userData?.isHelper
+      ) {
+        objects.push(root);
+
+        // Add all children recursively
+        if (root.children && Array.isArray(root.children)) {
+          root.children.forEach((child) => {
+            // Skip helper objects and outlines
+            if (
+              (child.userData &&
+                (child.userData.isHelper || child.userData.isOutline)) ||
+              (child.type === "LineSegments" && child.userData.isHelper)
+            ) {
+              return;
+            }
+
+            // Recursively add non-helper objects
+            objects.push(...getAllObjectsInScene(child));
+          });
+        }
+      }
+    } catch (error) {
+      console.error("Error getting scene objects:", error);
+    }
+
+    return objects;
+  }
 
   return (
     <div className="object-manipulation-controls">
