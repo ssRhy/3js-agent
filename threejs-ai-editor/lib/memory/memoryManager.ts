@@ -66,7 +66,7 @@ class MemoryManager {
       inputKey: "userPrompt",
       returnMessages: false,
       outputKey: "codeStateContext",
-      maxTokenLimit: 30000, // Limit token usage
+      maxTokenLimit: 40000, // Limit token usage
       llm, // Use LLM for summarization
     });
 
@@ -75,7 +75,7 @@ class MemoryManager {
       inputKey: "userPrompt",
       returnMessages: false,
       outputKey: "sceneHistoryContext",
-      maxTokenLimit: 30000, // Limit token usage
+      maxTokenLimit: 40000, // Limit token usage
       llm, // Use LLM for summarization
     });
   }

@@ -46,15 +46,15 @@ async function formatModelHistoryForPrompt(): Promise<string> {
     const modelHistory = await loadModelHistoryFromMemory();
     if (modelHistory && modelHistory.length > 0) {
       return (
-        "\n# 可用的3D模型\n" +
-        "以下是已生成的3D模型URL，请在代码中直接引用这些hyper3d的URL以保持场景一致性：\n" +
+        "\n# Available 3D Models\n" +
+        "The following are previously generated 3D model URLs. Please directly reference these hyper3d URLs in your code to maintain scene consistency:\n" +
         modelHistory
           .map(
             (m: { modelUrl: string }, i: number) =>
-              `- 模型${i + 1}: ${m.modelUrl}`
+              `- Model${i + 1}: ${m.modelUrl}`
           )
           .join("\n") +
-        "\n确保代码中包含这些模型。"
+        "\nEnsure your code includes these models."
       );
     }
   } catch (error) {
@@ -69,93 +69,101 @@ async function formatModelHistoryForPrompt(): Promise<string> {
 export const codeGenTool = new DynamicStructuredTool({
   name: "generate_fix_code",
   description:
-    "生成或修复基于用户提示的Three.js代码。提供完整的setup函数代码。",
+    "Generate or fix Three.js code based on user prompts. Provide complete setup function code.",
   schema: z.object({
-    instruction: z.string().describe("要实现的功能或需要修复的问题描述"),
+    instruction: z
+      .string()
+      .describe("Description of functionality to implement or issues to fix"),
   }),
   func: async ({ instruction }) => {
     const requestId = `codegen_${Date.now()}`;
     const startTime = Date.now();
     console.log(
-      `[${requestId}] [CodeGen Tool] 🚀 Agent请求生成/修复代码 - ${new Date().toISOString()}`
+      `[${requestId}] [CodeGen Tool] 🚀 Agent requested code generation/fix - ${new Date().toISOString()}`
     );
     console.log(
-      `[${requestId}] [CodeGen Tool] 📝 指令内容: "${instruction.substring(
+      `[${requestId}] [CodeGen Tool] 📝 Instruction content: "${instruction.substring(
         0,
         100
       )}${instruction.length > 100 ? "..." : ""}"`
     );
 
-    // 检测是否是来自截图分析的请求
+    // Detect if request is from screenshot analysis
     const isFromScreenshotAnalysis =
-      instruction.includes("截图分析") ||
-      instruction.includes("分析结果") ||
+      instruction.includes("screenshot analysis") ||
+      instruction.includes("analysis results") ||
       instruction.includes("needs_improvements") ||
-      instruction.includes("场景需要调整");
+      instruction.includes("scene needs adjustment");
 
     if (isFromScreenshotAnalysis) {
       console.log(
-        `[${requestId}] [CodeGen Tool] 🖼️ 检测到基于截图分析的代码修复请求`
+        `[${requestId}] [CodeGen Tool] 🖼️ Detected code fix request based on screenshot analysis`
       );
     }
 
     try {
-      // 获取模型历史，确保在生成代码时引用这些模型
-      console.log(`[${requestId}] [CodeGen Tool] 📚 正在获取模型历史数据...`);
+      // Get model history to ensure these models are referenced when generating code
+      console.log(
+        `[${requestId}] [CodeGen Tool] 📚 Retrieving model history data...`
+      );
       const modelHistorySection = await formatModelHistoryForPrompt();
       console.log(
-        `[${requestId}] [CodeGen Tool] ✅ 模型历史数据获取完成，包含 ${
+        `[${requestId}] [CodeGen Tool] ✅ Model history data retrieval complete, contains ${
           modelHistorySection.split("\n").length - 4 > 0
             ? modelHistorySection.split("\n").length - 4
             : 0
-        } 个模型`
+        } models`
       );
 
-      const prompt = `作为Three.js专家，请根据以下指令生成或修复代码：
+      const prompt = `As a Three.js expert, please generate or fix code based on the following instructions:
 
 ${instruction}
 
 ${modelHistorySection}
 
-要求：
-不要假设任何模型和url
-1. 代码必须是可直接执行的JavaScript代码，使用Three.js库
-2. 使用function setup(scene, camera, renderer, THREE, OrbitControls) { ... } 函数格式
-3. 所有交互控制器只能用OrbitControls.create(camera, renderer.domElement)方式创建
-4. 最后一行：return scene.
-5. 永远不要直接使用new OrbitControls()，必须通过OrbitControls.create(camera, renderer.domElement)创建或获取控制器
-6. 保持setup函数结构不变
-7. 记住，模型不要重复放在同一个地方
-8. 场景可以保留多个模型，确保generate_3d_model生成的模型不会重叠在一起，根据模型实际包围盒大小，自动计算合适的缩放因子，参考周围物体，模型位置摆放符合生活实际。
-9. 返回scene对象或主要mesh
-10. 确保功能完整、代码规范，只用generate_3d_model返回的url，不要随便代替已经有的url，已有的url保持原状即可，过程中不要假设url
-11. 不要重复声明变量名，多个材质，建议使用不同名字区分
-12.不要随意清空场景，保持上下文记忆，记住所有3d模型url,不要假设任何模型和url
-13. 确保所有URL正确有效，可以通过浏览器访问。无效URL会导致场景无法加载
-14. 如果用户要求删除场景中的特定物体，请识别该物体并在代码中移除相关创建和添加语句
-15. 删除物体时，请确保从场景或其父对象中正确移除 (使用parent.remove(object))
+Requirements:
+Do not assume any models or URLs
+1. Code must be directly executable JavaScript code using the Three.js library
+2. Use the format: function setup(scene, camera, renderer, THREE, OrbitControls) { ... }
+3. All interaction controllers must be created using OrbitControls.create(camera, renderer.domElement)
+4. Last line: return scene.
+5. Never use new OrbitControls() directly, always create or get controllers through OrbitControls.create(camera, renderer.domElement)
+6. Maintain the setup function structure
+7. Remember, don't place models in the same location repeatedly
+8. The scene can contain multiple models. Ensure models generated by generate_3d_model don't overlap. Automatically calculate appropriate scaling factors based on actual model bounding box size. Reference surrounding objects and position models in a realistic manner.
+9. Return the scene object or main mesh
+10. Ensure complete functionality and code standards. Only use URLs returned by generate_3d_model, don't arbitrarily replace existing URLs. Keep existing URLs as they are and don't assume URLs during the process
+11. Don't declare variable names multiple times. For multiple materials, use different names to distinguish them
+12. Don't randomly clear the scene. Maintain context memory and remember all 3D model URLs. Don't assume any models or URLs
+13. Ensure all URLs are correct and valid, accessible through browsers. Invalid URLs will cause the scene to fail loading
+14. If the user requests deletion of specific objects from the scene, identify those objects and remove the related creation and addition statements in the code
+15. When deleting objects, ensure they are correctly removed from the scene or their parent object (using parent.remove(object))
+16. Don't omit any code
+17. Generate new code based on the code above
 
 
-⚠️ 注意：你的回答必须只包含可执行的threejs代码，不要包含任何解释、思考过程或描述性文本。不要使用markdown代码块标记。不要加任何前缀或后缀。直接返回可执行的setup函数代码。`;
+⚠️ Note: Your answer must only contain executable Three.js code. Don't include any explanations, thought processes, or descriptive text. Don't use markdown code block markers. Don't add any prefixes or suffixes. Directly return executable setup function code.`;
 
-      // 调用LLM生成或修改代码
-      console.log(`[${requestId}] [CodeGen Tool] 🤖 调用LLM生成代码...`);
+      // Call LLM to generate or modify code
+      console.log(
+        `[${requestId}] [CodeGen Tool] 🤖 Calling LLM to generate code...`
+      );
       const llmCallStartTime = Date.now();
       const result = await codeGenModel.invoke(prompt);
       const llmResponseTime = Date.now();
 
       console.log(
-        `[${requestId}] [CodeGen Tool] ✅ LLM响应完成，耗时: ${
+        `[${requestId}] [CodeGen Tool] ✅ LLM response complete, time taken: ${
           llmResponseTime - llmCallStartTime
         }ms`
       );
 
       const responseContent = handleLLMResponseContent(result.content);
 
-      // 提取生成的代码
+      // Extract generated code
       let improvedCode = responseContent.trim();
 
-      // 移除代码块标记（如果有）
+      // Remove code block markers (if present)
       if (improvedCode.includes("```")) {
         const codeMatch = improvedCode.match(
           /```(?:js|javascript)?\s*([\s\S]*?)```/
@@ -163,15 +171,15 @@ ${modelHistorySection}
         if (codeMatch && codeMatch[1]) {
           improvedCode = codeMatch[1].trim();
           console.log(
-            `[${requestId}] [CodeGen Tool] ℹ️ 从markdown代码块中提取代码`
+            `[${requestId}] [CodeGen Tool] ℹ️ Extracted code from markdown code block`
           );
         }
       }
 
-      // 确保代码是setup函数格式
+      // Ensure code is in setup function format
       if (!improvedCode.startsWith("function setup")) {
         console.log(
-          `[${requestId}] [CodeGen Tool] ⚠️ 生成的代码不是setup函数格式，添加封装`
+          `[${requestId}] [CodeGen Tool] ⚠️ Generated code not in setup function format, adding wrapper`
         );
         improvedCode = `function setup(scene, camera, renderer, THREE, OrbitControls) {
   ${improvedCode}
@@ -180,37 +188,37 @@ ${modelHistorySection}
 }`;
       }
 
-      // 获取原始缓存代码
+      // Get original cached code
       const originalCode = getCachedCode() || "";
       console.log(
-        `[${requestId}] [CodeGen Tool] ℹ️ 获取到原始代码, 长度: ${originalCode.length} 字符`
+        `[${requestId}] [CodeGen Tool] ℹ️ Retrieved original code, length: ${originalCode.length} characters`
       );
 
-      // 检查生成的代码是否包含模型URL，如果不包含，尝试从原始代码中提取并保留
+      // Check if generated code includes model URLs; if not, try to extract and preserve from original code
       const modelHistory = await loadModelHistoryFromMemory();
       if (modelHistory && modelHistory.length > 0) {
         let hasPreservedModels = false;
 
-        // 检查新代码是否包含了历史模型URL
+        // Check if new code contains historical model URLs
         for (const model of modelHistory) {
           if (!improvedCode.includes(model.modelUrl)) {
-            // 如果生成的代码不包含此URL，检查原始代码是否包含
+            // If generated code doesn't include this URL, check if original code does
             if (originalCode.includes(model.modelUrl)) {
-              // 如果原始代码包含但新代码不包含，我们需要确保保留这个模型
+              // If original code includes it but new code doesn't, we need to preserve this model
               console.log(
-                `[${requestId}] [CodeGen Tool] 🔄 保留模型URL: ${model.modelUrl.substring(
+                `[${requestId}] [CodeGen Tool] 🔄 Preserving model URL: ${model.modelUrl.substring(
                   0,
                   30
                 )}...`
               );
 
-              // 简单方法：在代码开头添加注释确保模型URL被包含
+              // Simple method: Add comment at beginning of code to ensure model URL is included
               const modelComment = `  // MODEL_URL: ${model.modelUrl}\n`;
 
-              // 在setup函数的第一行之后插入
+              // Insert after first line of setup function
               improvedCode = improvedCode.replace(
                 /function setup\([^)]*\)\s*{/,
-                `$&\n${modelComment}  // 保留之前生成的模型 - ${new Date().toISOString()}`
+                `$&\n${modelComment}  // Preserving previously generated model - ${new Date().toISOString()}`
               );
 
               hasPreservedModels = true;
@@ -219,39 +227,47 @@ ${modelHistorySection}
         }
 
         if (hasPreservedModels) {
-          console.log(`[${requestId}] [CodeGen Tool] ✅ 已保留历史模型URL`);
+          console.log(
+            `[${requestId}] [CodeGen Tool] ✅ Historical model URLs preserved`
+          );
         }
       }
 
-      // URL验证：检查代码中的URL是否可访问，如果不可访问则清理
-      console.log(`[${requestId}] [CodeGen Tool] 🔍 验证代码中的URL...`);
+      // URL validation: Check if URLs in code are accessible; if not, clean them up
+      console.log(
+        `[${requestId}] [CodeGen Tool] 🔍 Validating URLs in code...`
+      );
       const validationStartTime = Date.now();
       const validatedCode = await ensureValidUrlsInCode(improvedCode);
 
       if (validatedCode !== improvedCode) {
-        console.log(`[${requestId}] [CodeGen Tool] ⚠️ 检测到无效URL并已修正`);
+        console.log(
+          `[${requestId}] [CodeGen Tool] ⚠️ Detected invalid URLs and fixed them`
+        );
         improvedCode = validatedCode;
       } else {
-        console.log(`[${requestId}] [CodeGen Tool] ✅ 代码中所有URL验证通过`);
+        console.log(
+          `[${requestId}] [CodeGen Tool] ✅ All URLs in code validated successfully`
+        );
       }
       console.log(
-        `[${requestId}] [CodeGen Tool] URL验证耗时: ${
+        `[${requestId}] [CodeGen Tool] URL validation time: ${
           Date.now() - validationStartTime
         }ms`
       );
 
       const totalTime = Date.now() - startTime;
       console.log(
-        `[${requestId}] [CodeGen Tool] 🏁 代码生成完成，总耗时: ${totalTime}ms，代码长度: ${improvedCode.length} 字符`
+        `[${requestId}] [CodeGen Tool] 🏁 Code generation complete, total time: ${totalTime}ms, code length: ${improvedCode.length} characters`
       );
 
       if (isFromScreenshotAnalysis) {
         console.log(
-          `[${requestId}] [CodeGen Tool] 🔄 已完成基于截图分析的代码修复`
+          `[${requestId}] [CodeGen Tool] 🔄 Completed code fix based on screenshot analysis`
         );
       }
 
-      // 返回生成的代码
+      // Return generated code
       const finalResponse = JSON.stringify({
         code: improvedCode,
         originalCode: originalCode,
@@ -266,8 +282,8 @@ ${modelHistorySection}
       };
       const userPrompt = instruction;
       const persistenceHint =
-        `\n\n// 注意：生成代码后，调用write_to_chroma工具将场景对象保存到ChromaDB\n` +
-        `// 示例: { \"tool\": \"write_to_chroma\", \"params\": { \"objects\": ${JSON.stringify(
+        `\n\n// Note: After generating code, call the write_to_chroma tool to save scene objects to ChromaDB\n` +
+        `// Example: { \"tool\": \"write_to_chroma\", \"params\": { \"objects\": ${JSON.stringify(
           sceneState
         )}, \"prompt\": "${userPrompt}" } }`;
 
@@ -275,7 +291,7 @@ ${modelHistorySection}
     } catch (error) {
       const totalTime = Date.now() - startTime;
       console.error(
-        `[${requestId}] [CodeGen Tool] ❌ 代码生成失败，错误: ${error}, 耗时: ${totalTime}ms`
+        `[${requestId}] [CodeGen Tool] ❌ Code generation failed, error: ${error}, time: ${totalTime}ms`
       );
       throw error;
     }

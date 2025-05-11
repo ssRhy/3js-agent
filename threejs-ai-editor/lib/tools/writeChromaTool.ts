@@ -7,31 +7,42 @@ import { SceneStateObject } from "../types/sceneTypes";
 // 定义场景对象的 Zod 模式
 const SceneObjectSchema = z
   .object({
-    id: z.string().describe("对象的唯一标识符"),
-    type: z.string().describe("对象的类型（如mesh、light等）"),
-    name: z.string().optional().describe("对象的名称"),
+    id: z.string().describe("The unique identifier of the object"),
+    type: z.string().describe("The type of the object (e.g., mesh, light)"),
+    name: z.string().optional().describe("The name of the object"),
     position: z
       .array(z.number())
       .optional()
-      .describe("对象的位置坐标 [x, y, z]"),
+      .describe("The position coordinates of the object [x, y, z]"),
     rotation: z
       .array(z.number())
       .optional()
-      .describe("对象的旋转角度 [x, y, z]"),
-    scale: z.array(z.number()).optional().describe("对象的缩放系数 [x, y, z]"),
+      .describe("The rotation angle of the object [x, y, z]"),
+    scale: z
+      .array(z.number())
+      .optional()
+      .describe("The scaling factor of the object [x, y, z]"),
     // 使用 record 允许存储额外的属性，如材质、几何体等
-    geometry: z.any().optional().describe("对象的几何体定义"),
-    material: z.any().optional().describe("对象的材质定义"),
-    color: z.number().optional().describe("对象的颜色（十六进制数值）"),
-    intensity: z.number().optional().describe("光源的强度"),
+    geometry: z
+      .any()
+      .optional()
+      .describe("The geometry definition of the object"),
+    material: z
+      .any()
+      .optional()
+      .describe("The material definition of the object"),
+    color: z.number().optional().describe("The color of the object (hex value)"),
+    intensity: z.number().optional().describe("The intensity of the light"),
   })
   // 允许其他属性
   .passthrough();
 
 // 定义工具输入模式
 const WriteChromaInputSchema = z.object({
-  objects: z.array(SceneObjectSchema).describe("要存储的场景对象数组"),
-  prompt: z.string().describe("描述这些对象的提示或说明"),
+  objects: z
+    .array(SceneObjectSchema)
+    .describe("The array of scene objects to be stored"),
+  prompt: z.string().describe("The prompt or description of these objects"),
 });
 
 // 使用 LangChain tool 函数创建工具

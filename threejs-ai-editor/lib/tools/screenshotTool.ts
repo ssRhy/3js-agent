@@ -140,7 +140,7 @@ Focus on being specific and precise. Your analysis will be used to decide if cod
       analysis.toLowerCase().includes("partially") ||
       analysis.toLowerCase().includes("improve") ||
       analysis.toLowerCase().includes("missing") ||
-      analysis.toLowerCase().includes("需要改进");
+      analysis.toLowerCase().includes("needs improvement");
 
     // Extract key improvements
     const improvementRegex = /Concrete Improvements:(.*?)(?:\n\n|\n$|$)/i;
@@ -156,8 +156,8 @@ Focus on being specific and precise. Your analysis will be used to decide if cod
       needs_improvements: needsImprovements,
       key_improvements: improvements,
       recommendation: needsImprovements
-        ? "场景需要调整，请使用generate_fix_code工具修改代码"
-        : "场景符合要求，无需大幅修改",
+        ? "The scene needs adjustment, please use the generate_fix_code tool to modify the code"
+        : "The scene meets the requirements, no significant modifications are needed",
     };
   } catch (error) {
     console.error(`[${requestId}] [Screenshot Tool] Error:`, error);
@@ -167,7 +167,7 @@ Focus on being specific and precise. Your analysis will be used to decide if cod
         error instanceof Error ? error.message : String(error)
       }`,
       needs_improvements: true,
-      recommendation: "截图分析出错，建议尝试修改代码或重新执行",
+      recommendation: "Screenshot analysis error, suggest modifying code or re-executing",
     };
   }
 }
@@ -179,17 +179,17 @@ Focus on being specific and precise. Your analysis will be used to decide if cod
 export const screenshotTool = new DynamicStructuredTool({
   name: "analyze_screenshot",
   description:
-    "分析Three.js场景截图，判断当前场景是否符合用户需求，并提供改进建议",
+    "Analyze the Three.js scene screenshot to determine if it meets the user requirements and provide improvement suggestions",
   schema: z.object({
-    userRequirement: z.string().describe("用户的原始需求描述"),
+    userRequirement: z.string().describe("The original user requirement description"),
     useProvidedScreenshot: z
       .boolean()
       .optional()
-      .describe("是否使用提供的截图，默认为false将请求新截图"),
+      .describe("Whether to use the provided screenshot, default is false to request a new screenshot"),
     screenshotBase64: z
       .string()
       .optional()
-      .describe("Base64编码的场景截图，仅当useProvidedScreenshot为true时使用"),
+      .describe("Base64 encoded scene screenshot, only used when useProvidedScreenshot is true"),
   }),
   func: async ({
     userRequirement,
@@ -223,7 +223,7 @@ export const screenshotTool = new DynamicStructuredTool({
             status: "error",
             message: "Failed to get screenshot from client",
             needs_improvements: true,
-            recommendation: "无法获取截图，请检查浏览器连接",
+            recommendation: "Failed to get screenshot, please check browser connection",
           });
         }
       }
@@ -244,7 +244,7 @@ export const screenshotTool = new DynamicStructuredTool({
           error instanceof Error ? error.message : String(error)
         }`,
         needs_improvements: true,
-        recommendation: "工具执行出错，建议重试",
+        recommendation: "Tool execution error, suggest retrying",
       });
     }
   },

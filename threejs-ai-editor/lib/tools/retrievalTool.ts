@@ -19,8 +19,8 @@ interface EnhancedSceneObject {
 const RetrievalToolInputSchema = z.object({
   query: z
     .string()
-    .describe("搜索查询，可以是语义搜索词或者对象ID（使用'id:'前缀）"),
-  limit: z.number().optional().default(10).describe("要返回的最大结果数量"),
+    .describe("Search query, can be a semantic search word or object ID (use 'id:' prefix)"),
+  limit: z.number().optional().default(10).describe("The maximum number of results to return"),
 });
 
 /**

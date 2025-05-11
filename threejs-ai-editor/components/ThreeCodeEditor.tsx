@@ -5,6 +5,7 @@ import { Editor, OnMount } from "@monaco-editor/react";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
 import ObjectManipulationControls from "./ObjectManipulationControls";
+import UnifiedExportTools from "./UnifiedExportTools";
 
 import { useSocketStore } from "../lib/socket";
 import { preprocessCode } from "../lib/processors/codeProcessor";
@@ -1662,6 +1663,69 @@ export default function ThreeCodeEditor() {
     }
   }, [code]);
 
+  // Adding resize functionality for the sidebar
+  useEffect(() => {
+    const container = document.querySelector(".editor-container");
+    const sidebar = document.querySelector(".sidebar");
+    const resizeHandle = document.querySelector(".resize-handle");
+
+    if (!container || !sidebar || !resizeHandle) return;
+
+    // Set initial position based on sidebar width or default to 30%
+    const setInitialPosition = () => {
+      const sidebarWidth = sidebar.getBoundingClientRect().width;
+      (resizeHandle as HTMLElement).style.left = `${sidebarWidth}px`;
+    };
+
+    // Run once after render
+    setTimeout(setInitialPosition, 0);
+
+    let isResizing = false;
+
+    const startResize = (e: MouseEvent) => {
+      isResizing = true;
+      document.body.style.cursor = "col-resize";
+      document.addEventListener("mousemove", handleMouseMove);
+      document.addEventListener("mouseup", stopResize);
+      e.preventDefault();
+    };
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isResizing) return;
+
+      const containerRect = container.getBoundingClientRect();
+      const newWidth = e.clientX - containerRect.left;
+
+      // Set min and max widths
+      const minWidth = 350;
+      const maxWidth = containerRect.width * 0.45;
+
+      const clampedWidth = Math.max(minWidth, Math.min(maxWidth, newWidth));
+
+      // Update sidebar width and resize handle position
+      (sidebar as HTMLElement).style.width = `${clampedWidth}px`;
+      (resizeHandle as HTMLElement).style.left = `${clampedWidth}px`;
+    };
+
+    const stopResize = () => {
+      isResizing = false;
+      document.body.style.cursor = "";
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", stopResize);
+    };
+
+    resizeHandle.addEventListener("mousedown", startResize as EventListener);
+
+    return () => {
+      resizeHandle.removeEventListener(
+        "mousedown",
+        startResize as EventListener
+      );
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", stopResize);
+    };
+  }, []);
+
   // During initialization, override the GLTFLoader's load method to use the proxy
   useEffect(() => {
     if (threeRef.current && threeRef.current.gltfLoader) {
@@ -1784,15 +1848,12 @@ export default function ThreeCodeEditor() {
                 : socketConnectionStatus !== "open"
                 ? "等待连接..."
                 : renderingCompleteRef.current
-                ? "生成并分析场景" // 当场景渲染完成时，明确显示将分析场景
+                ? "生成并分析场景"
                 : "生成场景代码"}
+              <div
+                className={`button-background ${isLoading ? "loading" : ""}`}
+              ></div>
             </button>
-            {renderingCompleteRef.current && (
-              <div className="screenshot-hint">
-                <span className="camera-icon">📷</span>
-                点击生成时将自动分析当前场景
-              </div>
-            )}
           </div>
         </div>
 
@@ -1848,7 +1909,15 @@ export default function ThreeCodeEditor() {
         </div>
       </div>
 
+      <div className="resize-handle"></div>
       <div className="preview" ref={containerRef}></div>
+
+      {/* Scene Exporter component for image export */}
+      {threeRef.current?.renderer && (
+        <div className="scene-exporter-container">
+          <UnifiedExportTools renderer={threeRef.current.renderer} />
+        </div>
+      )}
 
       {lintOverlayVisible && lintErrors.length > 0 && (
         <div className="lint-overlay">
@@ -1875,27 +1944,10 @@ export default function ThreeCodeEditor() {
         </div>
       )}
 
-      {/* 状态显示区域 - 移除操作模式切换按钮 */}
-      <div className="status-bar">
-        {/* 显示Socket.IO连接状态 */}
-        <div className="connection-status">
-          <span className={`status-indicator ${socketConnectionStatus}`}></span>
-          <span>{socketConnectionStatus === "open" ? "已连接" : "未连接"}</span>
-          {socketConnectionStatus === "error" && (
-            <button className="reconnect-button" onClick={manualReconnect}>
-              重连
-            </button>
-          )}
-        </div>
-
-        {/* 信息提示部分 */}
-        <div className="mode-info">
-          <span className="info-text">对象操作模式已启用</span>
-        </div>
-      </div>
-
       {/* 始终显示操作控制面板 */}
-      <ObjectManipulationControls />
+      <div className="ui-controls-container">
+        <ObjectManipulationControls />
+      </div>
 
       <style jsx>{`
         .editor-container {
@@ -1903,65 +1955,112 @@ export default function ThreeCodeEditor() {
           height: 100vh;
           width: 100%;
           overflow: hidden;
+          position: relative;
+          background-color: #0f0f0f;
+          color: #e0e0e0;
         }
 
         .sidebar {
           display: flex;
           flex-direction: column;
-          width: 40%;
-          min-width: 400px;
+          width: 30%;
+          min-width: 350px;
+          max-width: 45%;
           padding: 15px;
-          background-color: #f5f5f5;
-          border-right: 1px solid #ddd;
+          background-color: #121212;
+          border-right: 1px solid #333;
           overflow-y: auto;
+          resize: horizontal;
+          position: relative;
+          transition: background-color 0.3s ease;
+        }
+
+        .resize-handle {
+          width: 4px;
+          height: 100%;
+          background-color: #333;
+          cursor: col-resize;
+          position: absolute;
+          top: 0;
+          left: 30%; /* Match initial sidebar width */
+          z-index: 10;
+          transition: background-color 0.2s ease;
+        }
+
+        .resize-handle:hover {
+          background-color: #555;
         }
 
         .sidebar-header {
           display: flex;
           justify-content: space-between;
           align-items: center;
-          margin-bottom: 15px;
+          margin-bottom: 8px;
+          padding-bottom: 8px;
+          border-bottom: 1px solid #333;
         }
 
         .sidebar-header h2 {
           margin: 0;
-          color: #333;
-          font-size: 20px;
+          color: #e0e0e0;
+          font-size: 16px;
+          font-weight: 400;
+          letter-spacing: 0.5px;
         }
 
         .prompt-section {
-          margin-bottom: 15px;
+          margin-bottom: 8px;
         }
 
         .prompt-label {
           display: block;
-          margin-bottom: 5px;
-          font-weight: bold;
-          color: #555;
+          margin-bottom: 4px;
+          font-weight: normal;
+          color: #aaa;
+          font-size: 13px;
+          letter-spacing: 0.5px;
         }
 
         .status-section {
-          margin-bottom: 15px;
+          margin-bottom: 8px;
         }
 
         .preview {
           flex-grow: 1;
           height: 100%;
           position: relative;
-          background-color: #f0f0f0;
+          background-color: #0a0a0a;
+        }
+
+        .scene-exporter-container {
+          position: absolute;
+          top: 20px;
+          right: 20px;
+          width: 300px;
+          z-index: 100;
+          transition: all 0.3s ease;
+          filter: drop-shadow(0 4px 6px rgba(0, 0, 0, 0.3));
+        }
+
+        .ui-controls-container {
+          position: absolute;
+          top: 50%;
+          right: 20px;
+          transform: translateY(-50%);
+          z-index: 90;
         }
 
         .button-group {
           display: flex;
           flex-direction: column;
-          gap: 10px;
-          margin-top: 10px;
+          gap: 6px;
+          margin-top: 8px;
         }
 
         .ws-status {
           padding: 4px 8px;
           margin: 4px 0;
-          border-radius: 4px;
+          border-radius: 3px;
           font-size: 12px;
           display: flex;
           align-items: center;
@@ -1970,80 +2069,84 @@ export default function ThreeCodeEditor() {
 
         .status-dot {
           display: inline-block;
-          width: 8px;
-          height: 8px;
+          width: 6px;
+          height: 6px;
           border-radius: 50%;
         }
 
         .ws-status.open {
-          background-color: #d4edda;
-          color: #155724;
+          background-color: rgba(35, 35, 35, 0.8);
+          color: #aaa;
         }
 
         .ws-status.open .status-dot {
-          background-color: #28a745;
+          background-color: #5f5;
         }
 
         .ws-status.connecting {
-          background-color: #fff3cd;
-          color: #856404;
+          background-color: rgba(35, 35, 35, 0.8);
+          color: #aaa;
         }
 
         .ws-status.connecting .status-dot {
-          background-color: #ffc107;
+          background-color: #fa3;
         }
 
         .ws-status.closed,
         .ws-status.error {
-          background-color: #f8d7da;
-          color: #721c24;
+          background-color: rgba(35, 35, 35, 0.8);
+          color: #aaa;
         }
 
         .ws-status.closed .status-dot,
         .ws-status.error .status-dot {
-          background-color: #dc3545;
+          background-color: #f55;
         }
 
         .success {
-          background-color: #d4edda;
-          color: #155724;
-          padding: 8px;
-          margin: 8px 0;
-          border-radius: 4px;
-          border-left: 4px solid #28a745;
+          background-color: rgba(35, 35, 35, 0.8);
+          color: #aaa;
+          padding: 6px 10px;
+          margin: 6px 0;
+          border-radius: 3px;
+          border-left: 3px solid #5f5;
+          animation: fadeIn 0.3s ease;
+          font-size: 12px;
         }
 
         .error {
-          background-color: #f8d7da;
-          color: #721c24;
-          padding: 8px;
-          margin: 8px 0;
-          border-radius: 4px;
-          border-left: 4px solid #dc3545;
+          background-color: rgba(35, 35, 35, 0.8);
+          color: #aaa;
+          padding: 6px 10px;
+          margin: 6px 0;
+          border-radius: 3px;
+          border-left: 3px solid #f55;
+          animation: fadeIn 0.3s ease;
+          font-size: 12px;
         }
 
         .reconnect-button {
           margin-left: 8px;
           font-size: 12px;
           padding: 2px 6px;
-          background: #007bff;
-          color: white;
+          background: #333;
+          color: #ddd;
           border: none;
-          border-radius: 3px;
+          border-radius: 2px;
           cursor: pointer;
         }
 
         .reconnect-button:hover {
-          background: #0069d9;
+          background: #444;
         }
 
         .connection-message {
-          background-color: #fff3cd;
-          border: 1px solid #ffeeba;
-          color: #856404;
+          background-color: rgba(35, 35, 35, 0.8);
+          border: 1px solid #333;
+          color: #aaa;
           padding: 12px;
           margin: 10px 0;
-          border-radius: 4px;
+          border-radius: 3px;
           text-align: center;
         }
 
@@ -2053,71 +2156,147 @@ export default function ThreeCodeEditor() {
 
         .prompt-input {
           width: 100%;
-          padding: 10px;
-          margin-bottom: 10px;
-          border: 1px solid #ccc;
-          border-radius: 4px;
+          padding: 8px;
+          margin-bottom: 8px;
+          border: 1px solid #333;
+          background-color: #1a1a1a;
+          color: #e0e0e0;
+          border-radius: 3px;
           resize: vertical;
-          font-family: "Arial", sans-serif;
+          font-family: "Inter", "Arial", sans-serif;
+          transition: all 0.2s ease;
+          min-height: 80px;
+          max-height: 120px;
+        }
+
+        .prompt-input:focus {
+          border-color: #555;
+          box-shadow: 0 0 0 1px rgba(100, 100, 100, 0.3);
+          outline: none;
+        }
+
+        .prompt-input::placeholder {
+          color: #666;
+        }
+
+        .prompt-input:disabled {
+          opacity: 0.6;
+          cursor: not-allowed;
         }
 
         .generate-button {
-          background-color: #4a90e2;
-          color: white;
+          position: relative;
+          background-color: transparent;
+          color: #e0e0e0;
           border: none;
-          padding: 10px 15px;
-          border-radius: 4px;
+          padding: 10px 16px;
+          border-radius: 3px;
           cursor: pointer;
-          font-weight: bold;
-          transition: background-color 0.3s;
+          font-weight: 500;
+          font-size: 13px;
+          letter-spacing: 0.5px;
+          transition: all 0.2s ease;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          text-transform: uppercase;
+          overflow: hidden;
         }
 
-        .generate-button:hover:not(:disabled) {
-          background-color: #357ab8;
+        .generate-button .button-background {
+          position: absolute;
+          top: 0;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          z-index: -1;
+          border-radius: 3px;
+          background-color: #333;
+          opacity: 1;
+          transition: all 0.3s ease;
+        }
+
+        .generate-button .button-background.loading {
+          background-size: 200% 200%;
+          animation: loading-gradient 1.5s linear infinite;
+        }
+
+        .generate-button:hover:not(:disabled) .button-background {
+          background-color: #444;
+        }
+
+        .generate-button:active:not(:disabled) .button-background {
+          background-color: #222;
+          transform: scale(0.98);
         }
 
         .generate-button:disabled {
-          background-color: #a0a0a0;
+          opacity: 0.5;
           cursor: not-allowed;
+        }
+
+        @keyframes loading-gradient {
+          0% {
+            background-position: 0% 50%;
+            background-image: linear-gradient(
+              90deg,
+              #333 0%,
+              #444 50%,
+              #333 100%
+            );
+          }
+          100% {
+            background-position: 100% 50%;
+            background-image: linear-gradient(
+              90deg,
+              #333 0%,
+              #444 50%,
+              #333 100%
+            );
+          }
         }
 
         .code-section {
           display: flex;
           flex-direction: column;
           flex-grow: 1;
-          height: calc(100% - 240px);
-          margin-top: 10px;
-          border: 1px solid #ccc;
-          border-radius: 4px;
+          height: calc(100% - 180px);
+          margin-top: 8px;
+          border: 1px solid #333;
+          border-radius: 3px;
           overflow: hidden;
         }
 
         .code-header {
-          background-color: #2d2d2d;
-          color: #ddd;
+          background-color: #1a1a1a;
+          color: #aaa;
           margin: 0;
-          padding: 8px 12px;
-          font-size: 14px;
-          border-bottom: 1px solid #444;
+          padding: 6px 10px;
+          font-size: 13px;
+          border-bottom: 1px solid #333;
+          font-weight: normal;
+          letter-spacing: 0.5px;
         }
 
         .loading-model {
           display: flex;
           align-items: center;
-          gap: 8px;
-          background-color: #e6f7ff;
-          border: 1px solid #91d5ff;
-          border-radius: 4px;
-          padding: 8px;
-          margin: 8px 0;
+          gap: 6px;
+          background-color: rgba(35, 35, 35, 0.8);
+          border: 1px solid #333;
+          border-radius: 3px;
+          padding: 6px 8px;
+          margin: 6px 0;
+          color: #aaa;
+          font-size: 12px;
         }
 
         .loading-spinner {
           display: inline-block;
-          width: 12px;
-          height: 12px;
+          width: 10px;
+          height: 10px;
           border-radius: 50%;
-          border: 2px solid #1890ff;
+          border: 2px solid #aaa;
           border-top-color: transparent;
           animation: spin 1s linear infinite;
         }
@@ -2129,20 +2308,21 @@ export default function ThreeCodeEditor() {
         }
 
         .diff-toggle {
-          margin: 8px 0;
+          margin: 6px 0;
         }
 
         .diff-toggle button {
-          background: #6c757d;
-          color: white;
+          background: #333;
+          color: #ddd;
           border: none;
-          padding: 5px 10px;
-          border-radius: 4px;
+          padding: 4px 8px;
+          border-radius: 3px;
           cursor: pointer;
+          font-size: 12px;
         }
 
         .diff-toggle button:hover {
-          background: #5a6268;
+          background: #444;
         }
 
         .lint-overlay {
@@ -2151,7 +2331,7 @@ export default function ThreeCodeEditor() {
           left: 0;
           right: 0;
           bottom: 0;
-          background-color: rgba(0, 0, 0, 0.5);
+          background-color: rgba(0, 0, 0, 0.7);
           display: flex;
           justify-content: center;
           align-items: center;
@@ -2159,14 +2339,16 @@ export default function ThreeCodeEditor() {
         }
 
         .lint-overlay-content {
-          background-color: white;
-          border-radius: 4px;
+          background-color: #1a1a1a;
+          border-radius: 3px;
           padding: 20px;
           width: 80%;
           max-width: 800px;
           max-height: 80vh;
           overflow-y: auto;
           position: relative;
+          color: #ddd;
+          border: 1px solid #333;
         }
 
         .close-button {
@@ -2177,6 +2359,7 @@ export default function ThreeCodeEditor() {
           border: none;
           font-size: 20px;
           cursor: pointer;
+          color: #ddd;
         }
 
         .lint-errors-list {
@@ -2187,7 +2370,7 @@ export default function ThreeCodeEditor() {
 
         .lint-error-item {
           padding: 8px;
-          border-bottom: 1px solid #eee;
+          border-bottom: 1px solid #333;
           display: flex;
           flex-wrap: wrap;
           gap: 8px;
@@ -2195,97 +2378,42 @@ export default function ThreeCodeEditor() {
 
         .lint-error-location {
           font-weight: bold;
-          color: #6200ee;
+          color: #aaa;
           min-width: 80px;
         }
 
         .lint-error-message {
           flex-grow: 1;
-          color: #333;
+          color: #ddd;
         }
 
         .lint-error-rule {
-          color: #718096;
+          color: #888;
           font-size: 12px;
         }
 
         .screenshot-hint {
           margin-top: 8px;
           font-size: 12px;
-          color: #666;
-          display: flex;
-          align-items: center;
-          gap: 5px;
+          color: #888;
+          padding: 6px 10px;
+          background-color: rgba(35, 35, 35, 0.8);
+          border-radius: 3px;
+          letter-spacing: 0.3px;
         }
 
-        .camera-icon {
-          font-size: 14px;
+        @keyframes fadeIn {
+          from {
+            opacity: 0;
+            transform: translateY(-5px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
         }
 
-        /* 状态栏样式优化 */
-        .status-bar {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          padding: 5px 10px;
-          background-color: #252525;
-          color: #ccc;
-          font-size: 0.8rem;
-          border-top: 1px solid #333;
-          position: absolute;
-          bottom: 0;
-          left: 0;
-          right: 0;
-          z-index: 90;
-        }
-
-        .connection-status {
-          display: flex;
-          align-items: center;
-          gap: 5px;
-        }
-
-        .status-indicator {
-          width: 8px;
-          height: 8px;
-          border-radius: 50%;
-          display: inline-block;
-        }
-
-        .status-indicator.open {
-          background-color: #4caf50;
-        }
-
-        .status-indicator.closed,
-        .status-indicator.connecting {
-          background-color: #ff9800;
-        }
-
-        .status-indicator.error {
-          background-color: #f44336;
-        }
-
-        .reconnect-button {
-          background-color: #3d5afe;
-          color: white;
-          border: none;
-          border-radius: 4px;
-          padding: 3px 8px;
-          margin-left: 5px;
-          cursor: pointer;
-          font-size: 0.7rem;
-        }
-
-        .mode-info {
-          display: flex;
-          align-items: center;
-          gap: 5px;
-        }
-
-        .info-text {
-          color: #ccc;
-          font-size: 0.8rem;
-        }
+        /* 删除状态栏样式 */
 
         @media (max-width: 768px) {
           .editor-container {
@@ -2296,6 +2424,12 @@ export default function ThreeCodeEditor() {
             width: 100%;
             min-width: 0;
             height: 50%;
+            max-width: 100%;
+            resize: vertical;
+          }
+
+          .resize-handle {
+            display: none;
           }
 
           .preview {
@@ -2303,7 +2437,19 @@ export default function ThreeCodeEditor() {
           }
 
           .code-section {
-            height: 200px;
+            height: calc(100% - 160px);
+          }
+        }
+
+        @media (max-height: 800px) {
+          .scene-exporter-container {
+            top: 10px;
+          }
+
+          .ui-controls-container {
+            top: 50%;
+            right: 20px;
+            transform: translateY(-50%);
           }
         }
       `}</style>

@@ -649,302 +649,179 @@ export default function ObjectManipulationControls() {
   }
 
   return (
-    <div className="object-manipulation-controls">
-      <div className="control-panel">
-        <div className="title">物体操作控制</div>
+    <div className="controls-container">
+      <div className="controls-header">物体操作控制</div>
 
-        <div className="control-buttons">
-          <button
-            className={`control-button ${
-              transformMode === "translate" ? "active" : ""
-            }`}
-            onClick={() => setTransformMode("translate")}
-            disabled={isDragging}
-            title="移动物体"
-          >
-            <span className="icon">↔</span> 移动
-          </button>
-          <button
-            className={`control-button ${
-              transformMode === "rotate" ? "active" : ""
-            }`}
-            onClick={() => setTransformMode("rotate")}
-            disabled={isDragging}
-            title="旋转物体"
-          >
-            <span className="icon">⟳</span> 旋转
-          </button>
-          <button
-            className={`control-button ${
-              transformMode === "scale" ? "active" : ""
-            }`}
-            onClick={() => setTransformMode("scale")}
-            disabled={isDragging}
-            title="缩放物体"
-          >
-            <span className="icon">⤧</span> 缩放
-          </button>
+      <div className="control-buttons">
+        <button
+          className={`control-button ${
+            transformMode === "translate" ? "active" : ""
+          }`}
+          onClick={() => setTransformMode("translate")}
+        >
+          <span>↔ 移动</span>
+        </button>
 
-          <div className="control-group-buttons">
-            <button
-              className="control-button group"
-              onClick={handleGroupSelected}
-              disabled={isDragging || selectedObjects.length < 2}
-              title="将选中的多个对象组合成一个整体"
-            >
-              <span className="icon">⊕</span> 组合
-            </button>
-            <button
-              className="control-button ungroup"
-              onClick={handleUngroup}
-              disabled={
-                isDragging ||
-                !selectedObject ||
-                !(selectedObject instanceof THREE.Group) ||
-                selectedObject === dynamicGroup ||
-                selectedObject.children.length === 0
-              }
-              title="将选中的组拆分为单独的对象"
-            >
-              <span className="icon">⊖</span> 解组
-            </button>
-          </div>
+        <button
+          className={`control-button ${
+            transformMode === "rotate" ? "active" : ""
+          }`}
+          onClick={() => setTransformMode("rotate")}
+        >
+          <span>⟳ 旋转</span>
+        </button>
+
+        <button
+          className={`control-button ${
+            transformMode === "scale" ? "active" : ""
+          }`}
+          onClick={() => setTransformMode("scale")}
+        >
+          <span>⤧ 缩放</span>
+        </button>
+
+        <div className="group-buttons">
+          <button
+            className="control-button"
+            onClick={handleGroupSelected}
+            disabled={selectedObjects.length < 2}
+          >
+            <span>组合</span>
+          </button>
 
           <button
-            className="control-button cancel"
-            onClick={() => {
-              selectObject(null);
-              setSelectedObjects([]);
-            }}
-            disabled={
-              isDragging || (!selectedObject && selectedObjects.length === 0)
-            }
-            title="取消当前选择"
+            className="control-button"
+            onClick={handleUngroup}
+            disabled={!selectedObject || selectedObject.children.length === 0}
           >
-            <span className="icon">✕</span> 取消选择
+            <span>解组</span>
           </button>
-        </div>
-
-        {selectedObject && (
-          <div className="selected-object-info">
-            <span className="info-label">当前选中: </span>
-            <span className="info-value">
-              {selectedObject.name || selectedObject.type || "未命名物体"}
-            </span>
-          </div>
-        )}
-
-        {(multiSelectMode || selectedObjects.length > 1) && (
-          <div
-            className={`multi-select-info ${multiSelectMode ? "active" : ""}`}
-          >
-            <span className="info-count">
-              已选择 {selectedObjects.length} 个对象
-            </span>
-            <span className="info-hint">
-              {multiSelectMode
-                ? "多选模式已启用 (Shift键按下)"
-                : "按住Shift键可选择更多对象"}
-            </span>
-          </div>
-        )}
-
-        {!selectedObject && selectedObjects.length === 0 && (
-          <div className="instruction">点击场景中的物体进行选择</div>
-        )}
-
-        <div className="controls-guide">
-          <div className="guide-item">
-            按住 <kbd>Shift</kbd> 可选择多个对象
-          </div>
-          <div className="guide-item">选择多个对象后可以将它们组合在一起</div>
-          <div className="guide-item">选择一个组后可以将它解组为单个对象</div>
         </div>
       </div>
 
+      <div className="footer">
+        <button
+          className="deselect-button"
+          onClick={() => handleObjectSelection(null)}
+        >
+          取消选择
+        </button>
+      </div>
+
+      <div className="info-text">点击场景中的物体进行选择</div>
+
+      {selectedObjects.length > 0 && (
+        <div className="selection-info">
+          已选择 {selectedObjects.length} 个对象
+        </div>
+      )}
+
+      <div className="info-text">按住 Shift 可选择多个对象</div>
+
       <style jsx>{`
-        .object-manipulation-controls {
-          position: absolute;
-          right: 15px;
-          top: 50%;
-          transform: translateY(-50%);
-          z-index: 100;
+        .controls-container {
+          position: relative;
+          display: flex;
+          flex-direction: column;
+          gap: 5px;
+          padding: 10px;
+          background-color: rgba(30, 30, 30, 0.85);
+          border-radius: 10px;
+          backdrop-filter: blur(10px);
+          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          width: 200px;
         }
 
-        .control-panel {
-          background: rgba(0, 0, 0, 0.8);
-          padding: 12px;
-          border-radius: 8px;
-          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-          backdrop-filter: blur(8px);
-          width: 180px;
-        }
-
-        .title {
+        .controls-header {
           color: white;
           font-size: 14px;
-          font-weight: bold;
-          margin-bottom: 12px;
+          font-weight: 600;
           text-align: center;
-          padding-bottom: 8px;
-          border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+          margin-bottom: 5px;
+          padding-bottom: 5px;
+          border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+          user-select: none;
         }
 
         .control-buttons {
-          display: flex;
-          flex-direction: column;
-          gap: 8px;
+          display: grid;
+          grid-template-columns: 1fr;
+          gap: 5px;
         }
 
         .control-button {
-          background: #444;
-          color: white;
-          border: none;
-          padding: 8px 12px;
-          border-radius: 4px;
-          cursor: pointer;
-          transition: all 0.2s;
           display: flex;
           align-items: center;
-          gap: 4px;
-        }
-
-        .icon {
-          font-size: 16px;
-          width: 20px;
-          text-align: center;
-        }
-
-        .control-button:hover {
-          background: #555;
-          transform: translateX(-2px);
+          justify-content: center;
+          gap: 6px;
+          padding: 8px;
+          border: none;
+          border-radius: 6px;
+          background-color: rgba(255, 255, 255, 0.1);
+          color: white;
+          cursor: pointer;
+          transition: all 0.2s;
         }
 
         .control-button.active {
-          background: #4a8fee;
-          box-shadow: 0 0 8px rgba(74, 143, 238, 0.6);
+          background-color: #2196f3;
         }
 
-        .control-button.cancel {
-          background: #444;
-          margin-top: 4px;
-        }
-
-        .control-button.cancel:hover {
-          background: #e74c3c;
+        .control-button:hover:not(.active) {
+          background-color: rgba(255, 255, 255, 0.15);
         }
 
         .control-button:disabled {
-          background: #333;
-          color: #777;
+          opacity: 0.5;
           cursor: not-allowed;
-          transform: none;
-          box-shadow: none;
         }
 
-        .control-group-buttons {
+        .group-buttons {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 5px;
+          margin-top: 5px;
+        }
+
+        .footer {
           display: flex;
-          gap: 8px;
-          margin-top: 10px;
-          margin-bottom: 5px;
-        }
-
-        .control-group-buttons .control-button {
-          flex: 1;
           justify-content: center;
-          font-size: 13px;
-          padding: 6px 8px;
+          margin-top: 8px;
         }
 
-        .control-button.group {
-          background: #28a745;
+        .deselect-button {
+          width: 100%;
+          padding: 6px 10px;
+          border: none;
+          border-radius: 6px;
+          background-color: rgba(244, 67, 54, 0.2);
+          color: #ff7961;
+          cursor: pointer;
+          transition: all 0.2s;
         }
 
-        .control-button.group:hover:not(:disabled) {
-          background: #218838;
+        .deselect-button:hover {
+          background-color: rgba(244, 67, 54, 0.3);
         }
 
-        .control-button.ungroup {
-          background: #ffc107;
-          color: #212529;
-        }
-
-        .control-button.ungroup:hover:not(:disabled) {
-          background: #e0a800;
-        }
-
-        .selected-object-info {
-          margin-top: 10px;
-          font-size: 12px;
-          color: #fff;
-          text-align: center;
-          padding: 6px;
-          background: rgba(74, 143, 238, 0.2);
-          border-radius: 4px;
-        }
-
-        .info-label {
-          font-weight: bold;
-          color: rgba(255, 255, 255, 0.8);
-        }
-
-        .info-value {
-          color: #fff;
-        }
-
-        .multi-select-info {
-          margin-top: 10px;
-          font-size: 12px;
-          color: #fff;
-          text-align: center;
-          padding: 6px;
-          background: rgba(255, 193, 7, 0.2);
-          border-radius: 4px;
-          display: flex;
-          flex-direction: column;
-          gap: 4px;
-        }
-
-        .multi-select-info.active {
-          background: rgba(255, 193, 7, 0.4);
-        }
-
-        .info-count {
-          font-weight: bold;
-        }
-
-        .info-hint {
+        .info-text {
+          color: rgba(255, 255, 255, 0.6);
           font-size: 11px;
-          opacity: 0.9;
-        }
-
-        .instruction {
-          margin-top: 10px;
-          font-size: 12px;
-          color: #aaa;
           text-align: center;
-          font-style: italic;
+          margin-top: 8px;
+          user-select: none;
         }
 
-        .controls-guide {
-          margin-top: 15px;
-          font-size: 11px;
-          color: #aaa;
-          padding-top: 10px;
-          border-top: 1px solid rgba(255, 255, 255, 0.1);
-        }
-
-        .guide-item {
-          margin-bottom: 5px;
-          line-height: 1.3;
-        }
-
-        kbd {
-          background: #555;
-          padding: 1px 4px;
-          border-radius: 3px;
-          font-family: monospace;
-          font-size: 10px;
+        .selection-info {
+          margin-top: 5px;
+          color: white;
+          font-size: 12px;
+          text-align: center;
+          padding: 5px;
+          border-radius: 4px;
+          background-color: rgba(255, 255, 255, 0.05);
+          user-select: none;
         }
       `}</style>
     </div>

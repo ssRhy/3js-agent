@@ -11,13 +11,13 @@ let cachedCode: string | null = null;
 export const applyPatchTool = new DynamicStructuredTool({
   name: "apply_patch",
   description:
-    "应用补丁到内存中保存的代码。直接提交完整代码或补丁文本，无需JSON格式。初次必须先提交完整代码，之后只需提交补丁文本即可增量更新。可以包含对象删除指令。",
+    "Apply patches to the code saved in memory. Submit complete code or patch text directly, no JSON format required. Must submit complete code first, then submit patch text for incremental updates. Can include object deletion instructions.",
   schema: z.object({
-    input: z.string().describe("代码或补丁文本"),
+    input: z.string().describe("Code or patch text"),
   }),
   func: async ({ input }) => {
     try {
-      console.log(`[apply_patch] 收到输入，长度: ${input.length}`);
+      console.log(`[apply_patch] Received input, length: ${input.length}`);
 
       // 检查输入是否是JSON格式，如果是，提取code属性
       let codeInput = input;
@@ -30,7 +30,7 @@ export const applyPatchTool = new DynamicStructuredTool({
         ) {
           codeInput = parsedInput.code;
           console.log(
-            `[apply_patch] 检测到JSON输入，提取code属性，长度: ${codeInput.length}`
+            `[apply_patch] Detected JSON input, extracted code property, length: ${codeInput.length}`
           );
         }
       } catch {
@@ -47,7 +47,8 @@ export const applyPatchTool = new DynamicStructuredTool({
         if (!cachedCode) {
           return JSON.stringify({
             success: false,
-            message: "没有缓存的代码，请先提交完整代码初始化",
+            message:
+              "No cached code, please submit complete code first to initialize",
           });
         }
 
@@ -59,7 +60,8 @@ export const applyPatchTool = new DynamicStructuredTool({
           if (typeof result === "boolean") {
             return JSON.stringify({
               success: false,
-              message: "补丁应用失败，可能与当前代码不匹配",
+              message:
+                "Patch application failed, possibly not compatible with the current code",
             });
           }
 
@@ -68,14 +70,14 @@ export const applyPatchTool = new DynamicStructuredTool({
 
           return JSON.stringify({
             success: true,
-            message: "补丁应用成功",
+            message: "Patch application successful",
             updatedCode: cachedCode,
             codeLength: cachedCode.length,
           });
         } catch (patchError) {
           return JSON.stringify({
             success: false,
-            message: `补丁应用失败: ${
+            message: `Patch application failed: ${
               patchError instanceof Error
                 ? patchError.message
                 : String(patchError)
@@ -87,7 +89,8 @@ export const applyPatchTool = new DynamicStructuredTool({
         cachedCode = codeInput;
         return JSON.stringify({
           success: true,
-          message: "代码已成功缓存，准备接收补丁进行增量更新",
+          message:
+            "Code has been successfully cached, ready to receive patches for incremental updates",
           updatedCode: cachedCode,
           codeLength: codeInput.length,
         });
@@ -97,7 +100,7 @@ export const applyPatchTool = new DynamicStructuredTool({
         error instanceof Error ? error.message : String(error);
       return JSON.stringify({
         success: false,
-        message: `处理失败: ${errorMessage}`,
+        message: `Processing failed: ${errorMessage}`,
       });
     }
   },
@@ -109,7 +112,7 @@ export const getCachedCode = (): string | null => cachedCode;
 // 清除缓存的代码
 export const clearCachedCode = (): { success: boolean; message: string } => {
   cachedCode = null;
-  return { success: true, message: "代码缓存已清除" };
+  return { success: true, message: "Code cache has been cleared" };
 };
 
 // 直接更新缓存的代码
@@ -119,7 +122,7 @@ export const updateCachedCode = (
   cachedCode = newCode;
   return {
     success: true,
-    message: "代码缓存已更新",
+    message: "Code cache has been updated",
     codeLength: newCode.length,
   };
 };
