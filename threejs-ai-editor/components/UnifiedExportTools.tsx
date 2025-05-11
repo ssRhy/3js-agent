@@ -40,7 +40,7 @@ export default function UnifiedExportTools({
   // Save high-quality image (full resolution)
   const saveHighQualityImage = async () => {
     if (!scene || !renderer) {
-      setError("场景或渲染器未初始化");
+      setError("Scene or renderer not initialized");
       return;
     }
 
@@ -52,7 +52,7 @@ export default function UnifiedExportTools({
       // Force render scene at full quality
       const camera = scene.userData.camera as THREE.Camera;
       if (!camera) {
-        throw new Error("无法找到场景相机");
+        throw new Error("Cannot find scene camera");
       }
 
       // Render at high quality
@@ -67,7 +67,7 @@ export default function UnifiedExportTools({
       // Create download link
       const link = document.createElement("a");
       link.href = imageUrl;
-      link.download = `场景_${new Date()
+      link.download = `scene_${new Date()
         .toISOString()
         .slice(0, 19)
         .replace(/:/g, "-")}.png`;
@@ -77,10 +77,10 @@ export default function UnifiedExportTools({
       link.click();
       document.body.removeChild(link);
 
-      setSuccess("✅ 高质量场景图片已保存");
+      setSuccess("✅ High quality scene image saved");
     } catch (err) {
       setError(
-        `❌ 保存图片错误: ${err instanceof Error ? err.message : String(err)}`
+        `❌ Save image error: ${err instanceof Error ? err.message : String(err)}`
       );
     } finally {
       setIsExporting(false);
@@ -90,7 +90,7 @@ export default function UnifiedExportTools({
   // Export scene to GLB format
   const exportToGLB = async () => {
     if (!scene || !dynamicGroup) {
-      setError("场景或场景组未初始化");
+      setError("Scene or scene group not initialized");
       return;
     }
 
@@ -137,15 +137,15 @@ export default function UnifiedExportTools({
             URL.revokeObjectURL(link.href);
             document.body.removeChild(link);
 
-            setSuccess("✅ 场景已成功导出为GLB格式");
+            setSuccess(" Scene exported successfully as GLB format");
           } else {
-            throw new Error("导出结果不是有效的二进制数据");
+            throw new Error("Export result is not valid binary data");
           }
           setIsExporting(false);
         },
         (error) => {
           setError(
-            `导出错误: ${
+            `Export error: ${
               error instanceof Error ? error.message : String(error)
             }`
           );
@@ -155,7 +155,7 @@ export default function UnifiedExportTools({
       );
     } catch (err) {
       setError(
-        `导出场景错误: ${err instanceof Error ? err.message : String(err)}`
+        `Export scene error: ${err instanceof Error ? err.message : String(err)}`
       );
       setIsExporting(false);
     }
@@ -164,7 +164,7 @@ export default function UnifiedExportTools({
   // Export scene to GLTF format
   const exportToGLTF = async () => {
     if (!scene || !dynamicGroup) {
-      setError("场景或场景组未初始化");
+      setError("Scene or scene group not initialized");
       return;
     }
 
@@ -200,7 +200,7 @@ export default function UnifiedExportTools({
             // Create download link
             const link = document.createElement("a");
             link.href = URL.createObjectURL(blob);
-            link.download = `场景_${new Date()
+            link.download = `scene_${new Date()
               .toISOString()
               .slice(0, 19)
               .replace(/:/g, "-")}.gltf`;
@@ -213,15 +213,15 @@ export default function UnifiedExportTools({
             URL.revokeObjectURL(link.href);
             document.body.removeChild(link);
 
-            setSuccess("✅ 场景已成功导出为GLTF格式");
+            setSuccess(" Scene exported successfully as GLTF format");
           } else {
-            throw new Error("导出结果不是有效的JSON格式");
+            throw new Error("Export result is not valid JSON format");
           }
           setIsExporting(false);
         },
         (error) => {
           setError(
-            `导出错误: ${
+            `Export error: ${
               error instanceof Error ? error.message : String(error)
             }`
           );
@@ -231,7 +231,7 @@ export default function UnifiedExportTools({
       );
     } catch (err) {
       setError(
-        `导出场景错误: ${err instanceof Error ? err.message : String(err)}`
+        `Export scene error: ${err instanceof Error ? err.message : String(err)}`
       );
       setIsExporting(false);
     }
@@ -240,7 +240,7 @@ export default function UnifiedExportTools({
   return (
     <div className="unified-export-tools">
       <div className="exporter-header" onClick={toggleVisibility}>
-        <h3>场景导出工具</h3>
+        <h3>Export Tools</h3>
         <span className={`toggle-icon ${isVisible ? "expanded" : "collapsed"}`}>
           {isVisible ? "▼" : "▲"}
         </span>
@@ -253,13 +253,13 @@ export default function UnifiedExportTools({
               className={`tab-button ${activeTab === "image" ? "active" : ""}`}
               onClick={() => setActiveTab("image")}
             >
-              图片导出
+              Image Export
             </button>
             <button
               className={`tab-button ${activeTab === "model" ? "active" : ""}`}
               onClick={() => setActiveTab("model")}
             >
-              模型导出
+              Model Export
             </button>
           </div>
 
@@ -272,7 +272,7 @@ export default function UnifiedExportTools({
               >
                 <span className="button-icon"></span>
                 <span className="button-text">
-                  {isExporting ? "保存中..." : "保存高质量图片"}
+                  {isExporting ? "Saving..." : "Save Image"}
                 </span>
                 <div
                   className={`button-background ${
@@ -292,7 +292,7 @@ export default function UnifiedExportTools({
               >
                 <span className="button-icon"></span>
                 <span className="button-text">
-                  {isExporting ? "导出中..." : "导出为GLB格式"}
+                  {isExporting ? "Exporting..." : "Export as GLB format"}
                 </span>
                 <div
                   className={`button-background ${
@@ -308,7 +308,7 @@ export default function UnifiedExportTools({
               >
                 <span className="button-icon"></span>
                 <span className="button-text">
-                  {isExporting ? "导出中..." : "导出为GLTF格式"}
+                  {isExporting ? "Exporting..." : "Export as GLTF format"}
                 </span>
                 <div
                   className={`button-background ${

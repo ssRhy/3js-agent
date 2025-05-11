@@ -1477,7 +1477,88 @@ export default function ThreeCodeEditor() {
     }
   };
 
-  // Modify the handleGenerate function to include scene capture
+  // Function to generate Three.js code from the current scene state
+  const generateCodeFromSceneState = () => {
+    if (!threeRef.current) return null;
+
+    const { scene, dynamicGroup } = threeRef.current;
+    if (!scene || !dynamicGroup) return null;
+
+    // Retrieve the original code structure
+    const originalCode = code;
+
+    // Try to get manipulated objects data from window object
+    let manipulatedObjects: {
+      name: string;
+      uuid: string;
+      position: number[];
+      rotation: number[];
+      scale: number[];
+    }[] = [];
+
+    try {
+      // @ts-expect-error - accessing custom property set in ObjectManipulationControls
+      const lastManipulatedData = window._lastManipulatedObjects;
+      if (lastManipulatedData) {
+        manipulatedObjects = JSON.parse(lastManipulatedData);
+      }
+    } catch (err) {
+      console.warn("Could not parse manipulated objects data:", err);
+    }
+
+    // If no manipulated objects found, return original code
+    if (!manipulatedObjects.length) {
+      console.log(
+        "[CodeGen] No manipulated objects data found, using original code"
+      );
+      return null;
+    }
+
+    console.log("[CodeGen] Generating code with updated object positions...");
+
+    // Create a modified version of the code with updated positions
+    let newCode = originalCode;
+
+    // Create position update code for each manipulated object
+    const positionUpdateCode = manipulatedObjects
+      .map((obj) => {
+        const safeObjName = obj.name.replace(/[^a-zA-Z0-9_]/g, "_");
+        // Format position values with 3 decimal places
+        const position = obj.position
+          .map((v) => parseFloat(v.toFixed(3)))
+          .join(", ");
+        const rotation = obj.rotation
+          .map((v) => parseFloat(v.toFixed(3)))
+          .join(", ");
+        const scale = obj.scale.map((v) => parseFloat(v.toFixed(3))).join(", ");
+
+        return `  // Update position for ${obj.name}
+  const ${safeObjName} = scene.getObjectByName("${obj.name}");
+  if (${safeObjName}) {
+    ${safeObjName}.position.set(${position});
+    ${safeObjName}.rotation.set(${rotation});
+    ${safeObjName}.scale.set(${scale});
+  }`;
+      })
+      .join("\n\n");
+
+    // Insert position update code into the current code
+    if (newCode.includes("return scene;")) {
+      // Insert before the return statement
+      newCode = newCode.replace(
+        "return scene;",
+        `${positionUpdateCode}\n\n  return scene;`
+      );
+    } else {
+      // Append at the end of the function
+      newCode = newCode.replace(/}(?=[^}]*$)/, `\n${positionUpdateCode}\n\n}`);
+    }
+
+    console.log("[CodeGen] Generated code with updated object positions");
+    return newCode;
+  };
+
+  // Modify the handleGenerate function to include current scene code
   const handleGenerate = async () => {
     if (isLoading || isModelLoading) return;
 
@@ -1490,6 +1571,16 @@ export default function ThreeCodeEditor() {
       setAllModelUrls((prev) =>
         prev.map((item) => ({ ...item, lastUsed: new Date() }))
       );
+
+      // Generate code from current scene state after manual object manipulation
+      const currentSceneCode = generateCodeFromSceneState();
+
+      // If we successfully generated code from the scene, use it for the request
+      if (currentSceneCode) {
+        console.log(
+          "[Generate] Using code with updated object positions from manual manipulation"
+        );
+      }
 
       // 捕获当前场景状态
       const currentSceneState = await captureSceneStateForChromaDB();
@@ -1525,7 +1616,8 @@ export default function ThreeCodeEditor() {
       // 创建请求负载
       const payload: RequestPayload = {
         action: "analyze-screenshot",
-        code: code,
+        // Use the code generated from scene state if available, otherwise use editor code
+        code: currentSceneCode || code,
         prompt: prompt,
         lintErrors: lintErrors,
         renderingComplete: renderingCompleteRef.current,
@@ -1541,9 +1633,10 @@ export default function ThreeCodeEditor() {
 
       console.log("[Generate] 发送请求到后端...", {
         prompt,
-        codeLength: code.length,
+        codeLength: payload.code.length,
         hasScreenshot: !!screenshotDataUrl,
         sceneStateSize: currentSceneState?.length || 0,
+        usingManuallyCorrectedCode: !!currentSceneCode,
       });
 
       // 发送请求到后端
@@ -1788,6 +1881,46 @@ export default function ThreeCodeEditor() {
         }
       };
     }
+  }, []);
+
+  // Clean up manipulated objects data when component unmounts
+  useEffect(() => {
+    return () => {
+      try {
+        // @ts-expect-error - accessing custom property set in ObjectManipulationControls
+        delete window._lastManipulatedObjects;
+      } catch (err) {
+        console.error("Failed to clean up manipulated objects data:", err);
+      }
+    };
+  }, []);
+
+  // Add listener for manipulated objects to show notification
+  useEffect(() => {
+    const handleManipulationEvent = () => {
+      // Check if manipulated objects data exists
+      try {
+        // @ts-expect-error - accessing custom property set in ObjectManipulationControls
+        const lastManipulatedData = window._lastManipulatedObjects;
+        if (lastManipulatedData) {
+          // Show a temporary success message
+          setSuccess("物体位置已更新 - 点击生成按钮将使用新位置");
+          // Clear the message after 3 seconds
+          setTimeout(() => {
+            setSuccess("");
+          }, 3000);
+        }
+      } catch (err) {
+        console.warn("Could not check for manipulated objects:", err);
+      }
+    };
+
+    // Add a custom event listener for object manipulation completed
+    window.addEventListener("object-manipulated", handleManipulationEvent);
+
+    return () => {
+      window.removeEventListener("object-manipulated", handleManipulationEvent);
+    };
   }, []);
 
   // 在组件初始化时将操作模式设置为永久启用

@@ -45,6 +45,84 @@ export default function ObjectManipulationControls() {
   const dragControlsRef = useRef<DragControls | null>(null);
   const raycasterRef = useRef<THREE.Raycaster>(new THREE.Raycaster());
 
+  // Function to log position data to console for code generation
+  const logObjectPositionsToConsole = useCallback(() => {
+    if (!selectedObjects.length && !selectedObject) return;
+
+    console.log("// Scene objects after manipulation:");
+    console.log(
+      "// This code reflects the current state of manipulated objects"
+    );
+
+    // Log position data for all selected objects
+    const objectsToLog =
+      selectedObjects.length > 0
+        ? selectedObjects
+        : selectedObject
+        ? [selectedObject]
+        : [];
+
+    objectsToLog.forEach((obj) => {
+      if (!obj) return;
+
+      const objName = obj.name || `object_${obj.uuid.substring(0, 6)}`;
+      const safeObjName = objName.replace(/[^a-zA-Z0-9_]/g, "_");
+
+      // Format position values to 3 decimal places
+      const position = [
+        obj.position.x.toFixed(3),
+        obj.position.y.toFixed(3),
+        obj.position.z.toFixed(3),
+      ].join(", ");
+
+      // Format rotation values to 3 decimal places
+      const rotation = [
+        obj.rotation.x.toFixed(3),
+        obj.rotation.y.toFixed(3),
+        obj.rotation.z.toFixed(3),
+      ].join(", ");
+
+      // Format scale values to 3 decimal places
+      const scale = [
+        obj.scale.x.toFixed(3),
+        obj.scale.y.toFixed(3),
+        obj.scale.z.toFixed(3),
+      ].join(", ");
+
+      console.log(`// ${objName} (${obj.type})`);
+      console.log(
+        `const ${safeObjName} = scene.getObjectByName("${objName}");`
+      );
+      console.log(`if (${safeObjName}) {`);
+      console.log(`  ${safeObjName}.position.set(${position});`);
+      console.log(`  ${safeObjName}.rotation.set(${rotation});`);
+      console.log(`  ${safeObjName}.scale.set(${scale});`);
+      console.log(`}`);
+      console.log("");
+    });
+
+    // Log full scene state at the end
+    console.log("// Full scene state captured");
+    // Store last manipulation data in window for later use by code generator
+    try {
+      // @ts-expect-error - custom property to store manipulated object data
+      window._lastManipulatedObjects = JSON.stringify(
+        objectsToLog.map((obj) => ({
+          name: obj.name || `object_${obj.uuid.substring(0, 6)}`,
+          uuid: obj.uuid,
+          position: [obj.position.x, obj.position.y, obj.position.z],
+          rotation: [obj.rotation.x, obj.rotation.y, obj.rotation.z],
+          scale: [obj.scale.x, obj.scale.y, obj.scale.z],
+        }))
+      );
+
+      // Dispatch custom event to notify ThreeCodeEditor component
+      window.dispatchEvent(new CustomEvent("object-manipulated"));
+    } catch (err) {
+      console.error("Failed to store manipulated objects data:", err);
+    }
+  }, [selectedObjects, selectedObject]);
+
   // Find the parent object that should be selected (usually a model or group)
   const findSelectableParent = useCallback(
     (object: THREE.Object3D): THREE.Object3D => {
@@ -317,6 +395,13 @@ export default function ObjectManipulationControls() {
       }
     });
 
+    // Log position changes when manipulation ends
+    transformControls.addEventListener("mouseUp", () => {
+      if (selectedObject || selectedObjects.length > 0) {
+        logObjectPositionsToConsole();
+      }
+    });
+
     transformControls.setMode(transformMode);
     scene.add(transformControls);
     transformControlsRef.current = transformControls;
@@ -519,6 +604,7 @@ export default function ObjectManipulationControls() {
             "objectChange",
             () => {}
           );
+          transformControlsRef.current.removeEventListener("mouseUp", () => {});
           transformControlsRef.current.detach();
           transformControlsRef.current.dispose();
           transformControlsRef.current.removeFromParent();
@@ -553,6 +639,7 @@ export default function ObjectManipulationControls() {
     selectedObjects,
     removeHighlight,
     selectObject,
+    logObjectPositionsToConsole,
   ]);
 
   // Update transform controls when selected object changes
@@ -650,7 +737,7 @@ export default function ObjectManipulationControls() {
 
   return (
     <div className="controls-container">
-      <div className="controls-header">物体操作控制</div>
+      <div className="controls-header">Manipulation Controls</div>
 
       <div className="control-buttons">
         <button
@@ -659,7 +746,7 @@ export default function ObjectManipulationControls() {
           }`}
           onClick={() => setTransformMode("translate")}
         >
-          <span>↔ 移动</span>
+          <span>↔ Move</span>
         </button>
 
         <button
@@ -668,7 +755,7 @@ export default function ObjectManipulationControls() {
           }`}
           onClick={() => setTransformMode("rotate")}
         >
-          <span>⟳ 旋转</span>
+          <span>⟳ Rotate</span>
         </button>
 
         <button
@@ -677,7 +764,7 @@ export default function ObjectManipulationControls() {
           }`}
           onClick={() => setTransformMode("scale")}
         >
-          <span>⤧ 缩放</span>
+          <span>⤧ Scale</span>
         </button>
 
         <div className="group-buttons">
@@ -686,7 +773,7 @@ export default function ObjectManipulationControls() {
             onClick={handleGroupSelected}
             disabled={selectedObjects.length < 2}
           >
-            <span>组合</span>
+            <span>Group</span>
           </button>
 
           <button
@@ -694,7 +781,7 @@ export default function ObjectManipulationControls() {
             onClick={handleUngroup}
             disabled={!selectedObject || selectedObject.children.length === 0}
           >
-            <span>解组</span>
+            <span>Ungroup</span>
           </button>
         </div>
       </div>
@@ -704,19 +791,19 @@ export default function ObjectManipulationControls() {
           className="deselect-button"
           onClick={() => handleObjectSelection(null)}
         >
-          取消选择
+          Deselect
         </button>
       </div>
 
-      <div className="info-text">点击场景中的物体进行选择</div>
+      <div className="info-text">Click on objects in the scene to select</div>
 
       {selectedObjects.length > 0 && (
         <div className="selection-info">
-          已选择 {selectedObjects.length} 个对象
+          Selected {selectedObjects.length} objects
         </div>
       )}
 
-      <div className="info-text">按住 Shift 可选择多个对象</div>
+      <div className="info-text">Hold Shift to select multiple objects</div>
 
       <style jsx>{`
         .controls-container {
