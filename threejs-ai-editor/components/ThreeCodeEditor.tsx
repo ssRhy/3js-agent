@@ -198,6 +198,7 @@ export default function ThreeCodeEditor() {
     serializeSceneState,
     isDraggingOrSelecting,
     setIsDraggingOrSelecting,
+    registerObject,
   } = useSceneStore();
 
   // Add rendering complete flag
@@ -208,6 +209,10 @@ export default function ThreeCodeEditor() {
 
   // 定义diff变量
   const [diff] = useState("");
+
+  // 在状态定义部分添加一个新状态
+  const [showUpdateCodeReminder, setShowUpdateCodeReminder] =
+    useState<boolean>(false);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -1066,6 +1071,32 @@ export default function ThreeCodeEditor() {
             setupContext // 新增参数，传入模型上下文
           );
 
+          // After setupFn executes, register all objects in dynamicGroup
+          if (dynamicGroup) {
+            console.log(
+              "[RegisterObjects] Registering objects in dynamicGroup"
+            );
+            // Traverse all objects in dynamicGroup and register them
+            dynamicGroup.traverse((object) => {
+              // Skip the dynamicGroup itself
+              if (object === dynamicGroup) return;
+
+              // Register object and get its UUID back
+              const objectUuid = registerObject(object, object.type || "mesh");
+              console.log(
+                `[RegisterObjects] Registered: ${
+                  object.name || "unnamed"
+                } (${objectUuid})`
+              );
+            });
+
+            // Try serializing again after registration
+            const sceneState = serializeSceneState();
+            console.log(
+              `[RegisterObjects] After registration: ${sceneState.length} objects in scene state`
+            );
+          }
+
           // 记录场景状态变化但不保存到服务器
           try {
             // 仅在存在场景状态序列化函数时记录状态
@@ -1477,110 +1508,21 @@ export default function ThreeCodeEditor() {
     }
   };
 
-  // Function to generate Three.js code from the current scene state
-  const generateCodeFromSceneState = () => {
-    if (!threeRef.current) return null;
-
-    const { scene, dynamicGroup } = threeRef.current;
-    if (!scene || !dynamicGroup) return null;
-
-    // Retrieve the original code structure
-    const originalCode = code;
-
-    // Try to get manipulated objects data from window object
-    let manipulatedObjects: {
-      name: string;
-      uuid: string;
-      position: number[];
-      rotation: number[];
-      scale: number[];
-    }[] = [];
-
-    try {
-      // @ts-expect-error - accessing custom property set in ObjectManipulationControls
-      const lastManipulatedData = window._lastManipulatedObjects;
-      if (lastManipulatedData) {
-        manipulatedObjects = JSON.parse(lastManipulatedData);
-      }
-    } catch (err) {
-      console.warn("Could not parse manipulated objects data:", err);
-    }
-
-    // If no manipulated objects found, return original code
-    if (!manipulatedObjects.length) {
-      console.log(
-        "[CodeGen] No manipulated objects data found, using original code"
-      );
-      return null;
-    }
-
-    console.log("[CodeGen] Generating code with updated object positions...");
-
-    // Create a modified version of the code with updated positions
-    let newCode = originalCode;
-
-    // Create position update code for each manipulated object
-    const positionUpdateCode = manipulatedObjects
-      .map((obj) => {
-        const safeObjName = obj.name.replace(/[^a-zA-Z0-9_]/g, "_");
-        // Format position values with 3 decimal places
-        const position = obj.position
-          .map((v) => parseFloat(v.toFixed(3)))
-          .join(", ");
-        const rotation = obj.rotation
-          .map((v) => parseFloat(v.toFixed(3)))
-          .join(", ");
-        const scale = obj.scale.map((v) => parseFloat(v.toFixed(3))).join(", ");
-
-        return `  // Update position for ${obj.name}
-  const ${safeObjName} = scene.getObjectByName("${obj.name}");
-  if (${safeObjName}) {
-    ${safeObjName}.position.set(${position});
-    ${safeObjName}.rotation.set(${rotation});
-    ${safeObjName}.scale.set(${scale});
-  }`;
-      })
-      .join("\n\n");
-
-    // Insert position update code into the current code
-    if (newCode.includes("return scene;")) {
-      // Insert before the return statement
-      newCode = newCode.replace(
-        "return scene;",
-        `${positionUpdateCode}\n\n  return scene;`
-      );
-    } else {
-      // Append at the end of the function
-      newCode = newCode.replace(/}(?=[^}]*$)/, `\n${positionUpdateCode}\n\n}`);
-    }
-
-    console.log("[CodeGen] Generated code with updated object positions");
-    return newCode;
-  };
-
-  // Modify the handleGenerate function to include current scene code
+  // Modify the handleGenerate function to include scene capture
   const handleGenerate = async () => {
     if (isLoading || isModelLoading) return;
 
     setIsLoading(true);
     setError("");
     setSuccess("");
+    // 重置提示状态
+    setShowUpdateCodeReminder(false);
 
     try {
       // 更新allModelUrls中的最后使用时间
       setAllModelUrls((prev) =>
         prev.map((item) => ({ ...item, lastUsed: new Date() }))
       );
-
-      // Generate code from current scene state after manual object manipulation
-      const currentSceneCode = generateCodeFromSceneState();
-
-      // If we successfully generated code from the scene, use it for the request
-      if (currentSceneCode) {
-        console.log(
-          "[Generate] Using code with updated object positions from manual manipulation"
-        );
-      }
 
       // 捕获当前场景状态
       const currentSceneState = await captureSceneStateForChromaDB();
@@ -1616,8 +1558,7 @@ export default function ThreeCodeEditor() {
       // 创建请求负载
       const payload: RequestPayload = {
         action: "analyze-screenshot",
-        // Use the code generated from scene state if available, otherwise use editor code
-        code: currentSceneCode || code,
+        code: code,
         prompt: prompt,
         lintErrors: lintErrors,
         renderingComplete: renderingCompleteRef.current,
@@ -1633,10 +1574,9 @@ export default function ThreeCodeEditor() {
 
       console.log("[Generate] 发送请求到后端...", {
         prompt,
-        codeLength: payload.code.length,
+        codeLength: code.length,
         hasScreenshot: !!screenshotDataUrl,
         sceneStateSize: currentSceneState?.length || 0,
-        usingManuallyCorrectedCode: !!currentSceneCode,
       });
 
       // 发送请求到后端
@@ -1883,46 +1823,6 @@ export default function ThreeCodeEditor() {
     }
   }, []);
 
-  // Clean up manipulated objects data when component unmounts
-  useEffect(() => {
-    return () => {
-      try {
-        // @ts-expect-error - accessing custom property set in ObjectManipulationControls
-        delete window._lastManipulatedObjects;
-      } catch (err) {
-        console.error("Failed to clean up manipulated objects data:", err);
-      }
-    };
-  }, []);
-
-  // Add listener for manipulated objects to show notification
-  useEffect(() => {
-    const handleManipulationEvent = () => {
-      // Check if manipulated objects data exists
-      try {
-        // @ts-expect-error - accessing custom property set in ObjectManipulationControls
-        const lastManipulatedData = window._lastManipulatedObjects;
-        if (lastManipulatedData) {
-          // Show a temporary success message
-          setSuccess("物体位置已更新 - 点击生成按钮将使用新位置");
-          // Clear the message after 3 seconds
-          setTimeout(() => {
-            setSuccess("");
-          }, 3000);
-        }
-      } catch (err) {
-        console.warn("Could not check for manipulated objects:", err);
-      }
-    };
-
-    // Add a custom event listener for object manipulation completed
-    window.addEventListener("object-manipulated", handleManipulationEvent);
-
-    return () => {
-      window.removeEventListener("object-manipulated", handleManipulationEvent);
-    };
-  }, []);
-
   // 在组件初始化时将操作模式设置为永久启用
   useEffect(() => {
     // 确保操作模式始终为启用状态
@@ -1931,6 +1831,14 @@ export default function ThreeCodeEditor() {
       console.log("操作模式已自动启用");
     }
   }, [isDraggingOrSelecting, setIsDraggingOrSelecting]);
+
+  // 在组件中添加监听用户操作的效果
+  useEffect(() => {
+    // 当用户选择或拖动物体时显示提示
+    if (isDraggingOrSelecting) {
+      setShowUpdateCodeReminder(true);
+    }
+  }, [isDraggingOrSelecting]);
 
   return (
     <div className="editor-container">
@@ -1999,10 +1907,15 @@ export default function ThreeCodeEditor() {
         <div className="status-section">
           {error && <div className="error">{error}</div>}
           {success && <div className="success">{success}</div>}
+          {showUpdateCodeReminder && (
+            <div className="update-reminder">
+              <span>📝 物体位置已变更，点击&quot;生成&quot;按钮更新代码</span>
+            </div>
+          )}
           {isModelLoading && (
             <div className="loading-model">
               <span className="loading-spinner"></span>
-              <span>加载3D模型中...</span>
+              <span>Loading 3D Modeling...</span>
             </div>
           )}
         </div>
@@ -2016,7 +1929,7 @@ export default function ThreeCodeEditor() {
         )}
 
         <div className="code-section">
-          <h3 className="code-header">Three.js 场景代码</h3>
+          <h3 className="code-header">Three.js Scene Code</h3>
           <Editor
             height="100%"
             defaultLanguage="javascript"
@@ -2055,7 +1968,7 @@ export default function ThreeCodeEditor() {
       {lintOverlayVisible && lintErrors.length > 0 && (
         <div className="lint-overlay">
           <div className="lint-overlay-content">
-            <h3>ESLint 检查结果</h3>
+            <h3>ESLint Result</h3>
             <button
               onClick={() => setLintOverlayVisible(false)}
               className="close-button"
@@ -2584,6 +2497,19 @@ export default function ThreeCodeEditor() {
             right: 20px;
             transform: translateY(-50%);
           }
+        }
+
+        .update-reminder {
+          display: flex;
+          align-items: center;
+          background-color: rgba(35, 126, 35, 0.2);
+          color: #aaddaa;
+          padding: 6px 10px;
+          margin: 6px 0;
+          border-radius: 3px;
+          border-left: 3px solid #5f5;
+          animation: fadeIn 0.3s ease;
+          font-size: 12px;
         }
       `}</style>
     </div>

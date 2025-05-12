@@ -63,6 +63,38 @@ async function formatModelHistoryForPrompt(): Promise<string> {
   return "";
 }
 
+// Format scene state information for inclusion in prompts
+function formatSceneStateForPrompt(
+  sceneState: Record<string, unknown>[]
+): string {
+  if (!sceneState || !Array.isArray(sceneState) || sceneState.length === 0) {
+    return "";
+  }
+
+  return (
+    "\n# Current Scene State (EXACT POSITIONS)\n" +
+    "重要提示：以下是场景中对象的准确位置信息。在生成代码时，必须使用这些确切的位置、旋转和缩放值，而不是编辑器中的旧值。\n" +
+    "CRITICAL: Below are the EXACT positions, rotations, and scales of objects in the scene. You MUST use these values when generating code:\n" +
+    sceneState
+      .map((obj) => {
+        const name = obj.name || `object_${obj.id}`;
+        const position = Array.isArray(obj.position)
+          ? obj.position.join(", ")
+          : "0, 0, 0";
+        const rotation = Array.isArray(obj.rotation)
+          ? obj.rotation.join(", ")
+          : "0, 0, 0";
+        const scale = Array.isArray(obj.scale)
+          ? obj.scale.join(", ")
+          : "1, 1, 1";
+
+        return `- ${name} (${obj.type}): position=[${position}], rotation=[${rotation}], scale=[${scale}]`;
+      })
+      .join("\n") +
+    "\n\nThese values represent the current state of objects after user manipulation. You MUST use these exact values in your generated code."
+  );
+}
+
 /**
  * Code Generation Tool - Generates initial Three.js code or fixes existing code based on errors
  */
@@ -74,8 +106,14 @@ export const codeGenTool = new DynamicStructuredTool({
     instruction: z
       .string()
       .describe("Description of functionality to implement or issues to fix"),
+    sceneState: z
+      .array(z.record(z.unknown()))
+      .optional()
+      .describe(
+        "Current state of objects in the scene with exact positions, rotations and scales"
+      ),
   }),
-  func: async ({ instruction }) => {
+  func: async ({ instruction, sceneState }) => {
     const requestId = `codegen_${Date.now()}`;
     const startTime = Date.now();
     console.log(
@@ -87,6 +125,13 @@ export const codeGenTool = new DynamicStructuredTool({
         100
       )}${instruction.length > 100 ? "..." : ""}"`
     );
+
+    // Log scene state information
+    if (sceneState && Array.isArray(sceneState)) {
+      console.log(
+        `[${requestId}] [CodeGen Tool] 🔄 Received scene state with ${sceneState.length} objects`
+      );
+    }
 
     // Detect if request is from screenshot analysis
     const isFromScreenshotAnalysis =
@@ -115,11 +160,25 @@ export const codeGenTool = new DynamicStructuredTool({
         } models`
       );
 
+      // Format scene state information
+      const sceneStateSection = sceneState
+        ? formatSceneStateForPrompt(sceneState)
+        : "";
+      if (sceneStateSection) {
+        console.log(
+          `[${requestId}] [CodeGen Tool] 📊 Formatted scene state data for ${
+            Array.isArray(sceneState) ? sceneState.length : 0
+          } objects`
+        );
+      }
+
       const prompt = `As a Three.js expert, please generate or fix code based on the following instructions:
 
 ${instruction}
 
 ${modelHistorySection}
+
+${sceneStateSection}
 
 Requirements:
 Do not assume any models or URLs
@@ -140,7 +199,7 @@ Do not assume any models or URLs
 15. When deleting objects, ensure they are correctly removed from the scene or their parent object (using parent.remove(object))
 16. Don't omit any code
 17. Generate new code based on the code above
-
+18. CRITICAL: If scene state data is provided, you MUST use those exact positions, rotations, and scales in your code. These represent the current state after user manipulation.
 
 ⚠️ Note: Your answer must only contain executable Three.js code. Don't include any explanations, thought processes, or descriptive text. Don't use markdown code block markers. Don't add any prefixes or suffixes. Directly return executable setup function code.`;
 
@@ -237,7 +296,6 @@ Do not assume any models or URLs
       console.log(
         `[${requestId}] [CodeGen Tool] 🔍 Validating URLs in code...`
       );
-      const validationStartTime = Date.now();
       const validatedCode = await ensureValidUrlsInCode(improvedCode);
 
       if (validatedCode !== improvedCode) {
@@ -250,50 +308,22 @@ Do not assume any models or URLs
           `[${requestId}] [CodeGen Tool] ✅ All URLs in code validated successfully`
         );
       }
+
+      const endTime = Date.now();
       console.log(
-        `[${requestId}] [CodeGen Tool] URL validation time: ${
-          Date.now() - validationStartTime
+        `[${requestId}] [CodeGen Tool] ✅ Code generation complete, total time taken: ${
+          endTime - startTime
         }ms`
       );
 
-      const totalTime = Date.now() - startTime;
-      console.log(
-        `[${requestId}] [CodeGen Tool] 🏁 Code generation complete, total time: ${totalTime}ms, code length: ${improvedCode.length} characters`
-      );
-
-      if (isFromScreenshotAnalysis) {
-        console.log(
-          `[${requestId}] [CodeGen Tool] 🔄 Completed code fix based on screenshot analysis`
-        );
-      }
-
-      // Return generated code
-      const finalResponse = JSON.stringify({
-        code: improvedCode,
-        originalCode: originalCode,
-        status: "success",
-        message: "Successfully generated Three.js code",
-        isFirstGeneration: true,
-      });
-
-      // After code generation, add a hint to the agent about object persistence
-      const sceneState = {
-        // Add scene state extraction logic here
-      };
-      const userPrompt = instruction;
-      const persistenceHint =
-        `\n\n// Note: After generating code, call the write_to_chroma tool to save scene objects to ChromaDB\n` +
-        `// Example: { \"tool\": \"write_to_chroma\", \"params\": { \"objects\": ${JSON.stringify(
-          sceneState
-        )}, \"prompt\": "${userPrompt}" } }`;
-
-      return finalResponse + persistenceHint;
+      // Return the clean code
+      return improvedCode;
     } catch (error) {
-      const totalTime = Date.now() - startTime;
       console.error(
-        `[${requestId}] [CodeGen Tool] ❌ Code generation failed, error: ${error}, time: ${totalTime}ms`
+        `[${requestId}] [CodeGen Tool] 🔴 Error generating code:`,
+        error
       );
-      throw error;
+      throw new Error(`Code generation failed: ${error}`);
     }
   },
 });

@@ -552,13 +552,36 @@ export async function runAgentLoop(
       systemInstructions =
         "你必须按照增量更新流程工作：\n" +
         "步骤1: 调用analyze_screenshot工具分析当前场景\n" +
-        "步骤2: 根据分析结果，生成改进代码（generate_fix_code）\n" +
+        "步骤2: 根据分析结果，使用generate_fix_code工具生成改进代码，必须将sceneState参数传递给此工具，以确保使用准确的对象位置\n" +
         "步骤3: 使用apply_patch工具应用增量更新，而不是替换整个代码\n" +
         "步骤4: 使用write_to_chroma工具将场景中的对象保存到持久化存储中，确保包含完整的几何体、材质和变换信息";
     } else {
       systemInstructions =
         "按照增量更新流程工作，根据用户需求生成或优化Three.js代码。\n" +
+        "重要提示：使用generate_fix_code工具时，必须将sceneState参数传递给该工具，以确保使用准确的对象位置信息。\n" +
+        "如果用户手动移动了场景中的物体，sceneState包含了这些物体的准确位置、旋转和缩放信息，必须在生成代码时使用这些确切的值。\n" +
         "在完成场景修改后，务必使用write_to_chroma工具将所有重要对象保存到持久化存储中，确保包含完整的几何体、材质和变换信息，以便未来可以准确重建这些对象。";
+    }
+
+    // 在执行代理之前打印关键提示信息
+    if (sceneState && sceneState.length > 0) {
+      console.log(
+        `[${requestId}] Agent execution will prioritize sceneState for ${sceneState.length} objects over editor code`
+      );
+
+      // 记录几个对象的位置信息作为样例，用于调试
+      const sampleObjects = sceneState.slice(0, Math.min(3, sceneState.length));
+      sampleObjects.forEach((obj, index) => {
+        console.log(
+          `[${requestId}] Object ${index + 1} sample: ${
+            obj.name || obj.id
+          }, position: ${
+            Array.isArray(obj.position)
+              ? `[${obj.position.join(", ")}]`
+              : "undefined"
+          }`
+        );
+      });
     }
 
     // 保持现有的agent执行和结果处理逻辑

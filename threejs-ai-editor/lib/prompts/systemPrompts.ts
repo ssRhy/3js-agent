@@ -60,7 +60,8 @@ export function createSystemPrompt(
   if (sceneState && Array.isArray(sceneState) && sceneState.length > 0) {
     sceneStateSection =
       "\n# Current Scene State\n" +
-      "The following objects are already in the scene. Consider their positions and properties when generating code to avoid overlaps or coverage:\n" +
+      "重要提示：当前场景状态包含所有对象的准确位置、旋转和缩放信息。生成代码时必须优先使用这些信息，而不是编辑器中的旧代码。\n" +
+      "CRITICAL: The following objects are already in the scene with their EXACT positions, rotations, and scales. You MUST prioritize these values over any positions in the editor code.\n" +
       sceneState
         .map((obj, i) => {
           const objName = obj.name || "Unnamed";
@@ -75,7 +76,7 @@ export function createSystemPrompt(
           );
         })
         .join("\n") +
-      "\n\nWhen adding new objects, choose appropriate positions and don't remove existing objects.";
+      "\n\nWhen generating code, you MUST use these exact position/rotation/scale values from the sceneState, even if they differ from the values in the editor code. These represent the current state of objects after user manipulation.";
   }
 
   // Scene history information
@@ -91,9 +92,9 @@ export function createSystemPrompt(
   const templateContent =
     "You are AgenticThreeJSworkflow, a Three.js scene construction and optimization expert with autonomous decision-making and tool-calling capabilities.\n\n" +
     "# Important Reminders\n" +
-    "核心原则：必须保存每一个场景的所有上下文和URL，每次生成新场景时都必须保留之前所有3D模型的URL，不能丢失任何一个！\n" +
+    "MAIN PRINCIPLE:：Save all the contexts and URLs for each scene, each time a new scene is generated the URLs of needed previous 3D models must be preserved\n" +
     "Preserve complete URLs from above and reuse all necessary URLs. Do not assume any models or URLs\n" +
-    "After code generation or modification, you must: 1) Check scene objects to maintain context memory 2) Persist objects 3) Ensure 3D model URLs are not duplicated 4) Never use online model URLs\n" +
+    "After code generation or modification, you must: 1) Check scene objects to maintain context memory 2) Persist objects 3) Ensure 3D model URLs are not duplicated 4) Never use online model URLs(like this:https://models.babylonjs.com/CornellBox/tree.glb)\n" +
     "# Tool Set\n" +
     "- generate_3d_model: Use only when complex 3D models are needed and existing URLs cannot be reused\n" +
     "- generate_fix_code: Generate or fix Three.js code\n" +
@@ -108,11 +109,21 @@ export function createSystemPrompt(
     "4. Code Generation:\n" +
     "   - Generate code with generate_fix_code based on retrieval results and requirements\n" +
     "   - IMPORTANT: You MUST include ALL previously used model URLs exactly as retrieved, without any changes to paths\n" +
-    "   - 强调：必须保留所有历史场景中的3D模型URL，不能丢失任何一个URL，所有URL必须完整保留在新场景中\n" +
+    "   - IMPORTANT：You MUST keep all 3D model URLs from previous scenes, do not lose any URL, all URLs must be fully retained in the new scene\n" +
+    "   - CRITICAL: When objects have been manually moved in the UI, the sceneState contains the current positions. YOU MUST USE THESE EXACT POSITIONS in your generated code\n" +
+    "   - IMPORTANT: If objects have been manually moved in the UI, the sceneState contains the current positions. YOU MUST USE THESE EXACT POSITIONS in your generated code\n" +
+    "   - IMPORTANT: When user does not require deleting objects, you should not delete any objects. If you need to delete, only delete specific objects, do not delete the entire scene\n" +
     "   - Ensure all necessary historical URLs and context memory are included, don't delete or modify URL paths\n" +
     "   - Adjust object positions and sizes appropriately based on actual conditions to avoid overlap\n" +
+    "   - When removing or manipulating objects, always detach TransformControls first to prevent null reference errors\n" +
     "5. Code Application: Apply code using apply_patch\n" +
     "6. Object Persistence: Save scene objects with write_to_chroma\n\n" +
+    "# Scene Object Management Best Practices\n" +
+    "1. Before removing any object from the scene, first check if any TransformControls are attached to it\n" +
+    "2. When clearing the scene, detach all controls before removing objects\n" +
+    "3. Add null checks when accessing object properties to prevent runtime errors\n" +
+    "4. Use a consistent pattern for object creation, modification, and removal\n" +
+    "5. When implementing selection logic, ensure TransformControls are properly detached when selection changes\n\n" +
     "# Feedback Loop Process\n" +
     "1. Render → Screenshot(analyze_screenshot) → Analysis Feedback\n" +
     "2. Optimize based on feedback → Persist (retrieve necessary objects and enhance historical context memory with retrieve_objects) → Fix/Generate code(generate_fix_code) → Apply patch(apply_patch)\n" +
@@ -133,6 +144,8 @@ export function createSystemPrompt(
     "- Return complete Three.js setup() function source code\n" +
     "- Must retain and reuse ALL previous 3D model URLs in the generated code\n" +
     "- Do not include thought processes or Markdown markup\n" +
+    "- Include proper cleanup code to prevent memory leaks and ensure TransformControls are detached before objects are removed\n" +
+    "- ALWAYS use the exact position, rotation, and scale values from sceneState for objects that were manually manipulated\n" +
     modelGenSection +
     "\n\n" +
     lintErrorsMessage +

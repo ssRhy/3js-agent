@@ -1,0 +1,29 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+/**
+ * 构建思路（ HTTP 实现）：
+ * 1. 页面结构（Next.js Page Router）
+ *    - `pages/index.js`：前端主页面，包含 UI 组件和逻辑。
+ *    - `pages/api/agent.ts`：API 路由，接收前端上传的代码与日志，调用 Agent 并返回新脚本和场景对象。
+ *    - `pages/api/agentHandler.ts`：实际处理 agent 请求的处理器。
+ *    - `lib/tools/codeGenTool.ts`：Agent 工具，负责生成和修复 Three.js 代码。
+ *    - `pages/api/store-scene.js`：API 路由，将 Agent 返回的新场景对象序列化后，存入 ChromaDB。
+ *
+ * 2. 前端流程
+ *    a. 日志 & 事件收集：组件挂载时重写 `console.log` 缓存日志；在 Three.js 回调中监听物件位置/状态变更，生成代码并记录到 `window._consoleCodeBuffer`。
+ *    b. 脚本抓取：用户点击"生成下一版"按钮时，抓取当前编辑器代码，控制台捕获的代码 (`window._consoleCodeBuffer`)、`window._sceneState`。
+ *    c. 数据打包 & HTTP 调用：构建 `payload`，通过 `fetch('/api/agentHandler', { method: 'POST', body: JSON'})` 实时发送给 Agent。
+ *    d. 前端反馈：等待接口返回的 JSON，读取 `directCode` 并热替换。
+ *
+ * 3. Agent 调用流程
+ *    a. 接收请求：在 `pages/api/agentHandler.ts` 中解析前端 `payload`。
+ *    b. 上下文构建：利用 `code` + `consoleCode` + `sceneState` 构建 prompt，使用 LangChain 的 Agent 通过 codeGenTool 生成增量更新。
+ *    c. 返回结果：以 `{ directCode, modelUrls }` JSON 格式响应前端。
+ *
+ * 4. 后端持久化（ChromaDB）
+ *    a. 接收新场景：Agent 使用 ChromaDB 服务存储对象数据。
+
+ *    b. 向量化 & 存储：对每个物件的属性生成向量，使用 ChromaDB SDK 写入集合。
