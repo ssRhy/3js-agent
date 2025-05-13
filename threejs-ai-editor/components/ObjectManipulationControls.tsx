@@ -70,7 +70,7 @@ export default function ObjectManipulationControls() {
       // If clearing selection and not in multi-select mode, remove all highlights
       if (!object && (!event || !event.shiftKey)) {
         selectedObjects.forEach((obj) => {
-          if (obj) removeHighlight(obj);
+          if (obj && obj.parent) removeHighlight(obj);
         });
         selectObject(null);
         setSelectedObjects([]);
@@ -80,8 +80,9 @@ export default function ObjectManipulationControls() {
       // Skip if object is null (should only happen in multi-select mode)
       if (!object) return;
 
-      // Skip helper objects, outlines, and transform controls
+      // Skip invalid objects, helper objects, outlines, and transform controls
       if (
+        !object.parent ||
         object.userData?.isHelper ||
         object.userData?.isOutline ||
         object.userData?.isTransformControl
@@ -146,21 +147,24 @@ export default function ObjectManipulationControls() {
 
   // Add visual highlight to selected object
   const addHighlight = useCallback((object: THREE.Object3D) => {
-    if (!object) return;
+    if (!object || !object.parent) return;
 
     try {
       if (object instanceof THREE.Mesh) {
         // Only add highlight if not already highlighted and not an outline itself
         if (!object.userData.isHighlighted && !object.userData.isOutline) {
+          // Check if material exists and is valid
           const material = Array.isArray(object.material)
             ? object.material[0]
             : (object.material as THREE.Material);
+
+          if (!material) return;
 
           // Store original material properties
           if ("emissive" in material && material.emissive) {
             object.userData.originalEmissive = material.emissive.clone();
             material.emissive.set(0x333333);
-          } else if ("color" in material) {
+          } else if ("color" in material && material.color) {
             object.userData.originalColor = material.color.clone();
             const color = material.color.clone();
             color.r = Math.min(color.r + 0.2, 1.0);
@@ -172,7 +176,9 @@ export default function ObjectManipulationControls() {
           // Remove any old outline effect if it exists (cleanup)
           if (object.userData.outlineEffect) {
             try {
-              object.remove(object.userData.outlineEffect);
+              if (object.userData.outlineEffect.parent === object) {
+                object.remove(object.userData.outlineEffect);
+              }
             } catch (e) {
               console.warn("Could not remove old outline effect:", e);
             }
@@ -212,7 +218,8 @@ export default function ObjectManipulationControls() {
           if (
             child instanceof THREE.Mesh &&
             !child.userData.isOutline &&
-            !child.userData.isHelper
+            !child.userData.isHelper &&
+            child.parent // Add this check to verify the child has a parent
           ) {
             addHighlight(child);
           }
@@ -227,21 +234,32 @@ export default function ObjectManipulationControls() {
 
   // Remove highlight from object
   const removeHighlight = useCallback((object: THREE.Object3D) => {
-    if (!object) return;
+    if (!object || !object.parent) return;
 
     try {
       if (object instanceof THREE.Mesh) {
-        // Restore original material properties
+        // Check if material exists and is valid
         const material = Array.isArray(object.material)
           ? object.material[0]
           : (object.material as THREE.Material);
 
-        if (object.userData.originalEmissive && "emissive" in material) {
+        if (!material) return;
+
+        // Restore original material properties
+        if (
+          object.userData.originalEmissive &&
+          "emissive" in material &&
+          material.emissive
+        ) {
           material.emissive.copy(object.userData.originalEmissive);
           delete object.userData.originalEmissive;
         }
 
-        if (object.userData.originalColor && "color" in material) {
+        if (
+          object.userData.originalColor &&
+          "color" in material &&
+          material.color
+        ) {
           material.color.copy(object.userData.originalColor);
           delete object.userData.originalColor;
         }
@@ -263,7 +281,11 @@ export default function ObjectManipulationControls() {
       } else if (object instanceof THREE.Group) {
         // Remove highlight from all meshes in the group
         object.traverse((child) => {
-          if (child instanceof THREE.Mesh && !child.userData.isOutline) {
+          if (
+            child instanceof THREE.Mesh &&
+            !child.userData.isOutline &&
+            child.parent
+          ) {
             removeHighlight(child);
           }
         });
@@ -302,6 +324,30 @@ export default function ObjectManipulationControls() {
     transformControls.setSize(1.2);
     transformControls.userData.isTransformControl = true;
 
+    // Add a proxy method for attaching objects safely
+    const safeAttach = (object: THREE.Object3D | null) => {
+      // First detach to ensure we don't have any lingering references
+      transformControls.detach();
+
+      if (!object) return;
+
+      // Safety check: verify the object is still valid before attaching
+      if (
+        object.parent &&
+        !object.userData?.isHelper &&
+        !object.userData?.isOutline &&
+        typeof object.updateMatrixWorld === "function"
+      ) {
+        // Only attach if object is valid
+        transformControls.attach(object);
+      } else {
+        console.warn("Cannot attach transform controls to invalid object");
+        // Signal that selection needs to be cleared
+        selectObject(null);
+        setSelectedObjects([]);
+      }
+    };
+
     // Handle dragging state to toggle orbit controls
     transformControls.addEventListener("dragging-changed", (event) => {
       if (scene.userData.orbitControls) {
@@ -312,8 +358,39 @@ export default function ObjectManipulationControls() {
 
     // Update object state when transformed
     transformControls.addEventListener("objectChange", () => {
-      if (selectedObject) {
-        updateObjectState(selectedObject.uuid);
+      if (selectedObject && selectedObject.parent) {
+        try {
+          // 检查是否是模型对象
+          const isModel =
+            selectedObject.userData &&
+            (selectedObject.userData.modelId ||
+              selectedObject.userData.isModelObject ||
+              selectedObject.userData.isPersistentModel ||
+              selectedObject.userData.originalModelUrl ||
+              selectedObject.name === "Superman");
+
+          if (isModel) {
+            console.log(
+              `模型变换更新: ${selectedObject.name || "unnamed model"}`
+            );
+          }
+
+          // 更新对象状态
+          updateObjectState(selectedObject.uuid);
+
+          // 显示新位置信息，方便调试
+          if (isModel) {
+            console.log(
+              `模型新位置: x=${selectedObject.position.x.toFixed(
+                2
+              )}, y=${selectedObject.position.y.toFixed(
+                2
+              )}, z=${selectedObject.position.z.toFixed(2)}`
+            );
+          }
+        } catch (error) {
+          console.error("Error updating object state:", error);
+        }
       }
     });
 
@@ -323,7 +400,7 @@ export default function ObjectManipulationControls() {
 
     // Attach to selected object if one exists
     if (selectedObject) {
-      transformControls.attach(selectedObject);
+      safeAttach(selectedObject);
     }
 
     // Get all selectable objects from the scene, filtering out controls and helpers
@@ -372,7 +449,7 @@ export default function ObjectManipulationControls() {
         // Use explicit highlight removal method
         if (selectedObjects.length > 0) {
           selectedObjects.forEach((obj) => {
-            if (obj) removeHighlight(obj);
+            if (obj && obj.parent) removeHighlight(obj);
           });
         }
 
@@ -407,8 +484,24 @@ export default function ObjectManipulationControls() {
         // Get clicked object
         const clickedObject = intersects[0].object;
 
+        // Skip if the clicked object is no longer valid
+        if (!clickedObject || !clickedObject.parent) return;
+
         // Find appropriate parent object to select
         const targetObject = findSelectableParent(clickedObject);
+
+        // Enhanced validation for object selection
+        // Check that the object is not only in the scene but has valid matrix methods
+        const isValidForSelection =
+          targetObject &&
+          targetObject.parent &&
+          typeof targetObject.updateMatrixWorld === "function" &&
+          !targetObject.userData?.isHelper &&
+          !targetObject.userData?.isOutline &&
+          !targetObject.userData?.isTransformControl;
+
+        // Ensure object is still valid before selecting
+        if (!isValidForSelection) return;
 
         // Don't reselect the same object if already selected and not in multi-select mode
         if (selectedObject === targetObject && !event.shiftKey) {
@@ -458,7 +551,7 @@ export default function ObjectManipulationControls() {
         // Explicitly remove highlights from all selected objects
         if (selectedObjects.length > 0) {
           selectedObjects.forEach((obj) => {
-            if (obj) removeHighlight(obj);
+            if (obj && obj.parent) removeHighlight(obj);
           });
         }
 
@@ -511,23 +604,35 @@ export default function ObjectManipulationControls() {
 
         // Dispose controls
         if (transformControlsRef.current) {
-          transformControlsRef.current.removeEventListener(
-            "dragging-changed",
-            () => {}
-          );
-          transformControlsRef.current.removeEventListener(
-            "objectChange",
-            () => {}
-          );
-          transformControlsRef.current.detach();
-          transformControlsRef.current.dispose();
-          transformControlsRef.current.removeFromParent();
-          transformControlsRef.current = null;
+          try {
+            // First detach from any objects to prevent errors
+            transformControlsRef.current.detach();
+
+            // Then disable (this stops event processing)
+            transformControlsRef.current.enabled = false;
+
+            // Remove from scene
+            if (transformControlsRef.current.parent) {
+              transformControlsRef.current.removeFromParent();
+            }
+
+            // Dispose to clean up resources
+            transformControlsRef.current.dispose();
+
+            // Clear reference
+            transformControlsRef.current = null;
+          } catch (error) {
+            console.error("Error disposing transform controls:", error);
+          }
         }
 
         if (dragControlsRef.current) {
-          dragControlsRef.current.dispose();
-          dragControlsRef.current = null;
+          try {
+            dragControlsRef.current.dispose();
+            dragControlsRef.current = null;
+          } catch (error) {
+            console.error("Error disposing drag controls:", error);
+          }
         }
 
         document.body.style.cursor = "auto";
@@ -538,6 +643,9 @@ export default function ObjectManipulationControls() {
         }
       };
     }
+
+    // Store the safe attach method on the controls for later use
+    transformControls.userData.safeAttach = safeAttach;
 
     return undefined;
   }, [
@@ -559,12 +667,40 @@ export default function ObjectManipulationControls() {
   useEffect(() => {
     if (!transformControlsRef.current) return;
 
-    if (selectedObject) {
-      transformControlsRef.current.attach(selectedObject);
-    } else {
+    try {
+      if (selectedObject) {
+        // Use the safe attach method
+        if (
+          typeof transformControlsRef.current.userData.safeAttach === "function"
+        ) {
+          transformControlsRef.current.userData.safeAttach(selectedObject);
+        } else {
+          // Fallback to our safety checks
+          // Check if the object still exists in the scene and is valid
+          const isValidObject =
+            selectedObject.parent !== null &&
+            !selectedObject.userData?.isHelper &&
+            !selectedObject.userData?.isOutline &&
+            typeof selectedObject.updateMatrixWorld === "function";
+
+          if (isValidObject) {
+            transformControlsRef.current.attach(selectedObject);
+          } else {
+            // Object is no longer valid, detach controls and clear selection
+            transformControlsRef.current.detach();
+            selectObject(null);
+            setSelectedObjects([]);
+          }
+        }
+      } else {
+        transformControlsRef.current.detach();
+      }
+    } catch (error) {
+      console.error("Error updating transform controls:", error);
+      // Safely detach on error
       transformControlsRef.current.detach();
     }
-  }, [selectedObject]);
+  }, [selectedObject, selectObject]);
 
   // Update transform mode
   useEffect(() => {
@@ -648,6 +784,100 @@ export default function ObjectManipulationControls() {
     return objects;
   }
 
+  // Add selectedObject validation - runs periodically to ensure the selected object is still valid
+  useEffect(() => {
+    if (!selectedObject) return;
+
+    // Check if selected object is still valid every 500ms
+    const validityCheckInterval = setInterval(() => {
+      if (
+        selectedObject &&
+        (!selectedObject.parent || !selectedObject.updateMatrixWorld)
+      ) {
+        // Object no longer valid - clear selection
+        console.log("Selected object is no longer valid, clearing selection");
+        selectObject(null);
+        setSelectedObjects([]);
+
+        // Also detach transform controls
+        if (transformControlsRef.current) {
+          transformControlsRef.current.detach();
+        }
+      }
+    }, 500);
+
+    return () => {
+      clearInterval(validityCheckInterval);
+    };
+  }, [selectedObject, selectObject]);
+
+  // Ensure we safely detach transform controls when component unmounts
+  useEffect(() => {
+    return () => {
+      // Safely detach transform controls on unmount
+      if (transformControlsRef.current) {
+        try {
+          transformControlsRef.current.detach();
+        } catch (error) {
+          console.error(
+            "Error detaching transform controls on unmount:",
+            error
+          );
+        }
+      }
+    };
+  }, []);
+
+  // Add a cleanup for selectedObjects
+  useEffect(() => {
+    if (selectedObjects.length === 0) return;
+
+    // Filter out invalid objects from selection
+    const cleanupInvalidObjects = () => {
+      // Check for invalid objects in the selection
+      const validObjects = selectedObjects.filter(
+        (obj) =>
+          obj && obj.parent && typeof obj.updateMatrixWorld === "function"
+      );
+
+      // If some objects were invalid, update the selection list
+      if (validObjects.length !== selectedObjects.length) {
+        console.log(
+          `Removed ${
+            selectedObjects.length - validObjects.length
+          } invalid objects from selection`
+        );
+
+        // Update the selected objects list
+        setSelectedObjects(validObjects);
+
+        // If the selected object is now invalid, update it
+        if (
+          selectedObject &&
+          (!selectedObject.parent ||
+            typeof selectedObject.updateMatrixWorld !== "function")
+        ) {
+          // Select the last valid object or null
+          const newSelected =
+            validObjects.length > 0
+              ? validObjects[validObjects.length - 1]
+              : null;
+          selectObject(newSelected);
+        }
+      }
+    };
+
+    // Run this check periodically
+    const cleanupInterval = setInterval(cleanupInvalidObjects, 1000);
+
+    // Also run it once immediately
+    cleanupInvalidObjects();
+
+    return () => {
+      clearInterval(cleanupInterval);
+    };
+  }, [selectedObjects, selectedObject, selectObject]);
+
   return (
     <div className="controls-container">
       <div className="controls-header">Object Control</div>
@@ -704,19 +934,19 @@ export default function ObjectManipulationControls() {
           className="deselect-button"
           onClick={() => handleObjectSelection(null)}
         >
-          取消选择
+          Unselect
         </button>
       </div>
 
-      <div className="info-text">点击场景中的物体进行选择</div>
+      <div className="info-text">Click on objects in the scene to select</div>
 
       {selectedObjects.length > 0 && (
         <div className="selection-info">
-          已选择 {selectedObjects.length} 个对象
+          Selected {selectedObjects.length} objects
         </div>
       )}
 
-      <div className="info-text">按住 Shift 可选择多个对象</div>
+      <div className="info-text">Hold Shift to select multiple objects</div>
 
       <style jsx>{`
         .controls-container {
@@ -765,7 +995,7 @@ export default function ObjectManipulationControls() {
         }
 
         .control-button.active {
-          background-color: #2196f3;
+          background-color: rgb(22, 94, 152);
         }
 
         .control-button:hover:not(.active) {

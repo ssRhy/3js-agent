@@ -290,6 +290,47 @@ export const useSceneStore = create<SceneState>((set, get) => ({
       registry.set(uuid, entry);
     }
 
+    // 增强：递归更新模型对象的所有子对象的状态
+    const isModel =
+      obj.userData &&
+      (obj.userData.modelId ||
+        obj.userData.isModelObject ||
+        obj.userData.isPersistentModel ||
+        obj.userData.originalModelUrl ||
+        obj.name === "Superman");
+
+    if (isModel) {
+      console.log(
+        `更新模型状态: ${obj.name || "unnamed model"}, uuid: ${uuid}`
+      );
+
+      // 递归处理所有子对象，确保整个模型的状态都被更新
+      obj.traverse((child) => {
+        if (child !== obj) {
+          // 确保子对象继承父对象的模型标识
+          if (!child.userData) child.userData = {};
+          child.userData.parentModelId = obj.userData.modelId;
+
+          // 为子对象更新状态
+          const childUuid = child.uuid;
+          const childEntry = registry.get(childUuid);
+
+          if (childEntry) {
+            states.set(childUuid, extractObjectState(child));
+            childEntry.lastUpdated = new Date();
+            childEntry.isVisible = child.visible;
+            registry.set(childUuid, childEntry);
+          } else if (child instanceof Mesh) {
+            // 如果子对象未注册但是重要的网格，则注册它
+            get().registerObject(child, "modelMesh", {
+              parentModelId: obj.userData.modelId,
+              isModelPart: true,
+            });
+          }
+        }
+      });
+    }
+
     set({
       objectStates: new Map(states),
       objectRegistry: new Map(registry),

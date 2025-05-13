@@ -199,6 +199,7 @@ export default function ThreeCodeEditor() {
     isDraggingOrSelecting,
     setIsDraggingOrSelecting,
     registerObject,
+    unregisterObject,
   } = useSceneStore();
 
   // Add rendering complete flag
@@ -857,8 +858,10 @@ export default function ThreeCodeEditor() {
 
         // 移除收集的对象
         objectsToRemove.forEach((obj) => {
+          // Unregister the object before removing
+          unregisterObject(obj.uuid);
           scene.remove(obj);
-          console.log(`从场景移除: ${obj.name || "unnamed object"}`);
+          console.log(`从场景移除并取消注册: ${obj.name || "unnamed object"}`);
         });
 
         // 只清除dynamicGroup中不是3D模型的对象
@@ -1089,12 +1092,6 @@ export default function ThreeCodeEditor() {
                 } (${objectUuid})`
               );
             });
-
-            // Try serializing again after registration
-            const sceneState = serializeSceneState();
-            console.log(
-              `[RegisterObjects] After registration: ${sceneState.length} objects in scene state`
-            );
           }
 
           // 记录场景状态变化但不保存到服务器
@@ -1133,7 +1130,19 @@ export default function ThreeCodeEditor() {
       console.error("场景处理错误:", e);
       setError("场景处理错误: " + (e instanceof Error ? e.message : String(e)));
     }
-  }, [code, addToHistory, error]);
+  }, [
+    code,
+    addToHistory,
+    error,
+    // The following dependencies are known to have stable references,
+    // or require special handling to avoid excessive re-renders
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    allModelUrls.length,
+    loadedModels,
+    registerObject,
+    serializeSceneState,
+    unregisterObject,
+  ]);
 
   // 添加清除特定名称对象的函数
   const removeObjectsByName = (names: string[]) => {
@@ -1485,8 +1494,31 @@ export default function ThreeCodeEditor() {
       // Force a render to ensure the scene is up-to-date
       renderer.render(scene, camera);
 
-      // Get the serialized scene state - this will now include full object data
-      // thanks to our updated serializeSceneState function in useSceneStore
+      // Verify that all objects in dynamicGroup are registered
+      if (threeRef.current && threeRef.current.dynamicGroup) {
+        const { registerObject } = useSceneStore.getState();
+        let registeredCount = 0;
+
+        threeRef.current.dynamicGroup.traverse((object) => {
+          if (object === threeRef.current?.dynamicGroup) return;
+
+          // Check if object is already registered
+          const { objectRegistry } = useSceneStore.getState();
+          if (!objectRegistry.has(object.uuid)) {
+            // If not, register it now
+            registerObject(object, object.type || "mesh");
+            registeredCount++;
+          }
+        });
+
+        if (registeredCount > 0) {
+          console.log(
+            `[SceneCapture] Registered ${registeredCount} previously unregistered objects`
+          );
+        }
+      }
+
+      // Get the serialized scene state
       const sceneState = serializeSceneState();
 
       if (sceneState.length === 0) {

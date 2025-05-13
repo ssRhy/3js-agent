@@ -28,7 +28,7 @@ export function createHumanPrompt(
   // Build scene state section - add key properties
   let sceneStatePart = "";
   if (sceneState && sceneState.length > 0) {
-    sceneStatePart = "\nCurrent scene objects:\n";
+    sceneStatePart = "\nCurrent scene objects (use THESE EXACT positions):\n";
     sceneState.forEach((obj, index) => {
       const position = obj.position ? `[${obj.position.join(",")}]` : "[0,0,0]";
       sceneStatePart += `${index + 1}. ${obj.name || `Object${index}`} (${
@@ -43,10 +43,11 @@ export function createHumanPrompt(
     (modelHistoryPart ? `\n\n${modelHistoryPart}` : "") +
     (sceneStatePart ? `\n${sceneStatePart}` : "") +
     "\n\nExecution steps:" +
-    "\n1. First use retrieve_objects to fetch historical objects" +
-    "\n2. If screenshots are available, analyze with analyze_screenshot" +
-    "\n3. Generate or modify code based on requirements" +
-    "\n4. Apply patches and persist objects" +
+    "\n1. First consider the scene state positions above" +
+    "\n2. If needed, use retrieve_objects to check what historical objects exist, but NEVER override current positions" +
+    "\n3. If screenshots are available, analyze with analyze_screenshot" +
+    "\n4. Generate or modify code based on requirements" +
+    "\n5. Apply patches and persist objects" +
     "{{suggestion ? `\\n\\n${suggestion}` : ''}}" +
     "\n\nCurrent code:\n```javascript\n{currentCode}\n```";
 

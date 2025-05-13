@@ -126,7 +126,7 @@ export function createSystemPrompt(
     "5. When implementing selection logic, ensure TransformControls are properly detached when selection changes\n\n" +
     "# Feedback Loop Process\n" +
     "1. Render → Screenshot(analyze_screenshot) → Analysis Feedback\n" +
-    "2. Optimize based on feedback → Persist (retrieve necessary objects and enhance historical context memory with retrieve_objects) → Fix/Generate code(generate_fix_code) → Apply patch(apply_patch)\n" +
+    "2. Optimize based on feedback → Apply patch(apply_patch)\n" +
     "3. Store objects(write_to_chroma)\n" +
     "4. Repeat until visual and code validation passes\n\n" +
     "# Object Format\n" +

@@ -118,7 +118,7 @@ export async function createAgent(
   tools.forEach((tool) => {
     if (tool.name === "apply_patch") {
       tool.description =
-        "应用unified diff格式的补丁到内存中保存的代码。可以提交两种格式：1) 包含完整代码，用于初始化：{ code: string } 2) 包含标准unified diff补丁：{ patch: string }。初次必须先提交完整代码，之后只需提交补丁文本即可增量更新。也可以使用 { getCode: true } 来获取当前缓存的代码。";
+        "Applying patches in unified diff format to in-memory saved code. You can submit two formats: 1) Full code for initialization: { code: string } 2) Standard unified diff patch: { patch: string }. You must first submit complete code initially, and then only submit patch text for incremental updates. You can also use { getCode: true } to get the current cached code.";
     }
   });
 
@@ -126,9 +126,9 @@ export async function createAgent(
   let enhancedHistoryContext = historyContext;
   if (useChromaDB) {
     enhancedHistoryContext +=
-      "\n\n你可以使用retrieve_objects工具从ChromaDB中搜索和检索已存储的Three.js对象，" +
-      "以便在新场景中重用这些对象。搜索可以基于对象的语义描述（如'红色立方体'）或对象ID（如'id:cube_1'）。" +
-      "检索到对象后，你可以在新代码中引用它们的属性。每次生成新对象后，使用write_to_chroma工具将其保存到持久化存储。";
+      "\n\nYou can use the retrieve_objects tool to search and retrieve stored Three.js objects from ChromaDB, " +
+      "so you can reuse these objects in new scenes. Search can be based on semantic descriptions of objects (e.g., 'red cube') or object IDs (e.g., 'id:cube_1')." +
+      "After retrieving objects, you can reference their properties in new code. After generating new objects, use the write_to_chroma tool to save them to persistent storage.";
   }
 
   // 创建系统消息提示
