@@ -4,6 +4,12 @@ import { z } from "zod";
 import { chromaService } from "../services/chromaService";
 import { SceneStateObject } from "../types/sceneTypes";
 
+// Define enhanced interface for SceneStateObject with objectData
+interface EnhancedSceneStateObject extends SceneStateObject {
+  objectData?: string; // Full serialized Three.js object data
+  [key: string]: unknown; // Allow for additional properties
+}
+
 // 定义场景对象的 Zod 模式
 const SceneObjectSchema = z
   .object({
@@ -31,7 +37,10 @@ const SceneObjectSchema = z
       .any()
       .optional()
       .describe("The material definition of the object"),
-    color: z.number().optional().describe("The color of the object (hex value)"),
+    color: z
+      .number()
+      .optional()
+      .describe("The color of the object (hex value)"),
     intensity: z.number().optional().describe("The intensity of the light"),
   })
   // 允许其他属性
@@ -74,6 +83,28 @@ export const writeChromaTool = tool(
           success: false,
           message:
             "No valid objects found. Each object must have an id and type.",
+        });
+      }
+
+      // Skip ChromaDB for objects containing URLs to prevent hanging
+      const hasLargeUrlData = validObjects.some((obj) => {
+        const enhancedObj = obj as EnhancedSceneStateObject;
+        const data = enhancedObj.objectData;
+        return (
+          typeof data === "string" &&
+          (data.length > 10000 ||
+            data.includes("https://hyperhuman-file.deemos.com/"))
+        );
+      });
+
+      if (hasLargeUrlData) {
+        console.log(
+          `[${requestId}] [WriteChromaTool] Skipping ChromaDB for objects with large URL data`
+        );
+        return JSON.stringify({
+          success: true,
+          count: validObjects.length,
+          message: `Objects with URL data not stored in ChromaDB to prevent timeouts`,
         });
       }
 

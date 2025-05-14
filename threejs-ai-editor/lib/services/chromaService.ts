@@ -61,6 +61,15 @@ class ChromaService {
   }
 
   /**
+   * Ensure the service is initialized before using
+   */
+  private async ensureInitialized(): Promise<void> {
+    if (!this.initialized) {
+      await this.initialize();
+    }
+  }
+
+  /**
    * Initialize ChromaDB collections
    */
   public async initialize(): Promise<void> {
@@ -179,7 +188,65 @@ class ChromaService {
 
       // Store documents in ChromaDB
       const collection = this.collections[COLLECTION_NAMES.SCENE_OBJECTS];
-      await collection.addDocuments(documents);
+
+      // Set a timeout for the ChromaDB operation to prevent hanging
+      const addDocumentsWithTimeout = async (docs: Document[]) => {
+        return new Promise<boolean>((resolve) => {
+          // Set 30-second timeout
+          const timeout = setTimeout(() => {
+            console.error(
+              "[ChromaDB Debug] Store operation timed out after 30 seconds"
+            );
+            resolve(false);
+          }, 30000);
+
+          collection
+            .addDocuments(docs)
+            .then(() => {
+              clearTimeout(timeout);
+              resolve(true);
+            })
+            .catch((err) => {
+              clearTimeout(timeout);
+              console.error(
+                "[ChromaDB Debug] Error during document addition:",
+                err
+              );
+              resolve(false);
+            });
+        });
+      };
+
+      // Use the timeout version instead of direct call
+      const storeSuccess = await addDocumentsWithTimeout(documents);
+      if (!storeSuccess) {
+        console.warn(
+          "[ChromaDB Debug] Using fallback storage method for potentially problematic data"
+        );
+        // Try storing with simplified objects (remove large URLs/data)
+        const simplifiedDocuments = documents.map((doc) => {
+          // Create a simplified version of the content
+          const pageContent =
+            typeof doc.pageContent === "string" && doc.pageContent.length > 5000
+              ? JSON.stringify({
+                  id: doc.metadata.id,
+                  type: doc.metadata.type,
+                  note: "Large content trimmed",
+                })
+              : doc.pageContent;
+
+          return new Document({ pageContent, metadata: doc.metadata });
+        });
+
+        // Try again with simplified documents
+        await collection.addDocuments(simplifiedDocuments).catch((err) => {
+          console.error(
+            "[ChromaDB Debug] Even simplified storage failed:",
+            err
+          );
+          throw err;
+        });
+      }
 
       // Print memory stats after storing
       const allIds = await this.getAllObjectIds();
@@ -272,7 +339,7 @@ class ChromaService {
       );
 
       // Parse stored JSON back to objects, considering metadata
-      const objects = results.map((doc) => {
+      const objects = results.map((doc: Document) => {
         try {
           const parsed = JSON.parse(doc.pageContent);
           const hasFullData = doc.metadata.hasFullData === true;
@@ -305,7 +372,7 @@ class ChromaService {
           console.log(`  Type: ${obj.type}`);
           console.log(`  Name: ${obj.name || "unnamed"}`);
           if (obj.objectData) {
-            console.log(`  Has full object data: Yes`);
+            console.log(`  Has object data: Yes`);
           }
         });
       }
@@ -360,16 +427,7 @@ class ChromaService {
       return [];
     }
   }
-
-  /**
-   * Ensure ChromaDB is initialized
-   */
-  private async ensureInitialized(): Promise<void> {
-    if (!this.initialized) {
-      await this.initialize();
-    }
-  }
 }
 
-// Export a singleton instance
+// Export a singleton instance of ChromaService
 export const chromaService = ChromaService.getInstance();

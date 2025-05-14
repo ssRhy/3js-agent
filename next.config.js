@@ -3,7 +3,7 @@ const nextConfig = {
   api: {
     responseLimit: "8mb", // Increase from default 4MB to 8MB
     bodyParser: {
-      sizeLimit: "8mb",
+      sizeLimit: "50mb",
     },
     // Add explicit WebSocket enabling
     externalResolver: true,
@@ -85,6 +85,11 @@ const nextConfig = {
         ],
       },
     ];
+  },
+  // 也可能需要增加超时设置
+  serverRuntimeConfig: {
+    // 增加Nodejs超时设置
+    REQUEST_TIMEOUT: 300000, // 5分钟
   },
 };
 

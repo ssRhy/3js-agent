@@ -19,7 +19,7 @@ import { AgentRequest } from "./agent";
 export const config = {
   api: {
     bodyParser: {
-      sizeLimit: "10mb",
+      sizeLimit: "50mb", // 增加到更大的值
     },
   },
 };
