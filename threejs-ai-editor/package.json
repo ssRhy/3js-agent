@@ -48,7 +48,6 @@
   "devDependencies": {
     "@eslint/eslintrc": "^3",
     "@ljharb/tsconfig": "^0.3.2",
-    "@tailwindcss/postcss": "^4.1.6",
     "@types/diff": "^5.0.9",
     "@types/eslint": "^9.6.1",
     "@types/node": "^20",
@@ -61,7 +60,7 @@
     "postcss": "^8.5.3",
     "postcss-import": "^16.1.0",
     "postcss-nested": "^7.0.2",
-    "tailwindcss": "^4.1.6",
+    "postcss-preset-env": "^10.1.6",
     "typescript": "^5"
   }
 }

@@ -1,6 +1,7 @@
 import { applyPatchTool } from "@/lib/tools/applyPatchTool";
 import { codeGenTool } from "@/lib/tools/codeGenTool";
 import { modelGenTool } from "@/lib/tools/modelGenTool";
+import { Tool } from "@langchain/core/tools";
 // 工具结果类型
 export interface ToolResult {
   [key: string]:
@@ -32,6 +33,6 @@ export async function executeTool(
 
   // 对于 DynamicTool，将 args 转换为 JSON 字符串
   const input = typeof args === "string" ? args : JSON.stringify(args);
-  // 检查 tool.invoke 是否需要 JSON.parse
-  return await tool.invoke(JSON.parse(input));
+  // 使用Tool类型断言解决类型兼容性问题
+  return await (tool as Tool).invoke(JSON.parse(input));
 }

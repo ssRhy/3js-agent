@@ -32,14 +32,6 @@ const nextConfig = {
 
     return config;
   },
-  // API configuration with increased limits
-  api: {
-    responseLimit: "8mb",
-    bodyParser: {
-      sizeLimit: "8mb",
-    },
-    externalResolver: true,
-  },
   // Add CORS headers for WebSocket support
   async headers() {
     return [

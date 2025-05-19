@@ -1,25 +1,4 @@
 @import url("https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap");
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
-@layer components {
-  .glow-text {
-    text-shadow: 0 0 10px currentColor;
-  }
-  .cyber-border {
-    @apply border border-opacity-30 rounded;
-    background: linear-gradient(
-      to right,
-      transparent,
-      rgba(0, 114, 255, 0.1),
-      transparent
-    );
-  }
-  .scanner-line {
-    @apply absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-b from-transparent via-neon-blue to-transparent opacity-50 animate-scanner;
-  }
-}
 
 :root {
   --background: #ffffff;
