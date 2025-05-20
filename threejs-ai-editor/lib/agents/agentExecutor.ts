@@ -44,6 +44,7 @@ import {
 import { retrievalTool } from "../tools/retrievalTool";
 import { writeChromaTool } from "../tools/writeChromaTool";
 import { chromaService } from "../services/chromaService";
+import { wrapToolsWithCache } from "../tools/toolCaching";
 
 // 将screenshotTool转为Tool类型
 const screenshotToolInstance = screenshotTool as unknown as Tool;
@@ -141,6 +142,55 @@ async function initializeChromaDB(): Promise<void> {
 }
 
 /**
+ * 缓存工具执行结果的包装函数
+ * 通过工具注册表的缓存机制执行工具，减少重复API调用
+ *
+ * @param toolName 工具名称
+ * @param params 工具参数
+ * @param ttl 缓存生存时间（毫秒），默认为30秒
+ * @returns 工具执行结果
+ */
+async function executeToolWithCache(
+  toolName: string,
+  params: Record<string, unknown>,
+  ttl: number = 30000
+): Promise<unknown> {
+  const registry = ToolRegistry.getInstance();
+  return await registry.executeWithCache(toolName, params, ttl);
+}
+
+// 针对开销大的LLM调用的专用缓存函数
+async function executeLLMToolWithCache(
+  toolName: string,
+  params: Record<string, unknown>
+): Promise<unknown> {
+  // LLM工具使用更长的缓存时间
+  return executeToolWithCache(toolName, params, 5 * 60 * 1000); // 5分钟缓存
+}
+
+/**
+ * 当代码或场景状态发生重大变化时，失效特定工具的缓存
+ *
+ * @param tools 需要清除缓存的工具名称数组
+ */
+function invalidateToolCache(tools: string[] = []): void {
+  const registry = ToolRegistry.getInstance();
+
+  if (tools.length === 0) {
+    // 默认清除所有与代码生成和分析相关的工具缓存
+    registry.clearCache("generate_fix_code");
+    registry.clearCache("analyze_screenshot");
+    console.log("[Cache] Cleared cache for all code-related tools");
+  } else {
+    // 清除指定工具的缓存
+    tools.forEach((toolName) => {
+      registry.clearCache(toolName);
+    });
+    console.log(`[Cache] Cleared cache for tools: ${tools.join(", ")}`);
+  }
+}
+
+/**
  * 运行交互流程
  * 整合了代码优化、截图分析等功能的完整流程
  *
@@ -193,6 +243,14 @@ export async function runInteractionFlow(
     if (!getCachedCode()) {
       console.log(`[${requestId}] Initializing code cache with current code`);
       updateCachedCode(currentCode);
+    } else if (getCachedCode() !== currentCode) {
+      // 代码发生变化，更新缓存并失效相关工具缓存
+      console.log(
+        `[${requestId}] Code changed, updating cache and invalidating tool caches`
+      );
+      updateCachedCode(currentCode);
+      // 当代码变化时，应该失效与代码相关的工具缓存
+      invalidateToolCache(["generate_fix_code", "analyze_screenshot"]);
     }
 
     // 合并当前场景状态与之前存储的场景状态
@@ -211,6 +269,18 @@ export async function runInteractionFlow(
     }
     // 如果有新场景状态，保存到会话上下文中
     else if (sceneState && sceneState.length > 0) {
+      if (
+        conversationContext.lastSceneState &&
+        JSON.stringify(conversationContext.lastSceneState) !==
+          JSON.stringify(sceneState)
+      ) {
+        // 场景状态发生变化，失效相关缓存
+        console.log(
+          `[${requestId}] Scene state changed, invalidating related tool caches`
+        );
+        invalidateToolCache(["generate_fix_code", "analyze_screenshot"]);
+      }
+
       console.log(
         `[${requestId}] Saving new scene state to memory with ${sceneState.length} objects`
       );
@@ -241,6 +311,12 @@ export async function runInteractionFlow(
     // 获取工具列表
     const registry = ToolRegistry.getInstance();
     const tools = registry.getAllTools();
+
+    // 使用工具缓存辅助功能包装工具集
+    const cachedTools = wrapToolsWithCache(tools);
+    console.log(
+      `[${requestId}] Tools wrapped with cache capability: ${cachedTools.length}`
+    );
 
     // 构建系统指令，根据是否有截图分析结果或原始截图而不同
     let systemInstructions = "";
@@ -296,7 +372,7 @@ export async function runInteractionFlow(
     let improvedCode = (await runAgentLoop(
       suggestion,
       currentCode,
-      tools,
+      cachedTools,
       userPrompt,
       historyContext,
       lintErrors,
@@ -427,8 +503,11 @@ export async function runAgentLoop(
   // 使用工具注册表获取工具（如果未提供）
   if (!tools || tools.length === 0) {
     const registry = ToolRegistry.getInstance();
-    tools = registry.getAllTools();
-    console.log(`[${requestId}] Using ${tools.length} tools from registry`);
+    const rawTools = registry.getAllTools();
+    tools = wrapToolsWithCache(rawTools);
+    console.log(
+      `[${requestId}] Using ${tools.length} cache-wrapped tools from registry`
+    );
   }
 
   // 确保工具列表中包含截图分析工具(如果提供了截图)
@@ -438,9 +517,13 @@ export async function runAgentLoop(
     );
     if (!hasScreenshotTool) {
       console.log(
-        `[${requestId}] Adding screenshot analysis tool to agent tools`
+        `[${requestId}] Adding screenshot analysis tool with caching to agent tools`
       );
-      tools.push(screenshotToolInstance);
+      // 添加截图工具并确保有缓存功能
+      const cachedScreenshotTool = wrapToolsWithCache([
+        screenshotToolInstance as Tool,
+      ])[0];
+      tools.push(cachedScreenshotTool);
     }
   }
 
@@ -519,8 +602,47 @@ export async function runAgentLoop(
     // 创建回调处理器
     const callbackHandler = createMemoryCallbackHandler(currentCode, promptStr);
 
-    // 使用工厂函数创建执行器
-    const executor = createAgentExecutor(agent, tools, MAX_ITERATIONS);
+    // 创建缓存包装的工具集
+    const cachedTools = tools.map((tool) => {
+      const originalCall = tool.call.bind(tool);
+
+      // 判断工具类型，决定缓存策略
+      const isCostlyTool =
+        tool.name === "generate_fix_code" ||
+        tool.name === "generate_3d_model" ||
+        tool.name === "analyze_screenshot";
+
+      // 重写工具的调用方法，使用缓存
+      // 注意：我们不直接修改原始工具，而是创建新的工具对象
+      return {
+        ...tool,
+        // 重写工具的call方法，添加缓存逻辑
+        call: async (input: Record<string, unknown>) => {
+          const ttl = isCostlyTool ? 5 * 60 * 1000 : 30000; // 昂贵工具缓存5分钟，其他30秒
+          const registry = ToolRegistry.getInstance();
+
+          try {
+            console.log(
+              `[${requestId}] Executing tool ${tool.name} with caching (TTL: ${ttl}ms)`
+            );
+            return await registry.executeWithCache(tool.name, input, ttl);
+          } catch (error) {
+            console.error(
+              `[${requestId}] Error executing cached tool ${tool.name}:`,
+              error
+            );
+            // 如果缓存执行失败，回退到原始调用
+            console.log(
+              `[${requestId}] Falling back to original tool execution for ${tool.name}`
+            );
+            return originalCall(input);
+          }
+        },
+      } as Tool;
+    });
+
+    // 使用工厂函数创建执行器（使用缓存工具）
+    const executor = createAgentExecutor(agent, cachedTools, MAX_ITERATIONS);
 
     // 添加回调处理器
     executor.callbacks = [callbackHandler];
@@ -644,6 +766,34 @@ export async function runAgentLoop(
         "lastCodeGenerated",
         getCodeDigest(cleanedOutput)
       );
+
+      // 如果是自驱动模式，继续处理
+      if (selfDriven) {
+        console.log(
+          `[${requestId}] Self-driven mode enabled, triggering follow-up action with suggestion: ${promptStr.substring(
+            0,
+            50
+          )}...`
+        );
+        // 确保使用缓存包装的工具
+        const cachedToolsForNextLoop = wrapToolsWithCache(cachedTools);
+        return await runAgentLoop(
+          promptStr,
+          cleanedOutput,
+          cachedToolsForNextLoop,
+          promptStr,
+          enhancedHistoryContext,
+          safeLintErrors,
+          modelRequired,
+          sceneState,
+          modelHistory,
+          sceneHistory,
+          res,
+          screenshot,
+          renderingComplete,
+          false // 防止无限递归，下一层不再自驱动
+        );
+      }
 
       // 返回结果
       if (res && typeof res.status === "function" && !res.writableEnded) {

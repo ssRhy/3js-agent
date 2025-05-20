@@ -197,7 +197,7 @@ Do not assume any models or URLs
 13. Ensure all URLs are correct and valid, accessible through browsers. Invalid URLs will cause the scene to fail loading
 14. If the user requests deletion of specific objects from the scene, identify those objects and remove the related creation and addition statements in the code
 15. When deleting objects, ensure they are correctly removed from the scene or their parent object (using parent.remove(object))
-16. Don't omit any code
+16. Don't omit any code and objects
 17. Generate new code based on the code above
 18. CRITICAL: If scene state data is provided, you MUST use those exact positions, rotations, and scales in your code. These represent the current state after user manipulation.
 

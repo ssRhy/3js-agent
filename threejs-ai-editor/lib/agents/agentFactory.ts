@@ -15,6 +15,9 @@ import { Tool } from "@langchain/core/tools";
 import { Runnable } from "@langchain/core/runnables";
 import { ChainValues } from "@langchain/core/utils/types";
 
+// 导入工具缓存功能
+import { wrapToolsWithCache } from "../tools/toolCaching";
+
 // 导入提示词模块
 import { createSystemPrompt } from "../prompts/systemPrompts";
 import { createHumanPrompt } from "../prompts/humanPrompts";
@@ -173,9 +176,16 @@ export function createAgentExecutor(
   tools: Tool[],
   maxIterations: number = 10
 ): AgentExecutor {
+  console.log(
+    "[AgentFactory] Creating agent executor with cache-optimized tools"
+  );
+
+  // 使用工具缓存辅助功能包装工具
+  const cachedTools = wrapToolsWithCache(tools);
+
   return AgentExecutor.fromAgentAndTools({
     agent,
-    tools,
+    tools: cachedTools,
     maxIterations,
     verbose: true,
     handleParsingErrors: true,

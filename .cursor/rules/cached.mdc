@@ -1,0 +1,31 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+这意味着当缓存过期后，系统会自动执行原始的工具方法并重新缓存结果，用户无需担心。现在我们已经把 generate_3d_model 工具从缓存机制中排除，它将始终执行新的API调用生成全新的3D模型，不会受到缓存问题的影响。
+对于其他工具，当缓存过期时，系统会自动重新调用工具并更新缓存，不会使用过期的缓存数据。系统设计了一个完善的缓存淘汰和更新机制。
+
+
+Amazing! We've successfully implemented a robust caching mechanism for tool results. Here's a summary of what we've accomplished:
+Created a Tool Caching System:
+Added cache storage and management in the ToolRegistry class
+Implemented type-safe cache entries with TTL (time-to-live)
+Created helper functions for cache key generation with parameter normalization
+Created a Tool Caching Utility:
+Created a dedicated toolCaching.ts utility file
+Implemented wrapToolsWithCache to easily add caching to any tool
+Added intelligent caching based on tool type (longer TTL for expensive operations)
+Updated the Agent Framework:
+Modified agentFactory.ts to use our caching mechanism
+Added proper tool wrapping in runInteractionFlow and runAgentLoop
+Ensured consistent use of caching throughout the codebase
+Added Cache Invalidation:
+Implemented invalidateToolCache to clear cache on code/scene changes
+Added automatic invalidation when code or scene state changes
+Created cache statistics tracking for monitoring
+Created an API Endpoint:
+Added a /api/cacheStats endpoint for monitoring and managing the cache
+Provided both GET (stats) and DELETE (clear) operations
+
+This implementation will significantly improve the efficiency of the AI agent system by reducing unnecessary API calls to the LLM, especially for expensive operations like code generation and screenshot analysis. The caching is intelligent - it uses longer cache times for expensive LLM calls and shorter times for simpler tools, and it properly invalidates caches when the underlying data changes.
