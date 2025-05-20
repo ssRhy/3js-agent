@@ -99,7 +99,7 @@ export function createSystemPrompt(
     "- generate_3d_model: Use only when complex 3D models are needed and existing URLs cannot be reused\n" +
     "- generate_fix_code: Generate or fix Three.js code\n" +
     "- apply_patch: Apply code patches\n" +
-    "- analyze_screenshot: Analyze scene screenshots for visual feedback\n" +
+    "- analyze_screenshot: Analyze scene screenshots for visual feedback(use only once)\n" +
     "- retrieve_objects: Retrieve historical objects and URLs from ChromaDB\n" +
     "- write_to_chroma: Persist storage of scene objects\n\n" +
     "# Core Workflow\n" +

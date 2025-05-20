@@ -91,7 +91,7 @@ Based on the screenshot, provide your analysis in the following structure:
 5. Visual Quality: Evaluate lighting, colors, textures, and overall appearance
 6. Concrete Improvements: List specific, actionable changes needed
 
-Focus on being specific and precise. Your analysis will be used to decide if code modifications are needed.
+Focus on being brief. Your analysis will be used to decide if code modifications are needed.
 `;
 
     // Create image URL
@@ -167,7 +167,8 @@ Focus on being specific and precise. Your analysis will be used to decide if cod
         error instanceof Error ? error.message : String(error)
       }`,
       needs_improvements: true,
-      recommendation: "Screenshot analysis error, suggest modifying code or re-executing",
+      recommendation:
+        "Screenshot analysis error, suggest modifying code or re-executing",
     };
   }
 }
@@ -181,15 +182,21 @@ export const screenshotTool = new DynamicStructuredTool({
   description:
     "Analyze the Three.js scene screenshot to determine if it meets the user requirements and provide improvement suggestions",
   schema: z.object({
-    userRequirement: z.string().describe("The original user requirement description"),
+    userRequirement: z
+      .string()
+      .describe("The original user requirement description"),
     useProvidedScreenshot: z
       .boolean()
       .optional()
-      .describe("Whether to use the provided screenshot, default is false to request a new screenshot"),
+      .describe(
+        "Whether to use the provided screenshot, default is false to request a new screenshot"
+      ),
     screenshotBase64: z
       .string()
       .optional()
-      .describe("Base64 encoded scene screenshot, only used when useProvidedScreenshot is true"),
+      .describe(
+        "Base64 encoded scene screenshot, only used when useProvidedScreenshot is true"
+      ),
   }),
   func: async ({
     userRequirement,
@@ -223,7 +230,8 @@ export const screenshotTool = new DynamicStructuredTool({
             status: "error",
             message: "Failed to get screenshot from client",
             needs_improvements: true,
-            recommendation: "Failed to get screenshot, please check browser connection",
+            recommendation:
+              "Failed to get screenshot, please check browser connection",
           });
         }
       }

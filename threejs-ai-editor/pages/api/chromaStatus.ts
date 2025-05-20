@@ -11,8 +11,8 @@ export default async function handler(
   try {
     console.log("[API] ChromaDB status check requested");
 
-    // Initialize ChromaDB
-    await chromaService.initialize();
+    // Remove explicit initialization - the ChromaService methods will handle it internally
+    // await chromaService.initialize();
 
     // Get all object IDs
     const allIds = await chromaService.getAllObjectIds();

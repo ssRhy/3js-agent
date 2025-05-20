@@ -186,8 +186,8 @@ export async function runInteractionFlow(
   );
 
   try {
-    // 确保 ChromaDB 服务已初始化
-    await initializeChromaDB();
+    // Remove explicit ChromaDB initialization - the ChromaService methods will handle it internally
+    // await initializeChromaDB();
 
     // 首先缓存当前代码，如果缓存为空
     if (!getCachedCode()) {
