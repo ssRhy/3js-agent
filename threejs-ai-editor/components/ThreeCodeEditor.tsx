@@ -1476,27 +1476,14 @@ export default function ThreeCodeEditor() {
 
   // Add a function to capture the scene state after rendering
   const captureSceneStateForChromaDB = async () => {
-    console.log(
-      "[SceneCapture] Capturing scene state for ChromaDB persistence..."
-    );
-    if (!threeRef.current) {
-      console.warn("[SceneCapture] Failed: Three.js scene not initialized");
-      return null;
-    }
-
     try {
-      const { scene, renderer, camera } = threeRef.current;
-      if (!scene || !renderer || !camera) {
-        console.warn("[SceneCapture] Three.js components incomplete");
+      if (!threeRef.current || !threeRef.current.dynamicGroup) {
+        console.log("[SceneCapture] No dynamic group found");
         return null;
       }
 
-      // Force a render to ensure the scene is up-to-date
-      renderer.render(scene, camera);
-
-      // Verify that all objects in dynamicGroup are registered
-      if (threeRef.current && threeRef.current.dynamicGroup) {
-        const { registerObject } = useSceneStore.getState();
+      // 确保所有对象都已注册
+      if (typeof registerObject === "function") {
         let registeredCount = 0;
 
         threeRef.current.dynamicGroup.traverse((object) => {
@@ -1518,7 +1505,7 @@ export default function ThreeCodeEditor() {
         }
       }
 
-      // Get the serialized scene state
+      // Get the serialized scene state - now optimized to only include metadata
       const sceneState = serializeSceneState();
 
       if (sceneState.length === 0) {
@@ -1526,9 +1513,20 @@ export default function ThreeCodeEditor() {
         return null;
       }
 
+      // Log just the count and types, not the full data to reduce console output
+      type TypeCountMap = { [key: string]: number };
+      const typeCount = sceneState.reduce<TypeCountMap>((acc, obj) => {
+        const type = typeof obj.type === "string" ? obj.type : "unknown";
+        acc[type] = (acc[type] || 0) + 1;
+        return acc;
+      }, {});
+
       console.log(
-        `[SceneCapture] Successfully captured ${sceneState.length} objects from the scene`
+        `[SceneCapture] Captured ${sceneState.length} objects from the scene:`,
+        typeCount
       );
+
+      // 返回优化后的场景状态数据
       return sceneState;
     } catch (err) {
       console.error("[SceneCapture] Error capturing scene state:", err);

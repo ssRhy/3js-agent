@@ -408,19 +408,20 @@ export const useSceneStore = create<SceneState>((set, get) => ({
       return [];
     }
 
-    const serializedObjects:
-      | Record<string, unknown>[]
-      | {
-          id: string;
-          name: string;
-          type: string;
-          position: number[];
-          rotation: number[];
-          scale: number[];
-          isVisible: boolean;
-          metadata: Record<string, unknown> | undefined;
-          objectData?: string; // Full JSON serialized data
-        }[] = [];
+    // 定义包含modelUrl的类型，并确保它也是Record<string, unknown>的扩展
+    interface SerializedObject extends Record<string, unknown> {
+      id: string;
+      name: string;
+      type: string;
+      position: number[];
+      rotation: number[];
+      scale: number[];
+      isVisible: boolean;
+      metadata?: Record<string, unknown>;
+      modelUrl?: string;
+    }
+
+    const serializedObjects: SerializedObject[] = [];
 
     // 递归处理组中的所有对象
     const processObject = (obj: Object3D) => {
@@ -430,18 +431,8 @@ export const useSceneStore = create<SceneState>((set, get) => ({
         const objState =
           state.objectStates.get(obj.uuid) || extractObjectState(obj);
 
-        // Create base object metadata
-        const baseObject: {
-          id: string;
-          name: string;
-          type: string;
-          position: number[];
-          rotation: number[];
-          scale: number[];
-          isVisible: boolean;
-          metadata: Record<string, unknown> | undefined;
-          objectData?: string;
-        } = {
+        // 只创建包含基本元数据的对象
+        const baseObject: SerializedObject = {
           id: obj.uuid,
           name: registry.name,
           type: registry.type,
@@ -460,20 +451,17 @@ export const useSceneStore = create<SceneState>((set, get) => ({
           metadata: registry.metadata,
         };
 
-        // Add full serialized object data if the object supports toJSON
-        try {
-          if (
-            obj instanceof Mesh ||
-            obj instanceof Group ||
-            obj instanceof Light
-          ) {
-            // Use toJSON to capture complete object definition including geometry, materials, etc.
-            const objectData = obj.toJSON();
-            // Convert to string to ensure it's stored completely
-            baseObject.objectData = JSON.stringify(objectData);
-          }
-        } catch (error) {
-          console.error(`Error serializing object ${obj.uuid}:`, error);
+        // 只添加模型URL，而不是完整的几何数据
+        if (registry.metadata?.modelUrl) {
+          baseObject.modelUrl = registry.metadata.modelUrl as string;
+        } else if (
+          obj.userData?.modelUrl ||
+          obj.userData?.originalModelUrl ||
+          obj.userData?.url
+        ) {
+          baseObject.modelUrl = (obj.userData?.modelUrl ||
+            obj.userData?.originalModelUrl ||
+            obj.userData?.url) as string;
         }
 
         serializedObjects.push(baseObject);

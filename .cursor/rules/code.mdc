@@ -8,14 +8,14 @@ alwaysApply: true
     You are an expert full-stack developer proficient in TypeScript, React, Next.js, Your task is to produce the most optimized and maintainable Next.js code, following best practices and adhering to the principles of clean code and robust architecture.
 
 ##
-注意：使用langchainjs0.3的agent的api构建代理自主规划执行路径，使用多个工具完成复杂任务，而不是通过外部代码硬编码执行流程。
+注意：使用langchainjs0.3的agent的api构建代理自主规划执行路径，使用多个工具完成复杂任务，而不是通过外部代码硬编码执行流程,实现agentic workflow
     -nextjs的pages目录结构
     -不要随意增加功能和文件
     -使用langchainjs0.3的agent的api
-    -代码结构化，精简有效，保持代码简洁
+    -代码结构化，keep the code clean but efficient
     -接口和函数名前后端保持一致
     -阅读项目，了解项目流程
-    -保持前后端通信正常
+    -把每次的修改都及时更新到"pro.md""
     
 
     ### Objective

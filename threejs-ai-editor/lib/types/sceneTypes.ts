@@ -8,6 +8,20 @@ export interface SceneStateObject {
   position?: number[];
   rotation?: number[];
   scale?: number[];
+  isVisible?: boolean;
+  modelUrl?: string;
+  metadata?: Record<string, unknown>;
+}
+
+// 场景对象注册表项接口
+export interface SceneObjectRegistryItem {
+  id: string;
+  type: string;
+  name: string;
+  createdAt: string;
+  lastUpdated: string;
+  isVisible: boolean;
+  metadata?: Record<string, unknown>;
 }
 
 // 场景历史条目接口
@@ -29,6 +43,13 @@ export interface ModelHistoryEntry {
 export interface SceneState {
   objects: SceneStateObject[];
   lastUpdateTimestamp: string;
+}
+
+// 场景差异接口
+export interface SceneDiff {
+  added: SceneStateObject[];
+  removed: string[];
+  modified: SceneStateObject[];
 }
 
 // 模型生成结果接口

@@ -12,8 +12,7 @@ const createModelGenTool = () => {
       "Generate a 3D model from a text prompt or image URLs. Use this when needing to create complex 3D models.",
     func: async (input: string) => {
       console.log("==========================================");
-      console.log("ModelGenTool starting with input:", input);
-      console.log("Input type:", typeof input);
+      console.log("ModelGenTool: Starting execution");
 
       try {
         const params: {
@@ -27,7 +26,7 @@ const createModelGenTool = () => {
 
         // Check if input is empty or undefined
         if (!input) {
-          console.error("ModelGenTool received empty input");
+          console.error("ModelGenTool: Received empty input");
           throw new Error(
             "Input is required. Please provide a prompt or parameters."
           );
@@ -37,7 +36,7 @@ const createModelGenTool = () => {
         try {
           // Attempt to parse as JSON object
           const inputObj = JSON.parse(input);
-          console.log("Successfully parsed input as JSON:", inputObj);
+          console.log("ModelGenTool: Input parsed as JSON");
 
           params.prompt = inputObj.prompt;
           params.imageUrls = inputObj.imageUrls;
@@ -48,7 +47,7 @@ const createModelGenTool = () => {
           /* eslint-disable-next-line @typescript-eslint/no-unused-vars */
         } catch (_) {
           // If parsing fails, treat input as a direct prompt
-          console.log("Treating input as a direct prompt:", input);
+          console.log("ModelGenTool: Treating input as a direct prompt");
           params.prompt = input;
           params.meshMode = "Quad";
           params.quality = "low";
@@ -61,11 +60,11 @@ const createModelGenTool = () => {
           !params.prompt &&
           (!params.imageUrls || params.imageUrls.length === 0)
         ) {
-          console.error("No prompt or imageUrls provided in params:", params);
+          console.error("ModelGenTool: No prompt or imageUrls provided");
           throw new Error("Either a prompt or image URLs are required.");
         }
 
-        console.log("Generating 3D model with params:", params);
+        console.log("ModelGenTool: Generating 3D model");
 
         // 获取完整的API URL
         // 在服务器端，我们需要使用环境变量中的URL或构造一个绝对URL
@@ -75,7 +74,7 @@ const createModelGenTool = () => {
           "http://localhost:3000";
         const fullApiUrl = `${apiUrl}/api/hyper3d`;
 
-        console.log("Calling full API URL:", fullApiUrl);
+        console.log("ModelGenTool: Calling API endpoint");
         const startTime = Date.now();
 
         const response = await fetch(fullApiUrl, {
@@ -88,94 +87,166 @@ const createModelGenTool = () => {
 
         if (!response.ok) {
           const errorText = await response.text();
-          console.error(`API error: ${response.status} - ${errorText}`);
+          console.error(`ModelGenTool: API error: ${response.status}`);
           throw new Error(
             `API responded with status: ${response.status} - ${errorText}`
           );
         }
 
         const result = await response.json();
-        console.log(`API call took ${Date.now() - startTime}ms`);
-        console.log("API response:", result);
+        console.log(`ModelGenTool: API call took ${Date.now() - startTime}ms`);
+        console.log(
+          `ModelGenTool: Received ${
+            result.downloadUrls?.length || 0
+          } model URLs`
+        );
 
         if (result.error) {
-          console.error(`API returned error: ${result.error}`);
+          console.error(`ModelGenTool: API returned error`);
           throw new Error(result.error);
         }
 
         if (!result.downloadUrls || result.downloadUrls.length === 0) {
-          console.error("No download URLs returned from API");
+          console.error("ModelGenTool: No download URLs returned");
           throw new Error("No model URLs returned from API");
         }
 
         // Get the primary model URL
         const modelUrl = result.downloadUrls[0].url;
-        console.log("Successfully retrieved model URL:", modelUrl);
+        console.log("ModelGenTool: Retrieved model URL (not logging full URL)");
 
-        // Validate the URL before returning it
-        console.log("Validating model URL:", modelUrl);
-        const urlValidation = await validateUrl(modelUrl, {
-          timeoutMs: 15000, // Longer timeout for model files
-          retries: 2,
-        });
+        // Enhanced validation process to ensure model is really ready
+        console.log("ModelGenTool: Starting validation process");
+        let modelReady = false;
+        // Increase maxRetries to accommodate 3-minute typical generation time
+        const maxRetries = 20; // Allow for up to ~5 minutes of waiting (with 15s intervals)
+        let retryCount = 0;
+        let validatedModelUrl = modelUrl;
+        const startValidationTime = Date.now();
 
-        if (!urlValidation.isValid) {
-          console.error(`Invalid model URL: ${urlValidation.error}`);
+        console.log(
+          "ModelGenTool: Beginning extended wait for model generation (~3 minutes typical)"
+        );
 
-          // Check if we have alternative URLs in the response
-          if (result.downloadUrls.length > 1) {
-            // Try to find a valid alternative URL
-            console.log("Trying alternative model URLs...");
+        while (!modelReady && retryCount < maxRetries) {
+          console.log(
+            `ModelGenTool: Validation attempt ${
+              retryCount + 1
+            }/${maxRetries} (elapsed: ${Math.round(
+              (Date.now() - startValidationTime) / 1000
+            )}s)`
+          );
 
-            for (let i = 1; i < result.downloadUrls.length; i++) {
-              const alternativeUrl = result.downloadUrls[i].url;
-              const alternativeValidation = await validateUrl(alternativeUrl, {
-                timeoutMs: 15000,
-                retries: 2,
-              });
+          try {
+            // Validate the URL with increased timeouts
+            const urlValidation = await validateUrl(modelUrl, {
+              timeoutMs: 20000, // Increase timeout to 20 seconds
+              retries: 3, // Increase retries
+            });
 
-              if (alternativeValidation.isValid) {
-                // Found a valid alternative
-                console.log(`Found valid alternative URL at index ${i}`);
-                result.downloadUrls[0] = result.downloadUrls[i]; // Replace primary URL with valid one
-                break;
+            if (urlValidation.isValid) {
+              console.log("ModelGenTool: Model URL validated successfully");
+              modelReady = true;
+              validatedModelUrl = modelUrl;
+            } else {
+              console.log(
+                `ModelGenTool: Validation failed: ${urlValidation.error}`
+              );
+
+              // Check for alternative URLs
+              if (result.downloadUrls.length > 1) {
+                console.log("ModelGenTool: Trying alternative model URLs");
+
+                for (let i = 1; i < result.downloadUrls.length; i++) {
+                  const alternativeUrl = result.downloadUrls[i].url;
+                  console.log(`ModelGenTool: Trying alternative URL #${i}`);
+
+                  const alternativeValidation = await validateUrl(
+                    alternativeUrl,
+                    {
+                      timeoutMs: 20000, // Increase timeout to 20 seconds
+                      retries: 3, // Increase retries
+                    }
+                  );
+
+                  if (alternativeValidation.isValid) {
+                    console.log(
+                      `ModelGenTool: Found valid alternative URL at index ${i}`
+                    );
+                    validatedModelUrl = alternativeUrl;
+                    result.downloadUrls[0].url = alternativeUrl; // Replace primary URL
+                    modelReady = true;
+                    break;
+                  }
+                }
+              }
+
+              // If no valid URL yet, wait and retry with longer interval
+              if (!modelReady) {
+                const waitTime = 15000; // 15 seconds between checks
+                const elapsedSeconds = Math.round(
+                  (Date.now() - startValidationTime) / 1000
+                );
+                console.log(
+                  `ModelGenTool: Model not ready after ${elapsedSeconds}s, waiting ${
+                    waitTime / 1000
+                  }s before retry #${retryCount + 1}`
+                );
+                await new Promise((resolve) => setTimeout(resolve, waitTime));
+                retryCount++;
               }
             }
-
-            // Re-check if we have a valid URL after alternatives check
-            if (!(await validateUrl(result.downloadUrls[0].url)).isValid) {
-              throw new Error(
-                `All model URLs are invalid or inaccessible. Primary error: ${urlValidation.error}`
-              );
-            }
-          } else {
-            throw new Error(
-              `Model URL is invalid or inaccessible: ${urlValidation.error}`
-            );
+            // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          } catch (_) {
+            console.error("ModelGenTool: Error during validation");
+            retryCount++;
+            // Longer wait after errors
+            await new Promise((resolve) => setTimeout(resolve, 15000));
           }
         }
 
-        // Update the model URL to the validated one (might be different if we found a valid alternative)
-        const validatedModelUrl = result.downloadUrls[0].url;
-        console.log("Using validated model URL:", validatedModelUrl);
+        const totalWaitTime = Math.round(
+          (Date.now() - startValidationTime) / 1000
+        );
+        if (!modelReady) {
+          throw new Error(
+            `Failed to validate model URL after ${totalWaitTime} seconds (${maxRetries} attempts). The model generation may have failed.`
+          );
+        }
+
+        console.log(
+          `ModelGenTool: Model is fully validated and ready after ${totalWaitTime} seconds`
+        );
+        console.log(
+          `ModelGenTool: Total model preparation time: ${
+            Date.now() - startTime
+          }ms`
+        );
 
         // Final successful response
         const successResponse = {
           success: true,
           modelUrl: validatedModelUrl,
-          modelUrls: result.downloadUrls,
+          modelUrls: result.downloadUrls.map(
+            (item: { name: string; url: string }) => ({
+              name: item.name,
+              url: item.url,
+            })
+          ),
           message:
             "3D model generated successfully. Now generate code that uses this model URL.",
           modelComment: `// MODEL_URL: ${validatedModelUrl}`,
           nextStep: "generate_code_with_model_url",
         };
 
-        console.log("Returning success response:", successResponse);
+        console.log(
+          "ModelGenTool: Returning success response with model URL (not logging URL)"
+        );
         console.log("==========================================");
 
         return JSON.stringify(successResponse);
       } catch (error: unknown) {
-        console.error("Error generating 3D model:", error);
+        console.error("ModelGenTool: Error generating 3D model");
 
         // Check if HYPER3D_API_URL and HYPER3D_API_KEY are set
         const apiUrl = process.env.HYPER3D_API_URL;
@@ -186,7 +257,7 @@ const createModelGenTool = () => {
         if (!apiUrl || !apiKey) {
           errorMessage =
             "Hyper3D API configuration is missing. Please set HYPER3D_API_URL and HYPER3D_API_KEY environment variables.";
-          console.error(errorMessage);
+          console.error("ModelGenTool: " + errorMessage);
         }
 
         // Return error response

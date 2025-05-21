@@ -142,7 +142,7 @@ export function createSystemPrompt(
     "```\n\n" +
     "# Output Requirements\n" +
     "- Return complete Three.js setup() function source code\n" +
-    "- dont repeat the same code\n" +
+    "-don't omit any code and objects ,maintain all the objects" +
     "- Must retain and reuse ALL previous 3D model URLs in the generated code\n" +
     "- Do not include thought processes or Markdown markup\n" +
     "- Include proper cleanup code to prevent memory leaks and ensure TransformControls are detached before objects are removed\n" +

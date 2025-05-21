@@ -23,11 +23,17 @@ export function createCachedTool(tool: Tool): Tool {
     return tool;
   }
 
+  // 3D模型生成工具不应该被缓存，直接返回原始工具
+  if (tool.name === "generate_3d_model") {
+    console.log(
+      `Tool ${tool.name} bypassing cache for accurate model generation`
+    );
+    return tool;
+  }
+
   // 判断工具类型，决定缓存策略
   const isCostlyTool =
-    tool.name === "generate_fix_code" ||
-    tool.name === "generate_3d_model" ||
-    tool.name === "analyze_screenshot";
+    tool.name === "generate_fix_code" || tool.name === "analyze_screenshot";
 
   const originalCall = tool.call.bind(tool);
 

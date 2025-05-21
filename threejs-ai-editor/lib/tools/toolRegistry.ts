@@ -185,6 +185,29 @@ export class ToolRegistry {
   ): Promise<unknown> {
     this.cacheStats.totalCalls++;
 
+    // 特殊处理：3D模型生成工具永远不使用缓存
+    if (toolName === "generate_3d_model") {
+      console.log(
+        `[ToolRegistry] Bypassing cache for ${toolName} - using direct execution`
+      );
+
+      // 获取工具并直接执行，不涉及缓存
+      const tool = this.getTool(toolName);
+      if (!tool) {
+        throw new Error(`Tool "${toolName}" not found in registry`);
+      }
+
+      try {
+        return await tool.call(params);
+      } catch (error) {
+        console.error(
+          `[ToolRegistry] Error executing tool ${toolName}:`,
+          error
+        );
+        throw error;
+      }
+    }
+
     // 生成缓存键，包含工具名称和参数的哈希
     const cacheKey = this.generateCacheKey(toolName, params);
 
