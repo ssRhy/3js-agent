@@ -33,7 +33,7 @@ import { retrievalTool } from "../tools/retrievalTool";
 import { writeChromaTool } from "../tools/writeChromaTool";
 
 // 导入类型
-import { LintError } from "../types/codeTypes";
+
 import { SceneStateObject, ModelHistoryEntry } from "../types/sceneTypes";
 
 /**
@@ -70,7 +70,6 @@ export async function createAgent(
   currentCode: string = "",
   tools: Tool[] = [],
   options: {
-    lintErrors?: LintError[];
     historyContext?: string;
     modelHistory?: ModelHistoryEntry[];
     sceneState?: SceneStateObject[];
@@ -79,7 +78,6 @@ export async function createAgent(
   } = {}
 ) {
   const {
-    lintErrors = [],
     historyContext = "",
     modelHistory = [],
     sceneState = [],
@@ -136,7 +134,6 @@ export async function createAgent(
 
   // 创建系统消息提示
   const systemMessage = createSystemPrompt(
-    lintErrors,
     enhancedHistoryContext,
     false, // 是否需要模型生成 - 由 Agent 在运行时使用工具决定
     modelHistory,

@@ -739,7 +739,25 @@ export default function ObjectManipulationControls() {
         return;
       }
 
+      // Remove highlight from the selected group before ungrouping
+      removeHighlight(selectedObject);
+
+      // Also remove highlights from all currently selected objects
+      selectedObjects.forEach((obj) => {
+        if (obj && obj.parent) {
+          removeHighlight(obj);
+        }
+      });
+
+      // Detach transform controls before ungrouping
+      if (transformControlsRef.current) {
+        transformControlsRef.current.detach();
+      }
+
+      // Perform the ungrouping
       ungroupObjects(selectedObject as THREE.Group);
+
+      // Clear selection state
       selectObject(null);
       setSelectedObjects([]);
     }

@@ -45,6 +45,14 @@ interface ObjectState {
   // 其他状态...
 }
 
+// 持久化数据接口
+interface PersistedSceneData {
+  sceneSnapshot: SceneSnapshot;
+  modelUrls: string[];
+  timestamp: string;
+  version: string;
+}
+
 interface SceneState {
   scene: Scene | null;
   dynamicGroup: Group | null; // 动态组，用于管理AI生成的对象
@@ -109,6 +117,11 @@ interface SceneState {
   findObjectsByType: (type: string) => string[];
   getAllObjects: () => Map<string, ObjectRegistryEntry>;
   getVisibleObjects: () => string[];
+
+  // 持久化方法
+  saveSceneToStorage: () => void;
+  loadSceneFromStorage: () => PersistedSceneData | null;
+  hasStoredScene: () => boolean;
 }
 
 // 确定对象类型的辅助函数
@@ -145,6 +158,9 @@ const extractObjectState = (object: Object3D): ObjectState => {
     },
   };
 };
+
+// 持久化相关常量
+const SCENE_STORAGE_KEY = "threejs_scene_state";
 
 export const useSceneStore = create<SceneState>((set, get) => ({
   scene: null,
@@ -536,10 +552,10 @@ export const useSceneStore = create<SceneState>((set, get) => ({
       obj.scale.copy(worldScale);
     });
 
-    // 添加组到场景
-    const { scene } = get();
-    if (scene) {
-      scene.add(group);
+    // 添加组到动态组而不是场景，确保组可以被选择
+    const { dynamicGroup } = get();
+    if (dynamicGroup) {
+      dynamicGroup.add(group);
     }
 
     // 注册组
@@ -594,10 +610,10 @@ export const useSceneStore = create<SceneState>((set, get) => ({
     // 从组中移除
     group.remove(object);
 
-    // 添加到场景
-    const { scene } = get();
-    if (scene) {
-      scene.add(object);
+    // 添加到动态组而不是场景，确保对象可以被选择
+    const { dynamicGroup } = get();
+    if (dynamicGroup) {
+      dynamicGroup.add(object);
 
       // 重置对象的世界变换以保持外观不变
       object.position.copy(worldPosition);
@@ -616,10 +632,10 @@ export const useSceneStore = create<SceneState>((set, get) => ({
 
   ungroupObjects: (group: Group) => {
     const removedObjects: Object3D[] = [];
-    const { scene } = get();
+    const { dynamicGroup } = get();
 
-    if (!scene) {
-      console.warn("场景不存在，无法解组");
+    if (!dynamicGroup) {
+      console.warn("动态组不存在，无法解组");
       return removedObjects;
     }
 
@@ -639,8 +655,8 @@ export const useSceneStore = create<SceneState>((set, get) => ({
       // 从组中移除
       group.remove(child);
 
-      // 添加到场景
-      scene.add(child);
+      // 添加到动态组而不是场景，确保对象可以被选择
+      dynamicGroup.add(child);
 
       // 重置对象的世界变换以保持外观不变
       child.position.copy(worldPosition);
@@ -653,13 +669,81 @@ export const useSceneStore = create<SceneState>((set, get) => ({
       removedObjects.push(child);
     });
 
-    // 从场景中移除空组
-    scene.remove(group);
+    // 从动态组中移除空组
+    dynamicGroup.remove(group);
     get().unregisterObject(group.uuid);
 
     console.log(
-      `组 "${group.name}" 已解组，${removedObjects.length} 个对象已移至场景`
+      `组 "${group.name}" 已解组，${removedObjects.length} 个对象已移至动态组`
     );
     return removedObjects;
+  },
+
+  // 保存场景到localStorage
+  saveSceneToStorage: () => {
+    try {
+      const state = get();
+      const sceneSnapshot = state.getSceneSnapshot();
+
+      // 收集所有模型URL
+      const modelUrls: string[] = [];
+      state.objectRegistry.forEach((entry) => {
+        if (entry.metadata?.modelUrl) {
+          modelUrls.push(entry.metadata.modelUrl as string);
+        }
+        if (entry.object.userData?.originalModelUrl) {
+          modelUrls.push(entry.object.userData.originalModelUrl);
+        }
+        if (entry.object.userData?.modelUrl) {
+          modelUrls.push(entry.object.userData.modelUrl);
+        }
+      });
+
+      const persistedData: PersistedSceneData = {
+        sceneSnapshot,
+        modelUrls: [...new Set(modelUrls)], // 去重
+        timestamp: new Date().toISOString(),
+        version: "1.0",
+      };
+
+      localStorage.setItem(SCENE_STORAGE_KEY, JSON.stringify(persistedData));
+
+      console.log("场景状态已保存到localStorage", {
+        objects: Object.keys(sceneSnapshot.objectStates).length,
+        models: modelUrls.length,
+      });
+    } catch (error) {
+      console.error("保存场景状态失败:", error);
+    }
+  },
+
+  // 从localStorage加载场景
+  loadSceneFromStorage: () => {
+    try {
+      const storedData = localStorage.getItem(SCENE_STORAGE_KEY);
+
+      if (!storedData) {
+        console.log("没有找到保存的场景状态");
+        return null;
+      }
+
+      const persistedData: PersistedSceneData = JSON.parse(storedData);
+
+      console.log("找到保存的场景状态", {
+        objects: Object.keys(persistedData.sceneSnapshot.objectStates).length,
+        models: persistedData.modelUrls.length,
+        timestamp: persistedData.timestamp,
+      });
+
+      return persistedData;
+    } catch (error) {
+      console.error("加载场景状态失败:", error);
+      return null;
+    }
+  },
+
+  // 检查是否有存储的场景
+  hasStoredScene: () => {
+    return localStorage.getItem(SCENE_STORAGE_KEY) !== null;
   },
 }));

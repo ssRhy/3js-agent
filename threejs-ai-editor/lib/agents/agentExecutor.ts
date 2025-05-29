@@ -357,7 +357,7 @@ export async function executeAgentWorkflow(
     const allTools = registry.getAllTools();
 
     // 确保工具列表中包含截图分析工具(如果提供了截图)
-    let tools = [...allTools];
+    const tools = [...allTools];
     if (screenshot) {
       const hasScreenshotTool = tools.some(
         (tool) => tool.name === "analyze_screenshot"
@@ -415,7 +415,6 @@ export async function executeAgentWorkflow(
 
     // 创建 agent
     const agent = await createAgent(userPrompt, currentCode, cachedTools, {
-      lintErrors: safeLintErrors,
       historyContext: enhancedHistoryContext,
       modelHistory,
       sceneState: combinedSceneState,

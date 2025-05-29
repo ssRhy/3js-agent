@@ -14,9 +14,9 @@ import { LintError } from "../../lib/types/codeTypes";
 export const config = {
   api: {
     bodyParser: {
-      sizeLimit: "10mb", // Increase from the default 1mb
+      sizeLimit: "50mb", // Increase from the default 1mb
     },
-    responseLimit: "10mb", // Also increase response size limit
+    responseLimit: "50mb", // Also increase response size limit
   },
 };
 

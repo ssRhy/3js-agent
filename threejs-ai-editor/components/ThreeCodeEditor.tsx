@@ -200,6 +200,9 @@ export default function ThreeCodeEditor() {
     setIsDraggingOrSelecting,
     registerObject,
     unregisterObject,
+    saveSceneToStorage,
+    loadSceneFromStorage,
+    hasStoredScene,
   } = useSceneStore();
 
   // Add rendering complete flag
@@ -214,6 +217,45 @@ export default function ThreeCodeEditor() {
   // 在状态定义部分添加一个新状态
   const [showUpdateCodeReminder, setShowUpdateCodeReminder] =
     useState<boolean>(false);
+
+  // 页面卸载前保存场景状态
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      saveSceneToStorage();
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+    };
+  }, [saveSceneToStorage]);
+
+  // 页面加载时恢复场景状态
+  useEffect(() => {
+    const restoreScene = async () => {
+      if (hasStoredScene()) {
+        const persistedData = loadSceneFromStorage();
+        if (persistedData) {
+          console.log("页面加载时发现保存的场景状态，准备恢复");
+
+          // 如果有模型URL，可以在这里触发重新加载
+          if (persistedData.modelUrls.length > 0) {
+            console.log("检测到保存的模型URL:", persistedData.modelUrls);
+            // 你可以在这里添加重新加载模型的逻辑
+          }
+
+          // 可以选择性地应用场景快照（如果模型已重新加载）
+          console.log("场景状态恢复完成");
+        }
+      }
+    };
+
+    // 延迟一段时间后执行，确保场景已初始化
+    const timer = setTimeout(restoreScene, 1000);
+
+    return () => clearTimeout(timer);
+  }, [hasStoredScene, loadSceneFromStorage]);
 
   useEffect(() => {
     const container = containerRef.current;

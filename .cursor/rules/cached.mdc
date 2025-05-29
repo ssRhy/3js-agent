@@ -3,8 +3,6 @@ description:
 globs: 
 alwaysApply: false
 ---
-这意味着当缓存过期后，系统会自动执行原始的工具方法并重新缓存结果，用户无需担心。现在我们已经把 generate_3d_model 工具从缓存机制中排除，它将始终执行新的API调用生成全新的3D模型，不会受到缓存问题的影响。
-对于其他工具，当缓存过期时，系统会自动重新调用工具并更新缓存，不会使用过期的缓存数据。系统设计了一个完善的缓存淘汰和更新机制。
 
 
 Amazing! We've successfully implemented a robust caching mechanism for tool results. Here's a summary of what we've accomplished:
