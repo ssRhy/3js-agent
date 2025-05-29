@@ -117,10 +117,10 @@ export const codeGenTool = new DynamicStructuredTool({
     const requestId = `codegen_${Date.now()}`;
     const startTime = Date.now();
     console.log(
-      `[${requestId}] [CodeGen Tool] 🚀 Agent requested code generation/fix - ${new Date().toISOString()}`
+      `[${requestId}] [CodeGen Tool]  Agent requested code generation/fix - ${new Date().toISOString()}`
     );
     console.log(
-      `[${requestId}] [CodeGen Tool] 📝 Instruction content: "${instruction.substring(
+      `[${requestId}] [CodeGen Tool]  Instruction content: "${instruction.substring(
         0,
         100
       )}${instruction.length > 100 ? "..." : ""}"`

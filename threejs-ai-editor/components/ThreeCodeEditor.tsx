@@ -159,9 +159,9 @@ export default function ThreeCodeEditor() {
   controls.enableDamping = true;
   controls.dampingFactor = 0.25;
   
-  // 注意: 可以使用全局的 autoScaleModel 函数来调整加载的模型大小
-  // 示例: 在模型加载后调用 autoScaleModel(model, desiredSize)
-  // desiredSize 参数表示期望的模型最长边长度（默认为5个单位）
+    // Note: You can use the global autoScaleModel function to adjust the size of loaded models
+    // Example: Call autoScaleModel(model, desiredSize) after loading the model
+    // desiredSize parameter represents the desired longest edge length of the model (default is 5 units)
   
   // Return the scene so that all future objects added to it will be rendered
   return scene;
@@ -962,16 +962,16 @@ export default function ThreeCodeEditor() {
               throw new Error('setup function not defined in code');
             }
             
-            // 对于新的用法，我们要包装原始的setup函数，使其能访问setupContext
+        
             const originalSetup = setup;
             setup = function(scene, camera, renderer, THREE, OrbitControls, GLTFLoader, context) {
-              // 如果有上下文且包含已加载的模型，将其添加到全局scope
+           
               if (context && context.loadedModels) {
                 console.log('Setup函数接收到已加载的模型信息:', context.loadedModels.length + '个模型');
-                // 可以在这里访问context.loadedModels和context.getModelById
+             
               }
               
-              // 调用原始setup函数
+           
               return originalSetup(scene, camera, renderer, THREE, OrbitControls, GLTFLoader);
             };
             
@@ -1050,7 +1050,7 @@ export default function ThreeCodeEditor() {
         try {
           // 添加日志说明清空了场景
           console.log(
-            "已清空场景中的可更改对象，准备重新构建场景，但保留已加载的模型..."
+            "Cleared the scene of objects that can be changed, preparing to rebuild the scene, but retaining loaded models..."
           );
 
           // 获取已加载的模型列表，便于setupFn访问
@@ -1149,7 +1149,9 @@ export default function ThreeCodeEditor() {
             console.error("尝试序列化场景状态时出错:", err);
           }
 
-          console.log("场景重建完成，渲染新场景，保留了已加载的模型");
+          console.log(
+            "Scene reconstruction complete, rendering new scene, retaining loaded models"
+          );
 
           // This ensures we render whatever was added to the scene or dynamicGroup
           renderer.render(scene, camera);
@@ -1159,13 +1161,15 @@ export default function ThreeCodeEditor() {
         } catch (e) {
           console.error("代码执行错误:", e);
           setError(
-            "代码执行错误: " + (e instanceof Error ? e.message : String(e))
+            "Code execution error: " +
+              (e instanceof Error ? e.message : String(e))
           );
         }
       } catch (e) {
         console.error("代码评估错误:", e);
         setError(
-          "代码评估错误: " + (e instanceof Error ? e.message : String(e))
+          "Code evaluation error: " +
+            (e instanceof Error ? e.message : String(e))
         );
       }
     } catch (e) {
@@ -1598,12 +1602,16 @@ export default function ThreeCodeEditor() {
 
       // 捕获当前场景状态
       const currentSceneState = await captureSceneStateForChromaDB();
-      console.log(`当前场景有 ${currentSceneState?.length || 0} 个对象`);
+      console.log(
+        `The current scene has ${currentSceneState?.length || 0} objects`
+      );
 
       // 确保场景已完全渲染好
       if (!renderingCompleteRef.current && threeRef.current) {
         try {
-          console.log("[Generate] 等待场景渲染完成...");
+          console.log(
+            "[Generate] Waiting for scene rendering to completefor scene rendering to complete..."
+          );
           // 强制渲染几帧以确保场景更新
           for (let i = 0; i < 3; i++) {
             threeRef.current.renderer.render(
@@ -1614,17 +1622,17 @@ export default function ThreeCodeEditor() {
           }
           renderingCompleteRef.current = true;
         } catch (renderError) {
-          console.warn("[Generate] 渲染场景时出错:", renderError);
+          console.warn("[Generate] Error rendering scene:", renderError);
         }
       }
 
       // 获取截图以帮助AI理解场景
       let screenshotDataUrl = null;
       try {
-        console.log("[Generate] 生成场景截图...");
+        console.log("[Generate] Generating scene screenshot...");
         screenshotDataUrl = await captureScreenshot();
       } catch (screenError) {
-        console.warn("[Generate] 生成截图失败:", screenError);
+        console.warn("[Generate] Failed to generate screenshot:", screenError);
       }
 
       // 创建请求负载
@@ -1644,7 +1652,7 @@ export default function ThreeCodeEditor() {
         payload.screenshot = screenshotDataUrl;
       }
 
-      console.log("[Generate] 发送请求到后端...", {
+      console.log("[Generate] Sending request to backend...", {
         prompt,
         codeLength: code.length,
         hasScreenshot: !!screenshotDataUrl,
@@ -1661,26 +1669,26 @@ export default function ThreeCodeEditor() {
       });
 
       if (!response.ok) {
-        throw new Error(`服务器返回错误: ${response.status}`);
+        throw new Error(`Server returned error: ${response.status}`);
       }
 
       const data = await response.json();
-      console.log("[Generate] 收到后端响应:", data);
+      console.log("[Generate] Received response from backend:", data);
 
       // 处理响应
       if (data.directCode) {
         // 如果有直接代码，应用到编辑器
         const code = data.directCode.trim();
         setCode(code);
-        setSuccess("已生成代码");
-        console.log("[Generate] 设置新代码至编辑器");
+        setSuccess("Code generated");
+        console.log("[Generate] Set new code to editor");
       } else if (data.modelUrls && data.modelUrls.length > 0) {
         // 处理生成的模型URL
-        setSuccess(`已生成${data.modelUrls.length}个模型！正在加载...`);
+        setSuccess(`Generated ${data.modelUrls.length} models! Loading...`);
 
         try {
           // 处理并记录所有模型URL
-          console.log("[Generate] 处理模型URL:", data.modelUrls);
+          console.log("[Generate] Processing model URLs:", data.modelUrls);
 
           // 检查是否模型URL已经存在于allModelUrls中
           const firstModelUrl = data.modelUrls[0];
@@ -1690,7 +1698,7 @@ export default function ThreeCodeEditor() {
 
           if (existingModelUrl) {
             console.log(
-              "[Generate] 使用已存储的模型URL:",
+              "[Generate] Using stored model URL:",
               existingModelUrl.url
             );
           }
@@ -1699,14 +1707,14 @@ export default function ThreeCodeEditor() {
           const modelLoaded = await loadModel(data.modelUrls[0]);
 
           if (modelLoaded) {
-            setSuccess("模型已成功加载！");
+            setSuccess("Model loaded successfully!");
 
             // 确保模型加载后更新场景状态
             const updatedSceneState = await captureSceneStateForChromaDB();
             console.log(
-              `[Generate] 更新的场景状态包含 ${
+              `[Generate] The updated scene state contains ${
                 updatedSceneState?.length || 0
-              } 个对象`
+              } objects`
             );
 
             // 强制渲染一次确保模型可见
@@ -1725,27 +1733,27 @@ export default function ThreeCodeEditor() {
             // 传回更新的场景状态到后端，确保状态持久化
             if (updatedSceneState && updatedSceneState.length > 0) {
               console.log(
-                `[Generate] 场景状态已更新，包含 ${updatedSceneState.length} 个对象`
+                `[Generate] The scene state has been updated, containing ${updatedSceneState.length} objects`
               );
             }
           } else {
-            throw new Error("模型加载失败");
+            throw new Error("Failed to load model");
           }
         } catch (loadError) {
-          console.error("[Generate] 加载模型失败:", loadError);
+          console.error("[Generate] Failed to load model:", loadError);
           setError(
-            `加载模型失败: ${
+            `Failed to load model: ${
               loadError instanceof Error ? loadError.message : String(loadError)
             }`
           );
         }
       } else {
-        setSuccess("已处理请求，但没有代码或模型更新");
+        setSuccess("Request processed, but no code or model updates");
       }
     } catch (error) {
-      console.error("[Generate] 处理请求错误:", error);
+      console.error("[Generate] Failed to process request:", error);
       setError(
-        `处理请求失败: ${
+        `Failed to process request: ${
           error instanceof Error ? error.message : String(error)
         }`
       );
@@ -1916,20 +1924,20 @@ export default function ThreeCodeEditor() {
     <div className="editor-container">
       <div className="sidebar">
         <div className="sidebar-header">
-          <h2>Three.js AI 编辑器</h2>
+          <h2>Three.js AI Editor</h2>
           {/* WebSocket connection status indicator */}
           <div className={`ws-status ${socketConnectionStatus}`}>
             <span className="status-dot"></span>
             {socketConnectionStatus === "open"
-              ? "已连接"
+              ? "Connected"
               : socketConnectionStatus === "connecting"
-              ? "连接中..."
+              ? "Connecting..."
               : socketConnectionStatus === "closed"
-              ? "已断开"
-              : "连接错误"}
+              ? "Disconnected"
+              : "Connection error"}
             {socketConnectionStatus !== "open" && (
               <button onClick={manualReconnect} className="reconnect-button">
-                重连
+                Reconnect
               </button>
             )}
           </div>
@@ -1937,13 +1945,13 @@ export default function ThreeCodeEditor() {
 
         <div className="prompt-section">
           <label htmlFor="prompt-input" className="prompt-label">
-            输入你想要创建的场景描述:
+            Input the description of the scene you want to create:
           </label>
           <textarea
             id="prompt-input"
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
-            placeholder="例如: 添加一个旋转的红色球体 或 生成一只红色的猫"
+            placeholder="For example: Add a rotating red sphere or generate a red cat"
             rows={4}
             className="prompt-input"
             disabled={socketConnectionStatus !== "open"}
@@ -1957,12 +1965,12 @@ export default function ThreeCodeEditor() {
               className="generate-button"
             >
               {isLoading
-                ? "生成中..."
+                ? "Generating..."
                 : socketConnectionStatus !== "open"
-                ? "等待连接..."
+                ? "Waiting for connection..."
                 : renderingCompleteRef.current
-                ? "生成并分析场景"
-                : "生成场景代码"}
+                ? "Generate and analyze the scene"
+                : "Generate scene code"}
               <div
                 className={`button-background ${isLoading ? "loading" : ""}`}
               ></div>
@@ -1972,7 +1980,7 @@ export default function ThreeCodeEditor() {
 
         {socketConnectionStatus !== "open" && (
           <div className="connection-message">
-            <p>正在建立 Socket.IO 连接，请稍候...</p>
+            <p>Establishing Socket.IO connection, please wait...</p>
           </div>
         )}
 
@@ -1981,7 +1989,11 @@ export default function ThreeCodeEditor() {
           {success && <div className="success">{success}</div>}
           {showUpdateCodeReminder && (
             <div className="update-reminder">
-              <span>📝 物体位置已变更，点击&quot;生成&quot;按钮更新代码</span>
+              <span>
+                {" "}
+                The object position has changed, click &quot;Generate&quot;
+                button to update the code
+              </span>
             </div>
           )}
           {isModelLoading && (
@@ -1995,7 +2007,7 @@ export default function ThreeCodeEditor() {
         {previousCode && code !== previousCode && (
           <div className="diff-toggle">
             <button onClick={() => setShowDiff(!showDiff)}>
-              {showDiff ? "隐藏代码差异" : "显示代码差异"}
+              {showDiff ? "Hide code differences" : "Show code differences"}
             </button>
           </div>
         )}
