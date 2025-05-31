@@ -1444,12 +1444,6 @@ export default function ThreeCodeEditor() {
         timestamp: number;
         fromAgent?: boolean;
       }) => {
-        console.log(
-          `[Socket.IO] Received screenshot request: ${data.requestId} ${
-            data.fromAgent ? "(from Agent)" : ""
-          }`
-        );
-
         try {
           // 确保场景已完全渲染
           await applySafelyToScene(code);
@@ -1461,18 +1455,12 @@ export default function ThreeCodeEditor() {
             throw new Error("Failed to capture scene screenshot");
           }
 
-          console.log(
-            `[Socket.IO] Screenshot captured, size: ${Math.round(
-              screenshotData.length / 1024
-            )} KB`
-          );
-
           // 发送截图回Socket.IO服务器
           socket.emit("provide_screenshot", {
             requestId: data.requestId,
-            screenshot: screenshotData,
-            userRequirement: prompt, // 添加当前用户提示以便分析
-            returnAnalysis: true, // 请求分析结果
+            screenshot: screenshotData, // 这里有数据
+            userRequirement: prompt,
+            returnAnalysis: true,
             timestamp: Date.now(),
           });
 

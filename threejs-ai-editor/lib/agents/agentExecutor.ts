@@ -2,13 +2,12 @@
 // runAgentLoop：负责实际推理、工具使用和详细任务执行
 /* eslint-disable @typescript-eslint/no-unused-vars */
 // lib/agents/agentExecutor.ts
-import { AgentExecutor } from "langchain/agents";
+
 import { RunnableWithMessageHistory } from "@langchain/core/runnables";
 import { BaseChatMessageHistory } from "@langchain/core/chat_history";
 import { Tool } from "langchain/tools";
 import { NextApiResponse } from "next";
 import { ChatMessageHistory } from "langchain/stores/message/in_memory";
-import { ConversationSummaryBufferMemory } from "langchain/memory";
 
 // 导入 agent 创建工厂
 import { createAgent, createAgentExecutor } from "./agentFactory";
@@ -33,18 +32,15 @@ import {
 
 // 导入工具
 import { screenshotTool } from "../tools/screenshotTool";
-import { ToolRegistry, ToolCategory } from "../tools/toolRegistry";
-import { codeGenTool } from "../tools/codeGenTool";
-import { modelGenTool } from "../tools/modelGenTool";
+import { ToolRegistry } from "../tools/toolRegistry";
+
 import {
   applyPatchTool,
   getCachedCode,
   updateCachedCode,
 } from "../tools/applyPatchTool";
-import { retrievalTool } from "../tools/retrievalTool";
-import { writeChromaTool } from "../tools/writeChromaTool";
+
 import { chromaService } from "../services/chromaService";
-import { wrapToolsWithCache } from "../tools/toolCaching";
 
 // 将screenshotTool转为Tool类型
 const screenshotToolInstance = screenshotTool as unknown as Tool;
@@ -295,26 +291,26 @@ export async function executeAgentWorkflow(
     // 增强历史上下文
     let enhancedHistoryContext = historyContext;
     if (conversationContext.lastCodeGenerated) {
-      enhancedHistoryContext += `\n\n上次生成的代码摘要: ${conversationContext.lastCodeGenerated}`;
+      enhancedHistoryContext += `\n\nLast generated code summary: ${conversationContext.lastCodeGenerated}`;
     }
     if (
       conversationContext.lastUserPrompt &&
       conversationContext.lastUserPrompt !== userPrompt
     ) {
-      enhancedHistoryContext += `\n\n上次用户请求: ${conversationContext.lastUserPrompt}`;
+      enhancedHistoryContext += `\n\nLast user request: ${conversationContext.lastUserPrompt}`;
     }
 
     // 添加场景状态上下文
     if (combinedSceneState && combinedSceneState.length > 0) {
-      enhancedHistoryContext += `\n\n当前场景包含 ${combinedSceneState.length} 个对象。这是已经存在的场景，你必须保留并在此基础上进行修改，不要重新创建整个场景。`;
+      enhancedHistoryContext += `\n\nThe current scene contains ${combinedSceneState.length} objects. This is an existing scene, and you must preserve and modify it, not recreate the entire scene.`;
     }
 
     // 添加截图分析上下文
     if (screenshot && renderingComplete === true) {
       enhancedHistoryContext +=
-        "\n\n场景截图已提供，你必须首先使用analyze_screenshot工具分析当前场景是否符合需求，然后根据分析结果决定下一步行动。" +
-        "调用analyze_screenshot工具时，必须使用完整的screenshot参数，切勿替换或修改。" +
-        "场景渲染完成后，需要使用write_to_chroma工具将场景中的对象完整保存，确保包含几何体、材质和变换信息。";
+        "\n\nThe screenshot has been provided, and you must first use the analyze_screenshot tool to analyze whether the current scene meets the requirements. Then, based on the analysis results, decide on the next action." +
+        "When calling the analyze_screenshot tool, you must use the complete screenshot parameter without modification or replacement." +
+        "After the scene rendering is complete, you need to use the write_to_chroma tool to save the scene objects completely, ensuring that they include geometry, materials, and transformation information.";
     }
 
     // 构建系统指令
@@ -331,22 +327,22 @@ export async function executeAgentWorkflow(
     } else if (screenshot && renderingComplete) {
       // 需要分析截图
       systemInstructions =
-        "你必须首先分析截图，然后根据分析结果进行代码生成或修改。" +
-        "步骤1: 调用analyze_screenshot工具分析当前场景。调用时必须使用完整的截图数据，不要修改或替换。" +
-        "步骤2: 根据分析结果，如果需要改进，则调用generate_fix_code工具；如果不需要改进，则直接返回当前代码。" +
-        "步骤3: 使用apply_patch工具应用增量更新，而不是替换整个代码。" +
-        "步骤4: 使用write_to_chroma工具将新生成的Three.js对象保存到持久化存储中。每个对象必须包含完整的几何体、材质和变换信息。";
+        "You must first analyze the screenshot, then generate or modify the code based on the analysis results." +
+        "Step 1: Call the analyze_screenshot tool to analyze the current scene. When calling, you must use the complete screenshot data without modification or replacement." +
+        "Step 2: Based on the analysis results, if improvements are needed, call the generate_fix_code tool; if no improvements are needed, return the current code directly." +
+        "Step 3: Use the apply_patch tool to apply incremental updates, not replace the entire code." +
+        "Step 4: Use the write_to_chroma tool to save the newly generated Three.js objects to persistent storage. Each object must include complete geometry, materials, and transformation information.";
     } else {
       // 无截图的情况
       systemInstructions =
-        "根据用户需求生成或优化Three.js代码，使用增量更新方式。" +
-        "如果需要重用之前场景中的对象，请使用retrieve_objects工具查询。" +
-        "最后，使用write_to_chroma工具保存新生成的Three.js对象到持久化存储。确保保存对象时包含完整的几何体、材质和变换信息。";
+        "Generate or optimize Three.js code based on user requirements, using incremental updates." +
+        "If you need to reuse objects from previous scenes, use the retrieve_objects tool to query." +
+        "Finally, use the write_to_chroma tool to save the newly generated Three.js objects to persistent storage. Ensure that the saved objects include complete geometry, materials, and transformation information.";
       suggestion =
-        "1. 使用retrieve_objects工具查找相关的场景对象\n" +
-        "2. 根据用户需求生成代码，保留已有对象\n" +
-        "3. 使用增量更新方式更新代码\n" +
-        "4. 使用write_to_chroma工具将生成的对象完整保存到ChromaDB持久化存储";
+        "1. Use the retrieve_objects tool to find related scene objects\n" +
+        "2. Generate code based on user requirements, preserving existing objects\n" +
+        "3. Use incremental update方式更新代码\n" +
+        "4. Use the write_to_chroma tool to save the newly generated Three.js objects to persistent storage. Each object must include complete geometry, materials, and transformation information.";
     }
 
     // 3. 工具准备: 获取和配置工具

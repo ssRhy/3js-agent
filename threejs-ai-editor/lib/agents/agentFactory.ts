@@ -134,8 +134,9 @@ export async function createAgent(
 
   // 创建系统消息提示
   const systemMessage = createSystemPrompt(
+    [], // lintErrors
     enhancedHistoryContext,
-    false, // 是否需要模型生成 - 由 Agent 在运行时使用工具决定
+    false, // modelRequired
     modelHistory,
     sceneState,
     sceneHistory

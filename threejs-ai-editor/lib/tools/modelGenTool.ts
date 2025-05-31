@@ -19,7 +19,7 @@ const createModelGenTool = () => {
           prompt?: string;
           imageUrls?: string[];
           meshMode?: "Raw" | "Quad" | "Ultra";
-          quality?: "low" | "extra-low";
+          quality?: "medium" | "low";
           material?: "pbr" | "shaded";
           useHyper?: boolean;
         } = {};
@@ -41,7 +41,7 @@ const createModelGenTool = () => {
           params.prompt = inputObj.prompt;
           params.imageUrls = inputObj.imageUrls;
           params.meshMode = inputObj.meshMode || "Quad";
-          params.quality = inputObj.quality || "low";
+          params.quality = inputObj.quality || "medium";
           params.material = inputObj.material || "pbr";
           params.useHyper = inputObj.useHyper || false;
           /* eslint-disable-next-line @typescript-eslint/no-unused-vars */
@@ -50,7 +50,7 @@ const createModelGenTool = () => {
           console.log("ModelGenTool: Treating input as a direct prompt");
           params.prompt = input;
           params.meshMode = "Quad";
-          params.quality = "low";
+          params.quality = "medium";
           params.material = "pbr";
           params.useHyper = false;
         }

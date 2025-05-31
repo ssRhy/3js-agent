@@ -214,15 +214,30 @@ export const screenshotTool = new DynamicStructuredTool({
     try {
       // Step 1: Get screenshot - either use provided one or request via WebSocket
       let screenshot = "";
-      if (useProvidedScreenshot && screenshotBase64) {
+      if (
+        useProvidedScreenshot &&
+        screenshotBase64 &&
+        screenshotBase64.length > 100
+      ) {
         console.log(
-          `[${requestId}] [Screenshot Tool] Using provided screenshot`
+          `[${requestId}] [Screenshot Tool] Using provided screenshot, data length: ${screenshotBase64.length}`
         );
         screenshot = screenshotBase64;
       } else {
-        console.log(
-          `[${requestId}] [Screenshot Tool] Requesting new screenshot via WebSocket`
-        );
+        // Even if useProvidedScreenshot is true, if no valid data is provided, request new screenshot
+        if (
+          useProvidedScreenshot &&
+          (!screenshotBase64 || screenshotBase64.length <= 100)
+        ) {
+          console.log(
+            `[${requestId}] [Screenshot Tool] Warning: useProvidedScreenshot=true but no valid screenshot data provided (length: ${screenshotBase64.length}), requesting new screenshot via WebSocket`
+          );
+        } else {
+          console.log(
+            `[${requestId}] [Screenshot Tool] Requesting new screenshot via WebSocket`
+          );
+        }
+
         // Request screenshot via WebSocket using the imported function
         screenshot = await requestScreenshot(requestId);
         if (!screenshot) {
@@ -234,6 +249,10 @@ export const screenshotTool = new DynamicStructuredTool({
               "Failed to get screenshot, please check browser connection",
           });
         }
+
+        console.log(
+          `[${requestId}] [Screenshot Tool] Successfully received screenshot via WebSocket, data length: ${screenshot.length}`
+        );
       }
 
       // Step 2: Analyze the screenshot

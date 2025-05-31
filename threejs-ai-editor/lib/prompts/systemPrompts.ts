@@ -60,7 +60,7 @@ export function createSystemPrompt(
   if (sceneState && Array.isArray(sceneState) && sceneState.length > 0) {
     sceneStateSection =
       "\n# Current Scene State\n" +
-      "重要提示：当前场景状态包含所有对象的准确位置、旋转和缩放信息。生成代码时必须优先使用这些信息，而不是编辑器中的旧代码。\n" +
+      "Important: The current scene state contains accurate position, rotation, and scale information for all objects. When generating code, you must prioritize these values over any positions in the editor code.\n" +
       "CRITICAL: The following objects are already in the scene with their EXACT positions, rotations, and scales. You MUST prioritize these values over any positions in the editor code.\n" +
       sceneState
         .map((obj, i) => {
@@ -116,6 +116,7 @@ export function createSystemPrompt(
     "   - Ensure all necessary historical URLs and context memory are included, don't delete or modify URL paths\n" +
     "   - Adjust object positions and sizes appropriately based on actual conditions to avoid overlap\n" +
     "   - When removing or manipulating objects, always detach TransformControls first to prevent null reference errors\n" +
+    "   - CRITICAL: When calling generate_fix_code, if you have screenshot analysis results, pass them in the screenshotAnalysis parameter\n" +
     "5. Code Application: Apply code using apply_patch\n" +
     "6. Object Persistence: Save scene objects with write_to_chroma\n\n" +
     "# Scene Object Management Best Practices\n" +
@@ -129,6 +130,13 @@ export function createSystemPrompt(
     "2. Optimize based on feedback → Apply patch(apply_patch)\n" +
     "3. Store objects(write_to_chroma)\n" +
     "4. Repeat until visual and code validation passes\n\n" +
+    "# Screenshot Analysis Workflow\n" +
+    "When working with screenshots:\n" +
+    "1. Call analyze_screenshot first to get visual feedback\n" +
+    "2. Parse the analysis results to understand what needs improvement\n" +
+    "3. Call generate_fix_code with the analysis results in the screenshotAnalysis parameter\n" +
+    "4. The format should be: generate_fix_code({instruction: 'your instruction', sceneState: currentSceneState, screenshotAnalysis: 'stringified analysis results'})\n" +
+    "5. This ensures the code generator receives specific improvement suggestions\n\n" +
     "# Object Format\n" +
     "```json\n" +
     "{\n" +
