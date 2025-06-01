@@ -179,6 +179,35 @@ export const useThreeScene = (
         controlsInitializationRef.current = true;
         console.log("[Controls] OrbitControls initialized successfully");
 
+        // 添加事件监听器来响应物体操作时的控件切换
+        const handleToggleControls = (event: CustomEvent) => {
+          const { enabled } = event.detail;
+          if (controls && "enabled" in controls) {
+            (controls as any).enabled = enabled;
+            console.log(
+              `[Controls] OrbitControls ${
+                enabled ? "enabled" : "disabled"
+              } via event`
+            );
+          }
+        };
+
+        window.addEventListener(
+          "toggleOrbitControls",
+          handleToggleControls as EventListener
+        );
+
+        // 存储清理函数的引用
+        const cleanup = () => {
+          window.removeEventListener(
+            "toggleOrbitControls",
+            handleToggleControls as EventListener
+          );
+        };
+
+        // 将清理函数存储在controls上，以便在销毁时调用
+        (controls as any)._cleanup = cleanup;
+
         // 发送自定义事件通知控件已就绪
         try {
           window.dispatchEvent(
@@ -310,6 +339,10 @@ export const useThreeScene = (
       // 清理控件
       if (threeRef.current?.controls) {
         try {
+          // 调用清理函数来移除事件监听器
+          if ((threeRef.current.controls as any)._cleanup) {
+            (threeRef.current.controls as any)._cleanup();
+          }
           threeRef.current.controls = undefined;
         } catch (controlsDisposeError) {
           console.warn(
