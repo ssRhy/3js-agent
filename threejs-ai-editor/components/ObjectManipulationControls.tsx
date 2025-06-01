@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import * as THREE from "three";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls";
 import { DragControls } from "three/examples/jsm/controls/DragControls";
@@ -7,22 +7,17 @@ import { useSceneStore } from "../stores/useSceneStore";
 type TransformMode = "translate" | "rotate" | "scale";
 
 /**
- * ObjectManipulationControls - A component for direct manipulation of 3D objects in Three.js
+ * ObjectManipulationControls - 重构版本
  *
- * This component provides a UI for selecting and manipulating 3D objects directly in the scene
- * using Three.js TransformControls and DragControls.
- *
- * Features:
- * - Translation (moving objects)
- * - Rotation
- * - Scaling
- * - Selection control with Shift key for multi-selection
- * - Multi-selection for grouping objects
- * - Creating and manipulating object groups
- *
- * The component integrates with the scene store to track object state changes.
+ * 修复的问题：
+ * 1. 拆分useEffect，职责分离
+ * 2. 完善React Hooks依赖数组
+ * 3. 添加SSR安全检查
+ * 4. 优化事件监听器绑定/解绑
+ * 5. 避免重复创建Three.js控件
+ * 6. 优化性能，缓存可选对象列表
+ * 7. 修复物体移动时屏幕视角跟随问题
  */
-
 export default function ObjectManipulationControls() {
   const {
     scene,
@@ -37,7 +32,6 @@ export default function ObjectManipulationControls() {
   const [transformMode, setTransformMode] =
     useState<TransformMode>("translate");
   const [isDragging, setIsDragging] = useState(false);
-
   const [multiSelectMode, setMultiSelectMode] = useState(false);
   const [selectedObjects, setSelectedObjects] = useState<THREE.Object3D[]>([]);
 
@@ -45,13 +39,65 @@ export default function ObjectManipulationControls() {
   const dragControlsRef = useRef<DragControls | null>(null);
   const raycasterRef = useRef<THREE.Raycaster>(new THREE.Raycaster());
 
-  // Find the parent object that should be selected (usually a model or group)
+  // SSR安全检查
+  const isClient =
+    typeof window !== "undefined" && typeof document !== "undefined";
+
+  // 强化的OrbitControls禁用函数
+  const disableOrbitControls = useCallback(() => {
+    if (scene?.userData?.orbitControls) {
+      scene.userData.orbitControls.enabled = false;
+      console.log("[ObjectControls] OrbitControls disabled");
+    }
+  }, [scene]);
+
+  // 强化的OrbitControls启用函数
+  const enableOrbitControls = useCallback(() => {
+    if (scene?.userData?.orbitControls) {
+      scene.userData.orbitControls.enabled = true;
+      console.log("[ObjectControls] OrbitControls enabled");
+    }
+  }, [scene]);
+
+  // 缓存可选对象列表，避免每次都深度遍历
+  const selectableObjects = useMemo(() => {
+    if (!dynamicGroup || !isClient) return [];
+
+    const objects: THREE.Object3D[] = [];
+
+    const traverse = (root: THREE.Object3D) => {
+      if (
+        !root.userData?.isTransformControl &&
+        !root.userData?.isOutline &&
+        !root.userData?.isHelper
+      ) {
+        objects.push(root);
+
+        if (root.children && Array.isArray(root.children)) {
+          root.children.forEach((child) => {
+            if (!child.userData?.isHelper && !child.userData?.isOutline) {
+              traverse(child);
+            }
+          });
+        }
+      }
+    };
+
+    try {
+      traverse(dynamicGroup);
+    } catch (error) {
+      console.error("Error getting selectable objects:", error);
+    }
+
+    return objects;
+  }, [dynamicGroup, isClient]);
+
+  // Find the parent object that should be selected
   const findSelectableParent = useCallback(
     (object: THREE.Object3D): THREE.Object3D => {
       let current = object;
       let parent = object.parent;
 
-      // Traverse up the hierarchy to find a suitable parent, but don't go beyond dynamicGroup
       while (parent && parent !== scene && parent !== dynamicGroup) {
         if (parent.userData && parent.userData.selectable !== false) {
           current = parent;
@@ -64,434 +110,412 @@ export default function ObjectManipulationControls() {
     [scene, dynamicGroup]
   );
 
-  // Handle object selection, including multi-select with Shift key
-  const handleObjectSelection = useCallback(
-    (object: THREE.Object3D | null, event?: MouseEvent) => {
-      // If clearing selection and not in multi-select mode, remove all highlights
-      if (!object && (!event || !event.shiftKey)) {
-        selectedObjects.forEach((obj) => {
-          if (obj && obj.parent) removeHighlight(obj);
-        });
-        selectObject(null);
-        setSelectedObjects([]);
-        return;
-      }
+  // Add visual highlight to selected object
+  const addHighlight = useCallback(
+    (object: THREE.Object3D) => {
+      if (!object || !object.parent || !isClient) return;
 
-      // Skip if object is null (should only happen in multi-select mode)
-      if (!object) return;
+      try {
+        if (object instanceof THREE.Mesh) {
+          if (!object.userData.isHighlighted && !object.userData.isOutline) {
+            const material = Array.isArray(object.material)
+              ? object.material[0]
+              : (object.material as THREE.Material);
 
-      // Skip invalid objects, helper objects, outlines, and transform controls
-      if (
-        !object.parent ||
-        object.userData?.isHelper ||
-        object.userData?.isOutline ||
-        object.userData?.isTransformControl
-      ) {
-        return;
-      }
+            if (!material) return;
 
-      const isShiftPressed = event && event.shiftKey;
+            if ("emissive" in material && material.emissive) {
+              object.userData.originalEmissive = material.emissive.clone();
+              material.emissive.set(0x333333);
+            } else if ("color" in material && material.color) {
+              object.userData.originalColor = material.color.clone();
+              const color = material.color.clone();
+              color.r = Math.min(color.r + 0.2, 1.0);
+              color.g = Math.min(color.g + 0.2, 1.0);
+              color.b = Math.min(color.b + 0.2, 1.0);
+              material.color.copy(color);
+            }
 
-      // Find if the object is already selected
-      const objectIndex = selectedObjects.findIndex(
-        (obj) => obj.uuid === object.uuid
-      );
+            // 清理旧的outline效果
+            if (object.userData.outlineEffect) {
+              try {
+                if (object.userData.outlineEffect.parent === object) {
+                  object.remove(object.userData.outlineEffect);
+                }
+              } catch (e) {
+                console.warn("Could not remove old outline effect:", e);
+              }
+              delete object.userData.outlineEffect;
+            }
 
-      if (isShiftPressed) {
-        // Multi-select mode with Shift key
-        if (objectIndex !== -1) {
-          // Object is already selected, deselect it
-          const newSelectedObjects = [...selectedObjects];
-          newSelectedObjects.splice(objectIndex, 1);
+            // 添加新的outline效果
+            try {
+              if (object.geometry) {
+                const outlineMaterial = new THREE.MeshBasicMaterial({
+                  color: 0x00ffff,
+                  wireframe: true,
+                  transparent: true,
+                  opacity: 0.5,
+                });
 
-          // Remove highlight from deselected object
-          removeHighlight(object);
+                const outlineMesh = new THREE.Mesh(
+                  object.geometry,
+                  outlineMaterial
+                );
+                outlineMesh.scale.multiplyScalar(1.03);
+                outlineMesh.userData.isHelper = true;
+                outlineMesh.userData.isOutline = true;
 
-          setSelectedObjects(newSelectedObjects);
+                object.add(outlineMesh);
+                object.userData.outlineEffect = outlineMesh;
+              }
+            } catch (outlineError) {
+              console.warn("Could not create outline effect:", outlineError);
+            }
 
-          // Update current selected object to the last one in list, or null
-          const newSelected =
-            newSelectedObjects.length > 0
-              ? newSelectedObjects[newSelectedObjects.length - 1]
-              : null;
-
-          selectObject(newSelected);
-        } else {
-          // Object is not selected, add it to selection
-          const newSelectedObjects = [...selectedObjects, object];
-          setSelectedObjects(newSelectedObjects);
-
-          // Add highlight to newly selected object
-          addHighlight(object);
-
-          // Make this the current selected object for transform controls
-          selectObject(object);
+            object.userData.isHighlighted = true;
+          }
+        } else if (object instanceof THREE.Group) {
+          object.traverse((child) => {
+            if (
+              child instanceof THREE.Mesh &&
+              !child.userData.isOutline &&
+              !child.userData.isHelper &&
+              child.parent
+            ) {
+              addHighlight(child);
+            }
+          });
+          object.userData.isHighlighted = true;
         }
-      } else {
-        // Single select mode (no Shift key)
-        // Remove highlights from all previously selected objects
-        selectedObjects.forEach((obj) => {
-          removeHighlight(obj);
-        });
-
-        // Select only this object
-        setSelectedObjects([object]);
-        selectObject(object);
-
-        // Add highlight to the selected object
-        addHighlight(object);
+      } catch (error) {
+        console.error("Error adding highlight:", error);
       }
     },
-    [selectObject, selectedObjects]
+    [isClient]
   );
 
-  // Add visual highlight to selected object
-  const addHighlight = useCallback((object: THREE.Object3D) => {
-    if (!object || !object.parent) return;
+  // Remove highlight from object
+  const removeHighlight = useCallback(
+    (object: THREE.Object3D) => {
+      if (!object || !object.parent || !isClient) return;
 
-    try {
-      if (object instanceof THREE.Mesh) {
-        // Only add highlight if not already highlighted and not an outline itself
-        if (!object.userData.isHighlighted && !object.userData.isOutline) {
-          // Check if material exists and is valid
+      try {
+        if (object instanceof THREE.Mesh) {
           const material = Array.isArray(object.material)
             ? object.material[0]
             : (object.material as THREE.Material);
 
           if (!material) return;
 
-          // Store original material properties
-          if ("emissive" in material && material.emissive) {
-            object.userData.originalEmissive = material.emissive.clone();
-            material.emissive.set(0x333333);
-          } else if ("color" in material && material.color) {
-            object.userData.originalColor = material.color.clone();
-            const color = material.color.clone();
-            color.r = Math.min(color.r + 0.2, 1.0);
-            color.g = Math.min(color.g + 0.2, 1.0);
-            color.b = Math.min(color.b + 0.2, 1.0);
-            material.color.copy(color);
+          if (
+            object.userData.originalEmissive &&
+            "emissive" in material &&
+            material.emissive
+          ) {
+            material.emissive.copy(object.userData.originalEmissive);
+            delete object.userData.originalEmissive;
+          } else if (
+            object.userData.originalColor &&
+            "color" in material &&
+            material.color
+          ) {
+            material.color.copy(object.userData.originalColor);
+            delete object.userData.originalColor;
           }
 
-          // Remove any old outline effect if it exists (cleanup)
           if (object.userData.outlineEffect) {
             try {
               if (object.userData.outlineEffect.parent === object) {
                 object.remove(object.userData.outlineEffect);
               }
             } catch (e) {
-              console.warn("Could not remove old outline effect:", e);
+              console.warn("Could not remove outline effect:", e);
             }
             delete object.userData.outlineEffect;
           }
 
-          // Add new outline effect
-          try {
-            if (object.geometry) {
-              const outlineMaterial = new THREE.MeshBasicMaterial({
-                color: 0x00ffff,
-                wireframe: true,
-                transparent: true,
-                opacity: 0.5,
-              });
-
-              const outlineMesh = new THREE.Mesh(
-                object.geometry,
-                outlineMaterial
-              );
-              outlineMesh.scale.multiplyScalar(1.03);
-              outlineMesh.userData.isHelper = true;
-              outlineMesh.userData.isOutline = true;
-
-              object.add(outlineMesh);
-              object.userData.outlineEffect = outlineMesh;
+          object.userData.isHighlighted = false;
+        } else if (object instanceof THREE.Group) {
+          object.traverse((child) => {
+            if (
+              child instanceof THREE.Mesh &&
+              !child.userData.isOutline &&
+              !child.userData.isHelper &&
+              child.parent
+            ) {
+              removeHighlight(child);
             }
-          } catch (outlineError) {
-            console.warn("Could not create outline effect:", outlineError);
-          }
-
-          object.userData.isHighlighted = true;
+          });
+          object.userData.isHighlighted = false;
         }
-      } else if (object instanceof THREE.Group) {
-        // Apply highlight to all meshes in the group
-        object.traverse((child) => {
-          if (
-            child instanceof THREE.Mesh &&
-            !child.userData.isOutline &&
-            !child.userData.isHelper &&
-            child.parent // Add this check to verify the child has a parent
-          ) {
-            addHighlight(child);
-          }
-        });
-
-        object.userData.isHighlighted = true;
+      } catch (error) {
+        console.error("Error removing highlight:", error);
       }
-    } catch (error) {
-      console.error("Error adding highlight:", error);
-    }
-  }, []);
+    },
+    [isClient]
+  );
 
-  // Remove highlight from object
-  const removeHighlight = useCallback((object: THREE.Object3D) => {
-    if (!object || !object.parent) return;
+  // Handle object selection with enhanced orbit controls management
+  const handleObjectSelection = useCallback(
+    (object: THREE.Object3D | null, event: MouseEvent) => {
+      try {
+        if (multiSelectMode && event.shiftKey && object) {
+          const alreadySelected = selectedObjects.includes(object);
+          if (alreadySelected) {
+            removeHighlight(object);
+            setSelectedObjects((prev) => prev.filter((obj) => obj !== object));
+          } else {
+            addHighlight(object);
+            setSelectedObjects((prev) => [...prev, object]);
+          }
+        } else {
+          // 清除之前的选择
+          selectedObjects.forEach((obj) => {
+            if (obj && obj.parent) removeHighlight(obj);
+          });
+          if (selectedObject && !selectedObjects.includes(selectedObject)) {
+            removeHighlight(selectedObject);
+          }
 
-    try {
-      if (object instanceof THREE.Mesh) {
-        // Check if material exists and is valid
-        const material = Array.isArray(object.material)
-          ? object.material[0]
-          : (object.material as THREE.Material);
+          if (object) {
+            // 选择新对象时禁用OrbitControls
+            disableOrbitControls();
+            addHighlight(object);
+            selectObject(object);
+            setSelectedObjects([]);
 
-        if (!material) return;
-
-        // Restore original material properties
-        if (
-          object.userData.originalEmissive &&
-          "emissive" in material &&
-          material.emissive
-        ) {
-          material.emissive.copy(object.userData.originalEmissive);
-          delete object.userData.originalEmissive;
-        }
-
-        if (
-          object.userData.originalColor &&
-          "color" in material &&
-          material.color
-        ) {
-          material.color.copy(object.userData.originalColor);
-          delete object.userData.originalColor;
-        }
-
-        // Remove outline mesh if it exists
-        if (object.userData.outlineEffect) {
-          try {
-            const outlineEffect = object.userData.outlineEffect;
-            if (outlineEffect && outlineEffect.parent === object) {
-              object.remove(outlineEffect);
+            if (transformControlsRef.current) {
+              transformControlsRef.current.attach(object);
             }
-          } catch (e) {
-            console.warn("Error removing outline:", e);
+          } else {
+            // 取消选择时启用OrbitControls
+            enableOrbitControls();
+            selectObject(null);
+            setSelectedObjects([]);
+
+            if (transformControlsRef.current) {
+              transformControlsRef.current.detach();
+            }
           }
-          delete object.userData.outlineEffect;
         }
-
-        object.userData.isHighlighted = false;
-      } else if (object instanceof THREE.Group) {
-        // Remove highlight from all meshes in the group
-        object.traverse((child) => {
-          if (
-            child instanceof THREE.Mesh &&
-            !child.userData.isOutline &&
-            child.parent
-          ) {
-            removeHighlight(child);
-          }
-        });
-
-        object.userData.isHighlighted = false;
+      } catch (error) {
+        console.error("Error in object selection:", error);
       }
-    } catch (error) {
-      console.error("Error removing highlight:", error);
-    }
-  }, []);
+    },
+    [
+      multiSelectMode,
+      selectedObjects,
+      selectedObject,
+      removeHighlight,
+      addHighlight,
+      selectObject,
+      disableOrbitControls,
+      enableOrbitControls,
+    ]
+  );
 
-  // Initialize manipulation controls
+  // 1. 创建TransformControls - 职责分离，增强OrbitControls管理
   useEffect(() => {
     if (
+      !isClient ||
       !scene ||
-      !dynamicGroup ||
       !scene.userData.camera ||
       !scene.userData.renderer
-    )
+    ) {
       return;
+    }
 
-    // Initialize transform controls and raycaster
     const camera = scene.userData.camera as THREE.Camera;
     const renderer = scene.userData.renderer as THREE.WebGLRenderer;
     const canvas = renderer.domElement;
 
-    // Configure raycaster
-    const raycaster = new THREE.Raycaster();
-    raycaster.params.Line = { threshold: 0.2 };
-    raycaster.params.Points = { threshold: 0.2 };
-    raycaster.layers.set(0);
-    raycasterRef.current = raycaster;
+    if (!camera || !canvas || !document.contains(canvas)) {
+      return;
+    }
 
-    // Create transform controls
-    const transformControls = new TransformControls(camera, canvas);
-    transformControls.setSize(1.2);
-    transformControls.userData.isTransformControl = true;
+    console.log("[ObjectControls] Creating TransformControls...");
 
-    // Add a proxy method for attaching objects safely
-    const safeAttach = (object: THREE.Object3D | null) => {
-      // First detach to ensure we don't have any lingering references
-      transformControls.detach();
+    const controls = new TransformControls(camera, canvas);
+    controls.setSize(1.2);
+    controls.userData.isTransformControl = true;
+    controls.setMode(transformMode);
 
-      if (!object) return;
+    // 强化的拖拽状态监听
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const onDraggingChanged = (event: any) => {
+      const isDraggingNow = Boolean(event.value);
+      setIsDragging(isDraggingNow);
 
-      // Safety check: verify the object is still valid before attaching
-      if (
-        object.parent &&
-        !object.userData?.isHelper &&
-        !object.userData?.isOutline &&
-        typeof object.updateMatrixWorld === "function"
-      ) {
-        // Only attach if object is valid
-        transformControls.attach(object);
+      if (isDraggingNow) {
+        // 开始拖拽时强制禁用OrbitControls
+        disableOrbitControls();
+        console.log(
+          "[ObjectControls] Dragging started - OrbitControls disabled"
+        );
       } else {
-        console.warn("Cannot attach transform controls to invalid object");
-        // Signal that selection needs to be cleared
-        selectObject(null);
-        setSelectedObjects([]);
+        // 拖拽结束时，只有在没有选中对象时才启用OrbitControls
+        if (!selectedObject && selectedObjects.length === 0) {
+          enableOrbitControls();
+          console.log(
+            "[ObjectControls] Dragging ended - OrbitControls enabled"
+          );
+        }
       }
     };
 
-    // Handle dragging state to toggle orbit controls
-    transformControls.addEventListener("dragging-changed", (event) => {
-      if (scene.userData.orbitControls) {
-        scene.userData.orbitControls.enabled = !event.value;
-      }
-      setIsDragging(Boolean(event.value));
-    });
-
-    // Update object state when transformed
-    transformControls.addEventListener("objectChange", () => {
+    // 对象变换监听
+    const onObjectChange = () => {
       if (selectedObject && selectedObject.parent) {
         try {
-          // 检查是否是模型对象
-          const isModel =
-            selectedObject.userData &&
-            (selectedObject.userData.modelId ||
-              selectedObject.userData.isModelObject ||
-              selectedObject.userData.isPersistentModel ||
-              selectedObject.userData.originalModelUrl ||
-              selectedObject.name === "Superman");
-
-          if (isModel) {
-            console.log(
-              `模型变换更新: ${selectedObject.name || "unnamed model"}`
-            );
-          }
-
-          // 更新对象状态
           updateObjectState(selectedObject.uuid);
-
-          // 显示新位置信息，方便调试
-          if (isModel) {
-            console.log(
-              `模型新位置: x=${selectedObject.position.x.toFixed(
-                2
-              )}, y=${selectedObject.position.y.toFixed(
-                2
-              )}, z=${selectedObject.position.z.toFixed(2)}`
-            );
-          }
         } catch (error) {
           console.error("Error updating object state:", error);
         }
       }
-    });
-
-    transformControls.setMode(transformMode);
-    scene.add(transformControls);
-    transformControlsRef.current = transformControls;
-
-    // Attach to selected object if one exists
-    if (selectedObject) {
-      safeAttach(selectedObject);
-    }
-
-    // Get all selectable objects from the scene, filtering out controls and helpers
-    const selectableObjects = getAllObjectsInScene(dynamicGroup).filter(
-      (obj) =>
-        !obj.userData?.isHelper &&
-        !obj.userData?.isOutline &&
-        !obj.userData?.isTransformControl
-    );
-
-    // Create drag controls (used only for object selection, not actual dragging)
-    const dragControls = new DragControls(selectableObjects, camera, canvas);
-    dragControls.enabled = false; // Disable default behavior, we handle selection manually
-    dragControlsRef.current = dragControls;
-
-    // Function to update the list of objects the DragControls tracks
-    // Note: DragControls doesn't have a direct setObjects method, so we create a new instance
-    const updateSelectableObjects = () => {
-      if (dragControlsRef.current) {
-        // Dispose of the current controls
-        dragControlsRef.current.dispose();
-
-        // Create a new instance with updated objects
-        const updatedObjects = getAllObjectsInScene(dynamicGroup).filter(
-          (obj) =>
-            !obj.userData?.isHelper &&
-            !obj.userData?.isOutline &&
-            !obj.userData?.isTransformControl
-        );
-
-        dragControlsRef.current = new DragControls(
-          updatedObjects,
-          camera,
-          canvas
-        );
-        dragControlsRef.current.enabled = false; // Keep the same setting
-      }
     };
 
-    // Handle object selection via clicking
+    // 鼠标按下时禁用OrbitControls
+    const onMouseDown = () => {
+      disableOrbitControls();
+    };
+
+    // 鼠标释放时的处理
+    const onMouseUp = () => {
+      // 只有在没有拖拽且没有选中对象时才启用OrbitControls
+      setTimeout(() => {
+        if (!isDragging && !selectedObject && selectedObjects.length === 0) {
+          enableOrbitControls();
+        }
+      }, 100);
+    };
+
+    controls.addEventListener("dragging-changed", onDraggingChanged);
+    controls.addEventListener("objectChange", onObjectChange);
+    controls.addEventListener("mouseDown", onMouseDown);
+    controls.addEventListener("mouseUp", onMouseUp);
+
+    scene.add(controls);
+    transformControlsRef.current = controls;
+
+    return () => {
+      console.log("[ObjectControls] Disposing TransformControls...");
+      controls.removeEventListener("dragging-changed", onDraggingChanged);
+      controls.removeEventListener("objectChange", onObjectChange);
+      controls.removeEventListener("mouseDown", onMouseDown);
+      controls.removeEventListener("mouseUp", onMouseUp);
+      controls.detach();
+      controls.enabled = false;
+      if (controls.parent) {
+        controls.removeFromParent();
+      }
+      controls.dispose();
+      transformControlsRef.current = null;
+    };
+  }, [
+    scene,
+    transformMode,
+    updateObjectState,
+    selectedObject,
+    isClient,
+    disableOrbitControls,
+    enableOrbitControls,
+    isDragging,
+    selectedObjects,
+  ]);
+
+  // 2. 创建DragControls - 职责分离
+  useEffect(() => {
+    if (
+      !isClient ||
+      !scene ||
+      !scene.userData.camera ||
+      !scene.userData.renderer ||
+      selectableObjects.length === 0
+    ) {
+      return;
+    }
+
+    const camera = scene.userData.camera as THREE.Camera;
+    const renderer = scene.userData.renderer as THREE.WebGLRenderer;
+    const canvas = renderer.domElement;
+
+    if (!camera || !canvas || !document.contains(canvas)) {
+      return;
+    }
+
+    console.log("[ObjectControls] Creating DragControls...");
+
+    const dragControls = new DragControls(selectableObjects, camera, canvas);
+    dragControls.enabled = false; // 仅用于选择，不用于拖拽
+    dragControlsRef.current = dragControls;
+
+    return () => {
+      console.log("[ObjectControls] Disposing DragControls...");
+      dragControls.dispose();
+      dragControlsRef.current = null;
+    };
+  }, [scene, selectableObjects, isClient]);
+
+  // 3. 事件监听器绑定 - 职责分离，增强OrbitControls管理
+  useEffect(() => {
+    if (!isClient || !scene || !scene.userData.renderer) {
+      return;
+    }
+
+    const renderer = scene.userData.renderer as THREE.WebGLRenderer;
+    const canvas = renderer.domElement;
+    const camera = scene.userData.camera as THREE.Camera;
+
+    if (!canvas || !camera || !document.contains(canvas)) {
+      return;
+    }
+
+    console.log("[ObjectControls] Binding event listeners...");
+
+    // 配置raycaster
+    const raycaster = raycasterRef.current;
+    raycaster.params.Line = { threshold: 0.2 };
+    raycaster.params.Points = { threshold: 0.2 };
+    raycaster.layers.set(0);
+
+    // 增强的点击事件处理
     const handleClick = (event: MouseEvent) => {
       if (isDragging) return;
 
-      // If right-click, cancel selection and return
+      // 点击时先禁用OrbitControls，防止误触发
+      disableOrbitControls();
+
       if (event.button === 2) {
-        // Use explicit highlight removal method
+        // 右键清除选择
         if (selectedObjects.length > 0) {
           selectedObjects.forEach((obj) => {
             if (obj && obj.parent) removeHighlight(obj);
           });
         }
-
-        // Also remove highlight from the currently selected object if it exists
         if (selectedObject && !selectedObjects.includes(selectedObject)) {
           removeHighlight(selectedObject);
         }
-
-        // Clear selection state
         selectObject(null);
         setSelectedObjects([]);
+        // 清除选择后启用OrbitControls
+        enableOrbitControls();
         return;
       }
 
-      // Create normalized mouse coordinates
       const mouse = new THREE.Vector2();
       const rect = canvas.getBoundingClientRect();
       mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
       mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
 
-      // Update raycaster
-      raycasterRef.current.setFromCamera(mouse, camera);
-
-      // Get all selectable objects in scene
-      const allObjects = getAllObjectsInScene(dynamicGroup);
-      const intersects = raycasterRef.current.intersectObjects(
-        allObjects,
-        true
-      );
+      raycaster.setFromCamera(mouse, camera);
+      const intersects = raycaster.intersectObjects(selectableObjects, true);
 
       if (intersects.length > 0) {
-        // Get clicked object
         const clickedObject = intersects[0].object;
-
-        // Skip if the clicked object is no longer valid
         if (!clickedObject || !clickedObject.parent) return;
 
-        // Find appropriate parent object to select
         const targetObject = findSelectableParent(clickedObject);
-
-        // Enhanced validation for object selection
-        // Check that the object is not only in the scene but has valid matrix methods
         const isValidForSelection =
           targetObject &&
           targetObject.parent &&
@@ -500,23 +524,23 @@ export default function ObjectManipulationControls() {
           !targetObject.userData?.isOutline &&
           !targetObject.userData?.isTransformControl;
 
-        // Ensure object is still valid before selecting
-        if (!isValidForSelection) return;
+        if (!isValidForSelection) {
+          // 无效选择时启用OrbitControls
+          enableOrbitControls();
+          return;
+        }
 
-        // Don't reselect the same object if already selected and not in multi-select mode
         if (selectedObject === targetObject && !event.shiftKey) {
           return;
         }
 
-        // Select the object
         handleObjectSelection(targetObject, event);
       } else if (!event.shiftKey) {
-        // When clicking empty space without Shift, clear selection
         handleObjectSelection(null, event);
       }
     };
 
-    // Handle object hover feedback
+    // 鼠标移动事件处理
     const handleMouseMove = (event: MouseEvent) => {
       if (isDragging) return;
 
@@ -525,51 +549,36 @@ export default function ObjectManipulationControls() {
       mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
       mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
 
-      raycasterRef.current.setFromCamera(mouse, camera);
-
-      const allObjects = getAllObjectsInScene(dynamicGroup);
-      const intersects = raycasterRef.current.intersectObjects(
-        allObjects,
-        true
-      );
+      raycaster.setFromCamera(mouse, camera);
+      const intersects = raycaster.intersectObjects(selectableObjects, true);
 
       if (intersects.length > 0) {
-        // Hovering over an object - change cursor accordingly
         document.body.style.cursor = multiSelectMode ? "copy" : "pointer";
       } else {
-        // Not hovering over any object
         document.body.style.cursor = multiSelectMode ? "copy" : "auto";
       }
     };
 
-    // Setup event listeners
-    canvas.addEventListener("click", handleClick);
-
+    // 右键菜单事件处理
     const handleContextMenu = (event: MouseEvent) => {
-      event.preventDefault(); // Prevent default context menu
+      event.preventDefault();
       if (!isDragging) {
-        // Explicitly remove highlights from all selected objects
         if (selectedObjects.length > 0) {
           selectedObjects.forEach((obj) => {
             if (obj && obj.parent) removeHighlight(obj);
           });
         }
-
-        // Also remove highlight from the currently selected object if it exists
         if (selectedObject && !selectedObjects.includes(selectedObject)) {
           removeHighlight(selectedObject);
         }
-
-        // Clear selection state
         selectObject(null);
         setSelectedObjects([]);
+        // 右键清除选择后启用OrbitControls
+        enableOrbitControls();
       }
     };
 
-    canvas.addEventListener("contextmenu", handleContextMenu);
-    canvas.addEventListener("mousemove", handleMouseMove);
-
-    // Set up keyboard listeners for Shift key (multi-select mode)
+    // 键盘事件处理
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Shift") {
         setMultiSelectMode(true);
@@ -584,256 +593,167 @@ export default function ObjectManipulationControls() {
       }
     };
 
-    window.addEventListener("keydown", handleKeyDown);
-    window.addEventListener("keyup", handleKeyUp);
+    // 鼠标离开canvas时的处理
+    const handleMouseLeave = () => {
+      // 如果没有选中对象且没有在拖拽，则启用OrbitControls
+      if (!selectedObject && selectedObjects.length === 0 && !isDragging) {
+        enableOrbitControls();
+      }
+    };
 
-    // Add scene change event listener to update objects
-    if (scene) {
-      // Update selectable objects periodically
-      const updateInterval = setInterval(updateSelectableObjects, 2000);
+    canvas.addEventListener("click", handleClick);
+    canvas.addEventListener("mousemove", handleMouseMove);
+    canvas.addEventListener("contextmenu", handleContextMenu);
+    canvas.addEventListener("mouseleave", handleMouseLeave);
+    document.addEventListener("keydown", handleKeyDown);
+    document.addEventListener("keyup", handleKeyUp);
 
-      return () => {
-        // Cleanup
-        clearInterval(updateInterval);
-        // Remove event listeners
-        canvas.removeEventListener("click", handleClick);
-        canvas.removeEventListener("contextmenu", handleContextMenu);
-        canvas.removeEventListener("mousemove", handleMouseMove);
-        window.removeEventListener("keydown", handleKeyDown);
-        window.removeEventListener("keyup", handleKeyUp);
-
-        // Dispose controls
-        if (transformControlsRef.current) {
-          try {
-            // First detach from any objects to prevent errors
-            transformControlsRef.current.detach();
-
-            // Then disable (this stops event processing)
-            transformControlsRef.current.enabled = false;
-
-            // Remove from scene
-            if (transformControlsRef.current.parent) {
-              transformControlsRef.current.removeFromParent();
-            }
-
-            // Dispose to clean up resources
-            transformControlsRef.current.dispose();
-
-            // Clear reference
-            transformControlsRef.current = null;
-          } catch (error) {
-            console.error("Error disposing transform controls:", error);
-          }
-        }
-
-        if (dragControlsRef.current) {
-          try {
-            dragControlsRef.current.dispose();
-            dragControlsRef.current = null;
-          } catch (error) {
-            console.error("Error disposing drag controls:", error);
-          }
-        }
-
-        document.body.style.cursor = "auto";
-
-        // Re-enable orbit controls
-        if (scene.userData.orbitControls) {
-          scene.userData.orbitControls.enabled = true;
-        }
-      };
-    }
-
-    // Store the safe attach method on the controls for later use
-    transformControls.userData.safeAttach = safeAttach;
-
-    return undefined;
+    return () => {
+      canvas.removeEventListener("click", handleClick);
+      canvas.removeEventListener("mousemove", handleMouseMove);
+      canvas.removeEventListener("contextmenu", handleContextMenu);
+      canvas.removeEventListener("mouseleave", handleMouseLeave);
+      document.removeEventListener("keydown", handleKeyDown);
+      document.removeEventListener("keyup", handleKeyUp);
+    };
   }, [
+    isClient,
     scene,
-    dynamicGroup,
-    transformMode,
-    selectedObject,
-    updateObjectState,
-    multiSelectMode,
+    selectableObjects,
     isDragging,
-    handleObjectSelection,
-    findSelectableParent,
+    selectedObject,
     selectedObjects,
+    multiSelectMode,
+    findSelectableParent,
+    handleObjectSelection,
     removeHighlight,
     selectObject,
+    disableOrbitControls,
+    enableOrbitControls,
   ]);
 
-  // Update transform controls when selected object changes
+  // 4. 同步选中对象到TransformControls - 职责分离
   useEffect(() => {
-    if (!transformControlsRef.current) return;
+    if (!isClient || !transformControlsRef.current) return;
+
+    const controls = transformControlsRef.current;
 
     try {
-      if (selectedObject) {
-        // Use the safe attach method
-        if (
-          typeof transformControlsRef.current.userData.safeAttach === "function"
-        ) {
-          transformControlsRef.current.userData.safeAttach(selectedObject);
-        } else {
-          // Fallback to our safety checks
-          // Check if the object still exists in the scene and is valid
-          const isValidObject =
-            selectedObject.parent !== null &&
-            !selectedObject.userData?.isHelper &&
-            !selectedObject.userData?.isOutline &&
-            typeof selectedObject.updateMatrixWorld === "function";
-
-          if (isValidObject) {
-            transformControlsRef.current.attach(selectedObject);
-          } else {
-            // Object is no longer valid, detach controls and clear selection
-            transformControlsRef.current.detach();
-            selectObject(null);
-            setSelectedObjects([]);
-          }
-        }
+      if (selectedObject && selectedObject.parent) {
+        controls.attach(selectedObject);
+        addHighlight(selectedObject);
+        console.log(
+          `[ObjectControls] TransformControls attached to ${
+            selectedObject.name || "object"
+          }`
+        );
       } else {
-        transformControlsRef.current.detach();
+        controls.detach();
+        console.log("[ObjectControls] TransformControls detached");
       }
     } catch (error) {
-      console.error("Error updating transform controls:", error);
-      // Safely detach on error
-      transformControlsRef.current.detach();
+      console.error("Error syncing TransformControls:", error);
     }
-  }, [selectedObject, selectObject]);
+  }, [selectedObject, isClient, addHighlight]);
 
-  // Update transform mode
+  // 5. 同步变换模式到TransformControls - 职责分离
   useEffect(() => {
-    if (!transformControlsRef.current) return;
-    transformControlsRef.current.setMode(transformMode);
-  }, [transformMode]);
+    if (!isClient || !transformControlsRef.current) return;
 
-  // Handle cursor style based on selection mode
-  useEffect(() => {
-    const cursor = multiSelectMode
-      ? "copy"
-      : selectedObject
-      ? "pointer"
-      : "auto";
-    document.body.style.cursor = cursor;
-  }, [multiSelectMode, selectedObject]);
-
-  // Group selected objects
-  const handleGroupSelected = () => {
-    if (selectedObjects.length > 1) {
-      const group = createGroup(selectedObjects, `Group_${Date.now()}`);
-      selectObject(group);
-      setSelectedObjects([group]);
+    try {
+      transformControlsRef.current.setMode(transformMode);
+      console.log(`[ObjectControls] Transform mode set to ${transformMode}`);
+    } catch (error) {
+      console.error("Error setting transform mode:", error);
     }
-  };
+  }, [transformMode, isClient]);
 
-  // Ungroup a selected group
-  const handleUngroup = () => {
-    if (
-      selectedObject &&
-      selectedObject instanceof THREE.Group &&
-      selectedObject.children.length > 0
-    ) {
-      if (selectedObject === dynamicGroup) {
-        console.warn("Cannot ungroup system group");
-        return;
+  // 组合选中的对象
+  const handleGroupSelected = useCallback(() => {
+    if (selectedObjects.length < 2) return;
+
+    try {
+      selectedObjects.forEach((obj) => {
+        if (obj && obj.parent) removeHighlight(obj);
+      });
+
+      const group = createGroup(selectedObjects);
+      if (group) {
+        selectObject(group);
+        setSelectedObjects([]);
+        addHighlight(group);
+
+        if (transformControlsRef.current) {
+          transformControlsRef.current.attach(group);
+        }
       }
+    } catch (error) {
+      console.error("Error grouping objects:", error);
+    }
+  }, [
+    selectedObjects,
+    removeHighlight,
+    createGroup,
+    selectObject,
+    addHighlight,
+  ]);
 
-      // Remove highlight from the selected group before ungrouping
+  // 取消组合
+  const handleUngroup = useCallback(() => {
+    if (!selectedObject || selectedObject.children.length === 0) return;
+
+    try {
       removeHighlight(selectedObject);
-
-      // Also remove highlights from all currently selected objects
       selectedObjects.forEach((obj) => {
         if (obj && obj.parent) {
           removeHighlight(obj);
         }
       });
 
-      // Detach transform controls before ungrouping
       if (transformControlsRef.current) {
         transformControlsRef.current.detach();
       }
 
-      // Perform the ungrouping
       ungroupObjects(selectedObject as THREE.Group);
-
-      // Clear selection state
       selectObject(null);
       setSelectedObjects([]);
-    }
-  };
-
-  // Get all selectable objects from the scene
-  function getAllObjectsInScene(root: THREE.Object3D): THREE.Object3D[] {
-    if (!root) return [];
-
-    const objects: THREE.Object3D[] = [];
-
-    try {
-      // Skip transform controls and outline meshes
-      if (
-        !root.userData?.isTransformControl &&
-        !root.userData?.isOutline &&
-        !root.userData?.isHelper
-      ) {
-        objects.push(root);
-
-        // Add all children recursively
-        if (root.children && Array.isArray(root.children)) {
-          root.children.forEach((child) => {
-            // Skip helper objects and outlines
-            if (
-              (child.userData &&
-                (child.userData.isHelper || child.userData.isOutline)) ||
-              (child.type === "LineSegments" && child.userData.isHelper)
-            ) {
-              return;
-            }
-
-            // Recursively add non-helper objects
-            objects.push(...getAllObjectsInScene(child));
-          });
-        }
-      }
     } catch (error) {
-      console.error("Error getting scene objects:", error);
+      console.error("Error ungrouping objects:", error);
     }
+  }, [
+    selectedObject,
+    selectedObjects,
+    removeHighlight,
+    ungroupObjects,
+    selectObject,
+  ]);
 
-    return objects;
-  }
+  // 清理选择
+  const handleClearSelection = useCallback(() => {
+    if (selectedObjects.length > 0) {
+      selectedObjects.forEach((obj) => {
+        if (obj && obj.parent) removeHighlight(obj);
+      });
+    }
+    if (selectedObject && !selectedObjects.includes(selectedObject)) {
+      removeHighlight(selectedObject);
+    }
+    selectObject(null);
+    setSelectedObjects([]);
+    // 清除选择后启用OrbitControls
+    enableOrbitControls();
+  }, [
+    selectedObjects,
+    selectedObject,
+    removeHighlight,
+    selectObject,
+    enableOrbitControls,
+  ]);
 
-  // Add selectedObject validation - runs periodically to ensure the selected object is still valid
+  // 组件卸载时的清理
   useEffect(() => {
-    if (!selectedObject) return;
-
-    // Check if selected object is still valid every 500ms
-    const validityCheckInterval = setInterval(() => {
-      if (
-        selectedObject &&
-        (!selectedObject.parent || !selectedObject.updateMatrixWorld)
-      ) {
-        // Object no longer valid - clear selection
-        console.log("Selected object is no longer valid, clearing selection");
-        selectObject(null);
-        setSelectedObjects([]);
-
-        // Also detach transform controls
-        if (transformControlsRef.current) {
-          transformControlsRef.current.detach();
-        }
-      }
-    }, 500);
-
     return () => {
-      clearInterval(validityCheckInterval);
-    };
-  }, [selectedObject, selectObject]);
-
-  // Ensure we safely detach transform controls when component unmounts
-  useEffect(() => {
-    return () => {
-      // Safely detach transform controls on unmount
-      if (transformControlsRef.current) {
+      if (isClient && transformControlsRef.current) {
         try {
           transformControlsRef.current.detach();
         } catch (error) {
@@ -843,58 +763,10 @@ export default function ObjectManipulationControls() {
           );
         }
       }
+      // 卸载时恢复OrbitControls
+      enableOrbitControls();
     };
-  }, []);
-
-  // Add a cleanup for selectedObjects
-  useEffect(() => {
-    if (selectedObjects.length === 0) return;
-
-    // Filter out invalid objects from selection
-    const cleanupInvalidObjects = () => {
-      // Check for invalid objects in the selection
-      const validObjects = selectedObjects.filter(
-        (obj) =>
-          obj && obj.parent && typeof obj.updateMatrixWorld === "function"
-      );
-
-      // If some objects were invalid, update the selection list
-      if (validObjects.length !== selectedObjects.length) {
-        console.log(
-          `Removed ${
-            selectedObjects.length - validObjects.length
-          } invalid objects from selection`
-        );
-
-        // Update the selected objects list
-        setSelectedObjects(validObjects);
-
-        // If the selected object is now invalid, update it
-        if (
-          selectedObject &&
-          (!selectedObject.parent ||
-            typeof selectedObject.updateMatrixWorld !== "function")
-        ) {
-          // Select the last valid object or null
-          const newSelected =
-            validObjects.length > 0
-              ? validObjects[validObjects.length - 1]
-              : null;
-          selectObject(newSelected);
-        }
-      }
-    };
-
-    // Run this check periodically
-    const cleanupInterval = setInterval(cleanupInvalidObjects, 1000);
-
-    // Also run it once immediately
-    cleanupInvalidObjects();
-
-    return () => {
-      clearInterval(cleanupInterval);
-    };
-  }, [selectedObjects, selectedObject, selectObject]);
+  }, [isClient, enableOrbitControls]);
 
   return (
     <div className="controls-container">
@@ -948,10 +820,7 @@ export default function ObjectManipulationControls() {
       </div>
 
       <div className="footer">
-        <button
-          className="deselect-button"
-          onClick={() => handleObjectSelection(null)}
-        >
+        <button className="deselect-button" onClick={handleClearSelection}>
           Unselect
         </button>
       </div>
@@ -1044,32 +913,31 @@ export default function ObjectManipulationControls() {
           border: none;
           border-radius: 6px;
           background-color: rgba(244, 67, 54, 0.2);
-          color: #ff7961;
+          color: white;
           cursor: pointer;
           transition: all 0.2s;
         }
 
         .deselect-button:hover {
-          background-color: rgba(244, 67, 54, 0.3);
+          background-color: rgba(244, 67, 54, 0.4);
         }
 
         .info-text {
-          color: rgba(255, 255, 255, 0.6);
+          color: rgba(255, 255, 255, 0.7);
           font-size: 11px;
           text-align: center;
-          margin-top: 8px;
-          user-select: none;
+          margin-top: 5px;
+          line-height: 1.3;
         }
 
         .selection-info {
-          margin-top: 5px;
-          color: white;
+          color: #4fc3f7;
           font-size: 12px;
           text-align: center;
-          padding: 5px;
+          margin-top: 5px;
+          padding: 4px 8px;
+          background-color: rgba(79, 195, 247, 0.1);
           border-radius: 4px;
-          background-color: rgba(255, 255, 255, 0.05);
-          user-select: none;
         }
       `}</style>
     </div>

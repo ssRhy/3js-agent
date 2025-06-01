@@ -1,0 +1,2185 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+
+
+一、整体架构与功能简介
+简要重述一下组件的主要职责，以便后续定位问题更精准：
+
+作用：在 Three.js 场景中，使用 TransformControls 和 DragControls 让用户可以通过鼠标直接选中并平移/旋转/缩放三维物体，同时支持多选（Shift 多选）以及把选中物体 “Group/Ungroup”。
+
+数据源：使用了 useSceneStore，从 store 中获取：
+
+场景对象 scene
+
+动态对象根节点 dynamicGroup
+
+当前选中物体 selectedObject
+
+选中回调 selectObject(...)
+
+更新物体状态的 updateObjectState(uuid)
+
+创建组 createGroup
+
+解散组 ungroupObjects
+
+……等
+
+主要 Hook：
+
+useEffect(() => { … 初始化 TransformControls & DragControls … }, [scene, dynamicGroup, transformMode]);
+
+useEffect(() => { … 当 selectedObject 改变时 attach/detach TransformControls … }, [selectedObject, selectObject]);
+
+useEffect(() => { transformControlsRef.current.setMode(transformMode) }, [transformMode]);
+
+以及多处带定时器（setTimeout、setInterval）的逻辑。
+
+二、潜在问题汇总
+以下从几个不同层面，分别列出可能导致你在“开发环境可用、生产环境失效”或是功能不稳定、内存泄漏、性能问题等常见陷阱。
+
+1. React Hook 依赖项 (Dependency Array) 缺失或不完整
+核心影响：React 在优化时会根据依赖项判断是否重新执行 useEffect、useCallback。如果依赖项写得不完整，一方面可能导致“闭包捕获了过期值”，另一方面也可能反复重复执行初始化/清理逻辑，从而出现功能丢失或多次绑定监听器、定时器没有正确清理等问题。
+
+1.1. 第一个 useEffect 的依赖只写了 [scene, dynamicGroup, transformMode]
+ts
+复制
+编辑
+useEffect(() => {
+  // …大量初始化 TransformControls & DragControls 逻辑…
+}, [scene, dynamicGroup, transformMode]);
+问题：
+
+该 effect 里引用了不少外部变量/函数，但依赖数组里并未列出它们，具体包括：
+
+selectedObject（在初始化时如果已有选中，需要 attach）
+
+selectObject（在初始化回调里会调用）
+
+getAllObjectsInScene（动态获取一堆对象）
+
+findSelectableParent（对象选择时判断父级逻辑）
+
+addHighlight、removeHighlight（给物体添加/移除高亮）
+
+updateObjectState（物体变换时回调）
+
+multiSelectMode、selectedObjects（在事件处理逻辑里会读取这些值）
+
+useSceneStore 里拿到的其他函数（createGroup、ungroupObjects）虽然没有在 init 里直接调用，但在 Bind event 时可能被引用
+
+如此一来，这些变量发生变化时（例如切换选中物体 selectedObject，或者切换 multiSelectMode）并不会触发重新绑定或更新，就会导致 effect 中的回调持有“过期的引用”。在开发环境里因为热更新/快速反复测试，可能未必明显出错，生产打包时逻辑更严格，极易出现“选不中”、“点击没有反应”或“无法 attach/正常移动”的现象。
+
+改进建议：
+
+补全依赖数组：
+将所有在 effect 回调里直接引用或间接引用的外部变量、回调函数都加进依赖数组。大致像下面这样：
+
+ts
+复制
+编辑
+useEffect(() => {
+  // …初始化逻辑…
+}, [
+  scene,
+  dynamicGroup,
+  transformMode,
+  selectedObject,
+  selectObject,
+  getAllObjectsInScene,
+  findSelectableParent,
+  addHighlight,
+  removeHighlight,
+  updateObjectState,
+  createGroup,
+  ungroupObjects,
+  multiSelectMode,
+  selectedObjects
+]);
+这样可以保证当这些值发生变化（比如 selectedObject 变了、selectedObjects 变了、multiSelectMode 变了），React 会重新执行这个 effect，重新绑定事件并保证所有引用都是最新值。
+
+拆分过大的 effect：
+该 effect 做了很多事情（初始化 Three 控件、动态重建 DragControls、绑定/解绑事件、定时器等），建议把它拆分成多个更小的逻辑块，例如：
+
+初始化 Three 控件：监听 scene、dynamicGroup、camera、renderer。一旦这些准备好了，先创建 TransformControls、DragControls 并挂到场景上，同时在 transformMode 变化时只切换模式，不重新初始化控件本身。
+
+绑定事件监听器：单独一个 effect，依赖于 canvas 元素、selectedObjects、multiSelectMode、findSelectableParent、handleObjectSelection 等。这样可以精细地在多选模式或选中列表发生变化时动态调整。
+
+定时更新可选对象：可以写成 useEffect(() => { const id = setInterval(updateSelectableObjects, 2000); return () => clearInterval(id) }, [dynamicGroup, updateSelectableObjects])。
+这样不仅使得每块逻辑更清晰，也避免了不必要的重复创建或“闭包引用过期”的问题。
+
+1.2. useCallback 的依赖遗漏
+组件里有几个 useCallback 包裹的函数，例如 findSelectableParent、handleObjectSelection、addHighlight、removeHighlight。它们在内部引用了不少外部变量和函数，却没有完全列在依赖里。
+
+findSelectableParent：
+
+ts
+复制
+编辑
+const findSelectableParent = useCallback(
+  (object: THREE.Object3D): THREE.Object3D => {
+    let current = object;
+    let parent = object.parent;
+    while (parent && parent !== scene && parent !== dynamicGroup) {
+      if (parent.userData && parent.userData.selectable !== false) {
+        current = parent;
+      }
+      parent = parent.parent;
+    }
+    return current;
+  },
+  [scene, dynamicGroup]
+);
+依赖里只有 [scene, dynamicGroup]，这是合理的。但是如果未来 dynamicGroup 变成 null 或者 scene 更新时，就能及时更新逻辑。
+
+handleObjectSelection：
+
+ts
+复制
+编辑
+const handleObjectSelection = useCallback(
+  (object: THREE.Object3D | null, event?: MouseEvent) => {
+    // …这里会用到 selectObject、selectedObjects、addHighlight、removeHighlight…
+  },
+  [selectObject, selectedObjects]
+);
+问题在于：
+
+该回调体内部会调用 addHighlight(object) 和 removeHighlight(object)，但依赖数组中没有列出 addHighlight、removeHighlight。如果后续这两个函数内部逻辑发生变化（或重建），handleObjectSelection 并不能拿到最新引用。
+
+还会读取 selectedObjects（列在依赖里了）以及 selectObject（列在依赖里）。但如果 addHighlight、removeHighlight 或其他引用也变了，都应该加进依赖。
+
+addHighlight / removeHighlight：
+
+ts
+复制
+编辑
+const addHighlight = useCallback((object: THREE.Object3D) => { … }, []);
+const removeHighlight = useCallback((object: THREE.Object3D) => { … }, []);
+这里把依赖数组写成 []，意味着它们内部引用的变量都会被“固化”在初始渲染时的值。如果未来你有意在这两个函数里使用了外部状态，就不能及时更新。目前这两个函数体内部仅使用了 object、THREE.Mesh、object.userData 等原生 Three.js 属性，表面上似乎没“闭包问题”，暂时可以接受。但如果未来想引用 React State（比如高亮颜色从 props 里读取），就要把对应依赖加进来。
+
+2. 事件监听器绑定与移除逻辑不完善
+整个组件最复杂的部分，是在第一个 useEffect 里，使用 bindEventListeners() 来给 canvas（Three.js 渲染的 <canvas>）和 window 绑定了多个事件，包括 click、mousemove、contextmenu、keydown、keyup，并且依赖于一些临时变量（如 handleClick, handleMouseMove 等）才能在清理阶段移除对应的监听器。
+
+2.1. 定义在闭包里的事件处理函数，清理时可能无法对应
+示例：
+
+ts
+复制
+编辑
+let handleClick: (event: MouseEvent) => void;
+let handleMouseMove: (event: MouseEvent) => void;
+let handleContextMenu: (event: MouseEvent) => void;
+let handleKeyDown: (event: KeyboardEvent) => void;
+let handleKeyUp: (event: KeyboardEvent) => void;
+
+const bindEventListeners = () => {
+  handleClick = (event) => { … };
+  handleMouseMove = (event) => { … };
+  handleContextMenu = (event) => { … };
+  handleKeyDown = (event) => { … };
+  handleKeyUp = (event) => { … };
+
+  canvas.addEventListener("click", handleClick, eventOptions);
+  canvas.addEventListener("contextmenu", handleContextMenu, eventOptions);
+  canvas.addEventListener("mousemove", handleMouseMove, { passive: true });
+  window.addEventListener("keydown", handleKeyDown);
+  window.addEventListener("keyup", handleKeyUp);
+  return true;
+};
+然后在 cleanup 函数里尝试移除：
+
+ts
+复制
+编辑
+if (handleClick) canvas.removeEventListener("click", handleClick);
+if (handleContextMenu) canvas.removeEventListener("contextmenu", handleContextMenu);
+if (handleMouseMove) canvas.removeEventListener("mousemove", handleMouseMove);
+if (handleKeyDown) window.removeEventListener("keydown", handleKeyDown);
+if (handleKeyUp) window.removeEventListener("keyup", handleKeyUp);
+问题1： 如果 bindEventListeners 在多次重渲染/依赖变化时被重复调用，它会多次给同一个 canvas 和 window 添加监听器，但若在 cleanup 时没有与之成对的移除（比如函数引用早已变化、或并未执行 cleanup），就会导致内存泄漏、重复触发。
+
+问题2： bindEventListeners 本身会先判断 canvas 是否存在、再返回 true/false，但其调用是在一个递归 initializeControls 中，如果一开始 canvas 不在 DOM，仅仅 console.log 后 setTimeout(initializeControls, 100)； 重新尝试，可能造成多次 bindEventListeners。如果某个阶段失败（返回 false），会在 50ms 后再次调用 initializeControls，期间若上一个绑定没有清理，就会积累。
+
+改进建议：
+
+尽量避免在一个大型函数里做“自己调用自己”的递归绑定。可以把“等待 canvas 准备好再绑定事件”这段逻辑拆成：
+
+ts
+复制
+编辑
+// 1) 首先用一个 useEffect 监听 scene.userData.renderer/domElement 的变化，一旦 canvas 元素明确存在，就执行 bindEventListeners；
+// 2) 在返回的 cleanup 中，只需移除一次这批监听器（一次性移除），而不需要依赖递归 setTimeout。
+// 3) 如果未来 canvas 可能被卸载重建，React 会先执行 cleanup，再在新 canvas 挂载时执行绑定，保持一一对应。
+永远确保“添加监听器”和“移除监听器”对应：
+
+如果你在 useEffect 内写 canvas.addEventListener(...)，就必须在 return 的 cleanup 函数里立即使用相同的引用 canvas.removeEventListener(...)。
+
+不要用 let handleClick 这样在闭包里动态赋值，而最好在外层先 const handleClick = (e) => { … }，然后在 useEffect 里直接引用该函数并移除。
+
+把 handleClick、handleMouseMove 等事件处理函数定义提升到组件顶层（或至少放在一次 useCallback 中），并且为它们添加依赖，让 React 知道什么时候需要重建/解绑。像：
+
+ts
+复制
+编辑
+const handleClick = useCallback((event: MouseEvent) => { … }, [/* 列出所有依赖 */]);
+然后在 useEffect 中：
+
+ts
+复制
+编辑
+useEffect(() => {
+  if (!canvas) return;
+  canvas.addEventListener("click", handleClick, options);
+  // …其余监听器…
+  return () => {
+    canvas.removeEventListener("click", handleClick, options);
+    // …其余移除…
+  };
+}, [canvas, handleClick, handleMouseMove, handleContextMenu, handleKeyDown, handleKeyUp]);
+这样就能确保“绑定/解绑”时引用的是同一个函数，并且只在需要时刻执行一次。
+
+2.2. 递归 initializeControls + 定时器 setTimeout 复杂度太高
+ts
+复制
+编辑
+const initializeControls = () => {
+  try {
+    if (!document.contains(canvas) || !canvas.offsetParent) {
+      setTimeout(initializeControls, 50);
+      return;
+    }
+    // …创建 TransformControls、DragControls、绑定事件…
+  } catch (error) {
+    setTimeout(initializeControls, 200);
+  }
+};
+
+// 首次使用小延迟保证 DOM 准备好
+const initTimeout = setTimeout(initializeControls, 10);
+return () => {
+  clearTimeout(initTimeout);
+  // 清理 TransformControls
+  // …
+};
+问题：
+
+每次 initializeControls 进入「canvas 尚未准备好」的分支时，会继续 setTimeout 自己（50ms 后再次尝试）。若最终成功前多次重渲染，可能产生多个并行的 initializeControls 调用，增大绑定事件次数。
+
+在 catch 的时候还会 setTimeout(initializeControls, 200)，如果内部报错，并没有对应的 clearTimeout 或同一逻辑控制，就会不断在后台尝试，可能导致逻辑混乱或堆栈累积。
+
+initTimeout 只在组件卸载时清理最初那一次的定时器引用。也就是说，如果在后续 setTimeout(initializeControls, 50) 成功后仍有新的重试任务排队，组件卸载时并未清理所有任务。
+
+改进建议：
+
+拆分“等待 canvas 就绪”与“真正初始化”的逻辑。最推荐做法是监听一个 React State（或 store）来标记 “canvas 是否挂载在 DOM 上并且可用”，而不是手动轮询/递归。比如你在渲染 Three.js 画布的地方，一旦 <canvas> 挂载完毕就把一个 ref 或状态传给此组件。这样不需要 setTimeout 轮询。
+
+如果确实需要轮询，也必须在 cleanup 阶段清理所有定时器。可以把 let retryTimeoutId: NodeJS.Timeout | null = null; 放在外层，当 re-run initializeControls 时，把上一个 retryTimeoutId 保存在变量里，并在任何一次 useEffect cleanup 阶段统一 clearTimeout(retryTimeoutId)。
+
+对于失败重试，防止无限重试：可以设一个最大重试次数，超过后警告用户或抛出错误，不要无节制循环。
+
+3. 定时器 (setInterval) 没有在所有分支中正确清理
+3.1. 更新可选对象列表的定时器
+在 initializeControls 内部，如果绑定成功，就启动了一个周期性更新：
+
+ts
+复制
+编辑
+if (scene) {
+  const updateInterval = setInterval(updateSelectableObjects, 2000);
+  // …把 cleanup 函数挂到 transformControlsRef.current._cleanup 上…
+}
+问题：
+
+如果在某次 initializeControls 调用里 scene 存在，就创建了 updateInterval。而在 cleanup 时，只会通过 (transformControlsRef.current as …)._cleanup() 来清理一次对应的 interval。但是，如果 initializeControls 重复成功执行多次，就会创建多个独立的 updateInterval，只有最后一次的 _cleanup 被挂在 transformControlsRef.current 上，而前面那些定时器可能就无法被清理，造成内存泄漏和持续无谓计算。
+
+updateSelectableObjects 本身访问了 dynamicGroup、dragControlsRef.current 等外部变量，但并未列入依赖，因此如果这些变量在后续变化，可能导致循环引用旧的变量或出现不可预期的行为。
+
+改进建议：
+
+把 setInterval 独立到一个 useEffect 里，并且依赖于 dynamicGroup 或其他必要条件。举例：
+
+ts
+复制
+编辑
+useEffect(() => {
+  if (!dynamicGroup || !dragControlsRef.current) return;
+  const id = setInterval(() => {
+    // 这里拿到最新的 dragControlsRef.current
+    const updatedObjects = getAllObjectsInScene(dynamicGroup)...
+    // 重建 dragControlsRef.current
+  }, 2000);
+  return () => clearInterval(id);
+}, [dynamicGroup, getAllObjectsInScene]);
+如此一来，这个定时器只会在 dynamicGroup 真正非空时运行，且每次 dynamicGroup 变时都会自动清理旧的定时器，保证只存在一个有效的 interval。
+
+避免把定时器与 transformControls 绑定在一起，职责分离：一个 effect 专管 TransformControls/DragControls 的 create/dispose；另一个 effect 专门管定时刷新。
+
+4. Three.js TransformControls / DragControls 的多次创建与销毁
+4.1. 多次重复创建 TransformControls
+在 initializeControls 里，每次“canvas 准备好” 就会创建一个新的 TransformControls(camera, canvas) 并添加到 scene。如果你切换 transformMode（依赖项里包含 transformMode），会重走一次 effect，从而再次创建新的 TransformControls，并挂到 scene 上，而旧的控件可能并未被完整销毁，导致场景里同时存在多个 TransformControls，进而冲突、性能下降，甚至“显示多个 gizmo”、“事件被重复触发”。
+
+改进建议：
+
+将 TransformControls 的创建与 transformMode 变化分开。比如一个 effect 只监听 scene、camera、canvas 等基础资源，当这些从 “null” 变为 “非 null” 时只创建一次 TransformControls；而监听 transformMode 的 effect 只做 transformControls.setMode(transformMode)。切忌“创建 & 切换模式”写在同一个 effect 里。
+
+确保在 cleanup 时完整销毁：
+
+ts
+复制
+编辑
+useEffect(() => {
+  if (!scene || !camera || !canvas) return;
+  const controls = new TransformControls(camera, canvas);
+  scene.add(controls);
+  controls.setMode(transformMode);
+  transformControlsRef.current = controls;
+
+  const onDragChange = (event) => { … };
+  controls.addEventListener("dragging-changed", onDragChange);
+  const onObjectChange = () => { … };
+  controls.addEventListener("objectChange", onObjectChange);
+
+  return () => {
+    // 必须先移除监听器
+    controls.removeEventListener("dragging-changed", onDragChange);
+    controls.removeEventListener("objectChange", onObjectChange);
+    // 再 detach & dispose
+    controls.detach();
+    controls.enabled = false;
+    scene.remove(controls);
+    controls.dispose();
+    transformControlsRef.current = null;
+  };
+}, [scene, camera, canvas]); // 仅依赖基础资源，不要依赖 transformMode
+4.2. DragControls 的创建与销毁
+类似地，DragControls 也会反复地在 initializeControls 里被 new DragControls(selectableObjects, camera, canvas)，并赋给 dragControlsRef.current。如果不加以分离，同样会导致“老的实例没被销毁”，“频繁 new + dispose 也影响性能”。
+
+改进建议：
+
+重新设计一个 effect 专门负责“当 selectableObjects（即 dynamicGroup 内子节点列表）发生变化时，创建新的 DragControls 并 dispose 旧的“。大致模式：
+
+ts
+复制
+编辑
+useEffect(() => {
+  if (!canvas || !camera) return;
+  // 筛选出所有可选物体
+  const objects = getAllObjectsInScene(dynamicGroup).filter(…);
+  const drag = new DragControls(objects, camera, canvas);
+  drag.enabled = false;
+  dragControlsRef.current = drag;
+
+  return () => {
+    drag.dispose();
+    dragControlsRef.current = null;
+  };
+}, [dynamicGroup, camera, canvas, getAllObjectsInScene]);
+不要在一个 “递归初始化” 里把 TransformControls 和 DragControls 混在一起。职责分离可以让你更清楚地知道什么时候创建/销毁哪一个控件。
+
+5. 浏览器 API（window、document）与服务端渲染问题
+5.1. 代码里多处直接使用 window / document
+在第一个 useEffect 中，最开头就有：
+
+ts
+复制
+编辑
+const canvas = renderer.domElement;
+if (!canvas || !canvas.parentElement || !document.contains(canvas)) {
+  // …
+  window.dispatchEvent(event);
+}
+以及后面给 canvas.addEventListener、window.addEventListener('keydown') 等。这意味着在服务端渲染（SSR）或构建阶段，document、window 均不存在，会报 ReferenceError: document is not defined。在开发模式下，Next.js 的快速刷新可能掩盖了这类错误，而生产打包（next build）会严格检查，导致构建出错或运行时报错。
+
+改进建议：
+
+将所有对 window、document 的访问放到 useEffect 中，因为 useEffect 只在浏览器端执行，不会在 SSR 时跑。例如：
+
+ts
+复制
+编辑
+useEffect(() => {
+  if (typeof window === "undefined" || typeof document === "undefined") return;
+  // 这里安全地访问 window、document
+}, []);
+你已把逻辑放在 useEffect 里，这是对的。但是初始判断时也要额外校验：
+
+ts
+复制
+编辑
+useEffect(() => {
+  if (!scene || !dynamicGroup) return;
+  const renderer = scene.userData.renderer as THREE.WebGLRenderer;
+  if (!renderer) return;
+  const canvas = renderer.domElement;
+  if (!canvas) return;
+  if (typeof document === "undefined" || !document.contains(canvas)) {
+    // SSR 阶段会先走到这里？建议加上 typeof document 判断
+    return;
+  }
+  // …其余绑定逻辑…
+}, [scene, dynamicGroup]);
+这样就能避免 process.env.NODE_ENV === "production" 的构建阶段抛错。
+
+6. selectedObjects 与 selectedObject 状态管理的竞态
+组件里维护了两个状态：
+
+ts
+复制
+编辑
+const [selectedObjects, setSelectedObjects] = useState<THREE.Object3D[]>([]);
+以及 selectedObject 来自 useSceneStore()。
+在 handleObjectSelection 中，你会同时调用 setSelectedObjects(...) 与 selectObject(...)。如果调用这两个操作很接近，会出现“stale state”或“竞态”问题。例如：
+
+当 Shift + 点击时，如果对象已被选中，你先做 newSelectedObjects.splice(...)，然后 setSelectedObjects(newSelectedObjects)，接着 selectObject(newSelected)。但此时如果 selectObject 触发 store 更新（并在 store 里也维护一份 selectedObject），而你在下一个渲染周期里会触发 useEffect attach，如果时序发生微小偏差，可能会 attach 到错误的对象，导致“工具（TransformControls）attach 失败”。
+
+此外，在 handleClick 里，如果点击空白并且没有 Shift，就会 handleObjectSelection(null, event) —— 这时会 selectedObjects.forEach((obj) => removeHighlight(obj))。但是由于 selectedObjects 是当前渲染里的值，如果在短时间内多个事件并发，可能会出现“有的对象 highlight 没有清理干净”或“回调里拿到的 selectedObjects 不是最新值”的情况。
+
+改进建议：
+
+使用函数式更新 setSelectedObjects(prev => { … })。在可能同时多次调用 setSelectedObjects 的地方，使用 prev 确保读到的是最新 state：
+
+ts
+复制
+编辑
+setSelectedObjects((prevSelected) => {
+  // 基于 prevSelected 来计算新数组，避免 stale 问题
+  const idx = prevSelected.findIndex(obj => obj.uuid === clickedObject.uuid);
+  // …其余逻辑…
+});
+在调用 selectObject(...)（store 更新）前，先把 setSelectedObjects(...) 的结果确认好。或者在回调里使用 useEffect 监听 selectedObjects 的更新，再去执行 selectObject，保证“先更新本地数组，再触发全局选中状态”的顺序，而不是在同一回调里混合两种更新。
+
+避免直接在点击事件中同时修改两个状态。可以先处理“highlight 切换”、“selectedObjects 列表计算”，等 React 重新渲染后，再通过副作用去 selectObject(newSelected)，或者统一在一个 Redux-like action（store）里做“选中逻辑”。
+
+7. getAllObjectsInScene 函数效率与副作用
+ts
+复制
+编辑
+function getAllObjectsInScene(root: THREE.Object3D): THREE.Object3D[] {
+  if (!root) return [];
+  const objects: THREE.Object3D[] = [];
+  if (!root.userData?.isTransformControl && !root.userData?.isOutline && !root.userData?.isHelper) {
+    objects.push(root);
+    if (root.children && Array.isArray(root.children)) {
+      root.children.forEach((child) => {
+        if ((child.userData && (child.userData.isHelper || child.userData.isOutline)) || (child.type === "LineSegments" && child.userData.isHelper)) {
+          return;
+        }
+        objects.push(...getAllObjectsInScene(child));
+      });
+    }
+  }
+  return objects;
+}
+问题：
+
+每次点击、鼠标移动甚至定时器触发时，都要遍历整个 dynamicGroup 树。若场景里物体数量较多（几十个、几百个 Mesh/Group），就会频繁递归，导致性能瓶颈（特别是 intersectObjects 需要完整数组）。
+
+该函数是递归实现，且每次调用都会重新分配新数组，GC 压力大。如果在一个渲染帧里被多次调用，会严重拖慢帧率。
+
+改进建议：
+
+缓存可选对象列表：在 dynamicGroup 变更（增删子节点）时，重新生成一次“可选对象数组”，保存在 useRef 或 useState 里。这可以通过监听 store 中“子节点变化”事件，或者在扔进场景的代码里手动通知“列表已更新”。
+
+只在必要时更新：比如把 “可选对象数组” 存入一个 useState，当 dynamicGroup.children.length 发生变化、或检测到新增/删除对象时才更新，而不是每次点击都重新深度递归。
+
+对 intersectObjects 使用层级过滤：如果某些 Group 下的节点本质不可选，可以在其 userData 上标记 selectable: false，然后在裁剪时就直接 skip 整棵子树，而不是 getAllObjectsInScene 里再一级一级往下搜。
+
+8. CSS-in-JS 以及样式加载问题
+组件底部用了 styled-jsx 来包裹一段 CSS：
+
+jsx
+复制
+编辑
+<style jsx>{`
+  .controls-container { … }
+  .control-button { … }
+  /* …其余样式… */
+`}</style>
+注意事项：
+
+这种写法在开发模式下 CSS 会直接注入到 <head>，热更新也很方便。但在生产打包时，如果你启用了某些 next.config.js 里的 optimizeCss 或 minifyCss，有时会误删没有被显式引用的类名，从而导致“样式不生效”。
+
+原则上，凡是写过 className="control-button active"，都要在对应的 <style jsx> 里定义 .control-button.active { … }，否则在生产或 SSR 时，样式选择器可能不够具体。你在源码里写的是：
+
+css
+复制
+编辑
+.control-button.active { background-color: rgb(22, 94, 152); }
+这种是没问题的；但若你在 JS 里动态拼写类名（例如拼接 active），又或许生产打包时会把 .control-button { … } 与 .control-button.active { … } 拆散、合并到其他规则里。
+
+如果发现生产环境样式错乱，可以尝试先注释掉 styled-jsx 相关优化项，或用浏览器 DevTools 查看最终注入的 CSS，确认 class 名确实被保留。
+
+9. 环境变量与 NODE_ENV 判断
+代码中有这样一段：
+
+ts
+复制
+编辑
+// 在开发环境中添加额外的延迟，确保ThreeCodeEditor完全初始化
+const initDelay = process.env.NODE_ENV === "development" ? 200 : 10;
+问题：
+
+process.env.NODE_ENV 在 Next.js/React 里，在浏览器端通过 useEffect 取到的值是打包时决定的：如果你 npm run build，在打出来的 bundle 中就只有 process.env.NODE_ENV === "production"，因为 Next.js 会在打包时把 process.env.* 自动替换成字符串常量。开发模式下（npm run dev），它的值是 "development"。
+
+但如果在生产部署时（next start），NODE_ENV 一定是 "production"，这段逻辑会把延迟只有 10ms。如果 Three.js Canvas 或其他依赖在生产模式下加载更慢、或者加载顺序与开发时不同，这 10ms 很有可能不够，导致 initializeControls 未能正确检测到 canvas.offsetParent，反而进入“canvasNotReady”分支。
+
+这样就有可能在生产环境里启动太快，导致后续找不到 canvas，从而不停地 setTimeout 重试，又或者直接放弃，出现“在生产环境下根本绑不到事件”的情况。
+
+改进建议：
+
+适当增大生产环境延迟，比如从 10ms 调整到 100ms 或 200ms，给 Canvas 加载、Three.js 初始化更多缓冲时间。
+
+改用“观察器”而非定时器：可以监听 renderer.domElement 是否被插入到 document.body 或者挂到某个父容器上，一旦存在即可触发初始化，而不用「猜延迟」。举例：
+
+ts
+复制
+编辑
+const canvasRef = useRef<HTMLElement | null>(null);
+useEffect(() => {
+  const canvas = renderer.domElement;
+  if (!canvas) return;
+  const observer = new MutationObserver(() => {
+    if (document.contains(canvas)) {
+      // 代表 canvas 已挂到 DOM 上
+      initControls();
+      observer.disconnect();
+    }
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
+  return () => observer.disconnect();
+}, [renderer]);
+10. 生产模式与开发模式下的差异
+结合你最初“开发环境正常、生产环境出问题”的情况，以下列出几条最常见的“在开发下没发现，在生产打包后才显现”的典型点，并与本组件做对照，看看有没有遗漏的风险：
+
+代码被 Tree-Shaking 或者 Uglify 优化掉
+
+如果某些函数（例如 addHighlight、removeHighlight）在开发环境里仅在某些分支调用，而生产打包时被认为“未被使用”，就可能被移除。
+
+建议给这些函数加上 /*#__PURE__*/ 注释或把它们放在外层 import。
+
+另外，如果你在组件里写了大量 console.log(...)，生产打包时可能会移除它们，导致调试信息丢失。
+
+环境变量 process.env.NODE_ENV 差异
+
+之前提到“延迟时间不同”可能导致载入顺序差异。
+
+另外，如果你通过 process.env.XXX 去读取某些自定义变量（比如决定是否显示某个调试面板），生产时可能是 undefined，从而直接略过某些逻辑。
+
+大小写敏感 & 路径问题
+
+你在 import { useSceneStore } from "../stores/useSceneStore"; 时，请确认生产构建的文件系统（Linux 环境）中是否确实存在 stores/useSceneStore.ts(x)，且目录名/文件名没有大小写拼写错误。
+
+类似 import { DragControls } from "three/examples/jsm/controls/DragControls";，在生产编译时 Three.js 可能做了路径别名映射，建议确认同样版本的 three 包在生产依赖里也存在。
+
+第三方库在生产下与 Node 版本兼容性
+
+Three.js 控件在某些 Node 版本下需要 polyfill window 或 global。虽然我们把逻辑放在 useEffect，但在构建阶段（next build）也可能静态分析到 import * as THREE from "three"，从而报错误。
+
+建议确认你在生产环境里 Node 和打包工具（Webpack/SWC）版本与本地一致。
+
+三、逐行重点问题与改进
+下面以你原始代码为基础，列出一些需要特别注意或改动的片段，并给出示例修改方案。
+
+3.1. 改写钩子依赖与事件绑定逻辑
+tsx
+复制
+编辑
+export default function ObjectManipulationControls() {
+  const {
+    scene,
+    dynamicGroup,
+    selectObject,
+    selectedObject,
+    updateObjectState,
+    createGroup,
+    ungroupObjects,
+  } = useSceneStore();
+
+  const [transformMode, setTransformMode] =
+    useState<TransformMode>("translate");
+  const [isDragging, setIsDragging] = useState(false);
+  const [multiSelectMode, setMultiSelectMode] = useState(false);
+  const [selectedObjects, setSelectedObjects] = useState<THREE.Object3D[]>([]);
+
+  // refs
+  const transformControlsRef = useRef<TransformControls | null>(null);
+  const dragControlsRef = useRef<DragControls | null>(null);
+  const raycasterRef = useRef<THREE.Raycaster>(new THREE.Raycaster());
+
+  // ------------ 1. 把事件处理函数抽到组件顶层，用 useCallback 包裹，并列出依赖 ------------
+  const findSelectableParent = useCallback(
+    (object: THREE.Object3D): THREE.Object3D => {
+      let current = object;
+      let parent = object.parent;
+      while (parent && parent !== scene && parent !== dynamicGroup) {
+        if (parent.userData && parent.userData.selectable !== false) {
+          current = parent;
+        }
+        parent = parent.parent;
+      }
+      return current;
+    },
+    [scene, dynamicGroup]
+  );
+
+  // 提前声明，便于 addEventListener/removeEventListener 时引用同一个函数
+  const handleObjectSelection = useCallback(
+    (object: THREE.Object3D | null, event?: MouseEvent) => {
+      if (!object && (!event || !event.shiftKey)) {
+        // 全部取消高亮
+        setSelectedObjects((prevArr) => {
+          prevArr.forEach((obj) => {
+            if (obj && obj.parent) removeHighlight(obj);
+          });
+          return [];
+        });
+        selectObject(null);
+        return;
+      }
+      if (!object) return;
+
+      if (
+        !object.parent ||
+        object.userData?.isHelper ||
+        object.userData?.isOutline ||
+        object.userData?.isTransformControl
+      ) {
+        return;
+      }
+
+      const isShiftPressed = event?.shiftKey ?? false;
+
+      setSelectedObjects((prevArr) => {
+        const idx = prevArr.findIndex((obj) => obj.uuid === object.uuid);
+        let newArr = [...prevArr];
+        let newSelected: THREE.Object3D | null = null;
+        if (isShiftPressed) {
+          if (idx !== -1) {
+            // 取消选中
+            removeHighlight(object);
+            newArr.splice(idx, 1);
+            newSelected = newArr.length > 0 ? newArr[newArr.length - 1] : null;
+          } else {
+            // 新增选中
+            newArr.push(object);
+            addHighlight(object);
+            newSelected = object;
+          }
+        } else {
+          // 单选模式：先取消原来所有高亮
+          prevArr.forEach((obj) => removeHighlight(obj));
+          newArr = [object];
+          addHighlight(object);
+          newSelected = object;
+        }
+        // 用 store 更新当前 “主要选中” 对象
+        selectObject(newSelected);
+        return newArr;
+      });
+    },
+    [removeHighlight, addHighlight, selectObject]
+  );
+
+  const addHighlight = useCallback((object: THREE.Object3D) => {
+    if (!object || !object.parent) return;
+    try {
+      if (object instanceof THREE.Mesh) {
+        if (!object.userData.isHighlighted && !object.userData.isOutline) {
+          const material = Array.isArray(object.material)
+            ? object.material[0]
+            : (object.material as THREE.Material);
+          if (!material) return;
+
+          // 存储原始属性，高亮显示
+          if ("emissive" in material && material.emissive) {
+            object.userData.originalEmissive = material.emissive.clone();
+            material.emissive.set(0x333333);
+          } else if ("color" in material && material.color) {
+            object.userData.originalColor = material.color.clone();
+            const color = material.color.clone();
+            color.r = Math.min(color.r + 0.2, 1.0);
+            color.g = Math.min(color.g + 0.2, 1.0);
+            color.b = Math.min(color.b + 0.2, 1.0);
+            material.color.copy(color);
+          }
+
+          // 删除旧的 outline
+          if (object.userData.outlineEffect) {
+            try {
+              if (object.userData.outlineEffect.parent === object) {
+                object.remove(object.userData.outlineEffect);
+              }
+            } catch (e) {
+              console.warn("Could not remove old outline effect:", e);
+            }
+            delete object.userData.outlineEffect;
+          }
+
+          // 添加新的 outline
+          if (object.geometry) {
+            const outlineMaterial = new THREE.MeshBasicMaterial({
+              color: 0x00ffff,
+              wireframe: true,
+              transparent: true,
+              opacity: 0.5,
+            });
+            const outlineMesh = new THREE.Mesh(object.geometry, outlineMaterial);
+            outlineMesh.scale.multiplyScalar(1.03);
+            outlineMesh.userData.isHelper = true;
+            outlineMesh.userData.isOutline = true;
+            object.add(outlineMesh);
+            object.userData.outlineEffect = outlineMesh;
+          }
+          object.userData.isHighlighted = true;
+        }
+      } else if (object instanceof THREE.Group) {
+        object.traverse((child) => {
+          if (
+            child instanceof THREE.Mesh &&
+            !child.userData.isOutline &&
+            !child.userData.isHelper &&
+            child.parent
+          ) {
+            addHighlight(child);
+          }
+        });
+        object.userData.isHighlighted = true;
+      }
+    } catch (error) {
+      console.error("Error adding highlight:", error);
+    }
+  }, []);
+
+  const removeHighlight = useCallback((object: THREE.Object3D) => {
+    if (!object || !object.parent) return;
+    try {
+      if (object instanceof THREE.Mesh) {
+        const material = Array.isArray(object.material)
+          ? object.material[0]
+          : (object.material as THREE.Material);
+        if (!material) return;
+
+        if (
+          object.userData.originalEmissive &&
+          "emissive" in material &&
+          material.emissive
+        ) {
+          material.emissive.copy(object.userData.originalEmissive);
+          delete object.userData.originalEmissive;
+        }
+        if (
+          object.userData.originalColor &&
+          "color" in material &&
+          material.color
+        ) {
+          material.color.copy(object.userData.originalColor);
+          delete object.userData.originalColor;
+        }
+
+        if (object.userData.outlineEffect) {
+          try {
+            const outlineEffect = object.userData.outlineEffect;
+            if (outlineEffect && outlineEffect.parent === object) {
+              object.remove(outlineEffect);
+            }
+          } catch (e) {
+            console.warn("Error removing outline:", e);
+          }
+          delete object.userData.outlineEffect;
+        }
+        object.userData.isHighlighted = false;
+      } else if (object instanceof THREE.Group) {
+        object.traverse((child) => {
+          if (
+            child instanceof THREE.Mesh &&
+            !child.userData.isOutline &&
+            child.parent
+          ) {
+            removeHighlight(child);
+          }
+        });
+        object.userData.isHighlighted = false;
+      }
+    } catch (error) {
+      console.error("Error removing highlight:", error);
+    }
+  }, []);
+这样做的好处：
+
+所有事件回调都是稳定引用，useEffect 里绑定/解绑时，不会因为函数变更而造成重复绑定。
+
+依赖数组清晰，React 能自动判断是否需要重新生成回调。
+
+3.2. 拆分 TransformControls / DragControls 的创建与销毁
+tsx
+复制
+编辑
+// ------ Effect A：创建 & 销毁 TransformControls ------
+useEffect(() => {
+  if (typeof window === "undefined") return; // SSR 时跳过
+  if (!scene || !dynamicGroup) return;
+  const renderer = scene.userData.renderer as THREE.WebGLRenderer;
+  const camera = scene.userData.camera as THREE.Camera;
+  if (!renderer || !camera) return;
+  const canvas = renderer.domElement;
+  if (!canvas) return;
+
+  // 实例化 TransformControls
+  const controls = new TransformControls(camera, canvas);
+  controls.userData.isTransformControl = true;
+  controls.setSize(1.2);
+  scene.add(controls);
+  transformControlsRef.current = controls;
+
+  // 监听拖拽切换（enable/disable orbitControls）
+  const onDraggingChanged = (e: { value: boolean }) => {
+    if (scene.userData.orbitControls) {
+      scene.userData.orbitControls.enabled = !e.value;
+    }
+    setIsDragging(e.value);
+  };
+  controls.addEventListener("dragging-changed", onDraggingChanged);
+
+  // 监听对象变化后更新物体状态
+  const onObjectChange = () => {
+    if (selectedObject && selectedObject.parent) {
+      try {
+        const isModel =
+          selectedObject.userData &&
+          (selectedObject.userData.modelId ||
+            selectedObject.userData.isModelObject ||
+            selectedObject.userData.isPersistentModel ||
+            selectedObject.userData.originalModelUrl ||
+            selectedObject.name === "Superman");
+
+        if (isModel) {
+          console.log(`模型变换更新: ${selectedObject.name || "unnamed"}`);
+        }
+        updateObjectState(selectedObject.uuid);
+        if (isModel) {
+          console.log(
+            `新位置: x=${selectedObject.position.x.toFixed(
+              2
+            )}, y=${selectedObject.position.y.toFixed(
+              2
+            )}, z=${selectedObject.position.z.toFixed(2)}`
+          );
+        }
+      } catch (error) {
+        console.error("Error updating object state:", error);
+      }
+    }
+  };
+  controls.addEventListener("objectChange", onObjectChange);
+
+  // 如果渲染时已经有选中物体，先 attach
+  if (selectedObject) {
+    controls.attach(selectedObject);
+  }
+
+  return () => {
+    // Cleanup: 移除监听器 & 销毁控件
+    controls.removeEventListener("dragging-changed", onDraggingChanged);
+    controls.removeEventListener("objectChange", onObjectChange);
+    controls.detach();
+    controls.enabled = false;
+    scene.remove(controls);
+    controls.dispose();
+    transformControlsRef.current = null;
+  };
+}, [scene, dynamicGroup, selectedObject, updateObjectState]);
+解释与要点：
+
+以 selectedObject 作为依赖，让 if (selectedObject) attach 逻辑在 selectedObject 变化时自动执行。
+
+将“切换模式”逻辑独立到另一个 effect 中，不在这个 effect 里反复创建控件。
+
+tsx
+复制
+编辑
+// ------ Effect B：响应 transformMode，切换 TransformControls 模式 ------
+useEffect(() => {
+  if (!transformControlsRef.current) return;
+  transformControlsRef.current.setMode(transformMode);
+}, [transformMode]);
+这样 transformMode 的变化只会调用 setMode，而不会销毁重建整个控件。
+
+3.3. 单独处理 DragControls 和可选对象列表
+tsx
+复制
+编辑
+// ------ Effect C：管理 DragControls 实例 ------
+useEffect(() => {
+  if (typeof window === "undefined") return; // SSR 跳过
+  if (!scene || !dynamicGroup) return;
+  const renderer = scene.userData.renderer as THREE.WebGLRenderer;
+  const camera = scene.userData.camera as THREE.Camera;
+  if (!renderer || !camera) return;
+  const canvas = renderer.domElement;
+  if (!canvas) return;
+
+  // 筛选出所有可选对象 (利用 memo 或单独 useMemo 缓存)
+  const selectableObjects = getAllObjectsInScene(dynamicGroup).filter(
+    (obj) =>
+      !obj.userData?.isHelper &&
+      !obj.userData?.isOutline &&
+      !obj.userData?.isTransformControl
+  );
+  // 创建 DragControls
+  const dragControls = new DragControls(selectableObjects, camera, canvas);
+  dragControls.enabled = false;
+  dragControlsRef.current = dragControls;
+
+  return () => {
+    dragControls.dispose();
+    dragControlsRef.current = null;
+  };
+}, [scene, dynamicGroup, getAllObjectsInScene]);
+这样能确保每当 dynamicGroup 或场景改变（出现新的物体、删除物体）时，都会重新创建 DragControls。
+
+getAllObjectsInScene 可以改成 useCallback 并列入依赖，或把结果缓存到 useMemo。
+
+3.4. 分离事件监听器绑定
+tsx
+复制
+编辑
+// ------ Effect D：绑定/解绑 canvas 与 window 事件 ------
+useEffect(() => {
+  if (typeof window === "undefined") return;
+  if (!scene || !dynamicGroup) return;
+  const renderer = scene.userData.renderer as THREE.WebGLRenderer;
+  const camera = scene.userData.camera as THREE.Camera;
+  if (!renderer || !camera) return;
+  const canvas = renderer.domElement;
+  if (!canvas) return;
+
+  // 定义事件处理函数：注意必须引用最外层 useCallback 的 handleClick 等
+  /**
+   * handleClick 已用 useCallback 包裹并列出了依赖，
+   * 因此只要它的依赖没变，函数引用就保持一致，
+   * 不会重复绑定/解绑。
+   */
+  canvas.addEventListener("click", handleClick, { passive: false });
+  canvas.addEventListener("contextmenu", handleContextMenu, { passive: false });
+  canvas.addEventListener("mousemove", handleMouseMove, { passive: true });
+  window.addEventListener("keydown", handleKeyDown);
+  window.addEventListener("keyup", handleKeyUp);
+
+  console.log("[ObjectControls] Event listeners bound.");
+
+  return () => {
+    canvas.removeEventListener("click", handleClick);
+    canvas.removeEventListener("contextmenu", handleContextMenu);
+    canvas.removeEventListener("mousemove", handleMouseMove);
+    window.removeEventListener("keydown", handleKeyDown);
+    window.removeEventListener("keyup", handleKeyUp);
+    console.log("[ObjectControls] Event listeners cleaned up.");
+  };
+}, [scene, dynamicGroup, handleClick, handleMouseMove, handleContextMenu, handleKeyDown, handleKeyUp]);
+这样做的好处：避免了手动嵌套 setTimeout、不断重试，也避免了同一个函数在多次绑定后无法移除的问题。
+
+如果你确实需要等 canvas 在 DOM 中完全就绪，可以先写一个检查逻辑，但一旦确认后就不要“重复循环”去重试。或者完全由上层把 canvas 传下来，此组件直接拿到 canvas 引用就行。
+
+3.5. 优化 getAllObjectsInScene 性能
+ts
+复制
+编辑
+const getAllObjectsInScene = useCallback((root: THREE.Object3D): THREE.Object3D[] => {
+  const result: THREE.Object3D[] = [];
+  function recurse(node: THREE.Object3D) {
+    if (
+      node.userData?.isTransformControl ||
+      node.userData?.isOutline ||
+      node.userData?.isHelper
+    ) {
+      return;
+    }
+    result.push(node);
+    node.children.forEach((child) => {
+      recurse(child);
+    });
+  }
+  recurse(root);
+  return result;
+}, []);
+然后在创建 DragControls 的 effect 里用 getAllObjectsInScene(dynamicGroup)。如果你担心频繁遍历带来的性能瓶颈，可以进一步把该值缓存：
+
+ts
+复制
+编辑
+const allSelectableObjects = useMemo(() => {
+  return getAllObjectsInScene(dynamicGroup).filter(
+    (obj) =>
+      !obj.userData?.isHelper &&
+      !obj.userData?.isOutline &&
+      !obj.userData?.isTransformControl
+  );
+}, [dynamicGroup, getAllObjectsInScene]);
+再把 allSelectableObjects 传给创建 DragControls 的 effect，这样只有当 dynamicGroup 发生改变，才会重新遍历一次；而非每次 render 都走一次。
+
+3.6. 拆分定时器（setInterval）逻辑
+将“定时更新 DragControls 可选对象列表”的逻辑抽成一个单独 effect：
+
+tsx
+复制
+编辑
+useEffect(() => {
+  if (!dynamicGroup) return;
+  // 每 2s 重新获取一次物体列表，并重建 DragControls
+  const intervalId = setInterval(() => {
+    if (dragControlsRef.current) {
+      dragControlsRef.current.dispose();
+    }
+    if (!scene || !dynamicGroup) return;
+    const renderer = scene.userData.renderer as THREE.WebGLRenderer;
+    const camera = scene.userData.camera as THREE.Camera;
+    if (!renderer || !camera) return;
+    const canvas = renderer.domElement;
+    if (!canvas) return;
+
+    const updatedObjects = getAllObjectsInScene(dynamicGroup).filter(
+      (obj) =>
+        !obj.userData?.isHelper &&
+        !obj.userData?.isOutline &&
+        !obj.userData?.isTransformControl
+    );
+    const newDrag = new DragControls(updatedObjects, camera, canvas);
+    newDrag.enabled = false;
+    dragControlsRef.current = newDrag;
+  }, 2000);
+
+  return () => clearInterval(intervalId);
+}, [dynamicGroup, scene, getAllObjectsInScene]);
+这样，即便 dynamicGroup 里子节点数量千变万化，也只在依赖变化时或每 2s 更新时做一次，而不存在多个重复定时器难以清理的问题。
+
+3.7. 对生产环境延迟与 SSR 问题再补充
+延迟（延迟初始化 vs 递归 setTimeout）
+通过上面把事件监听和控件创建都拆开后，就不需要递归 setTimeout。只要保证：
+
+ts
+复制
+编辑
+// 在你的 Three.js 组件里（负责渲染 <canvas>）：
+useEffect(() => {
+  // Three.js 渲染完成后，通过某种方式通知此组件“canvas 已就绪”
+  // 例如使用一个全局 EventBus，或者直接把 renderer.domElement 通过 React Context/prop 传递
+  eventBus.emit("canvasReady");
+}, [renderer]);
+在 ObjectManipulationControls 里监听一次 eventBus.on("canvasReady", () => { /* 绑定事件，创建控件 */ }); 即可。
+
+避免在 SSR 时访问 window/document
+在所有 useEffect（只要访问 window/document）的开头都加入：
+
+ts
+复制
+编辑
+if (typeof window === "undefined" || typeof document === "undefined") return;
+这样建造生产 bundle 时，就不会在 Node 阶段就报 ReferenceError。
+
+3.8. 其他细节与最佳实践
+key 属性：如果你的组件在 React 树里可能被“条件渲染”多次卸载/重挂，可以为 ObjectManipulationControls 整个组件外层包一个 key（基于某个唯一值），确保 React 能正确回收。
+
+错误边界：由于 Three.js 操作极易出错，建议在父组件或此组件里包一个 <ErrorBoundary>，防止某次报错导致整个页面崩溃。
+
+开发日志与生产日志：你大量使用了 console.log / console.warn / console.error。在生产环境下，Next.js 默认会移除 console.log，如果你仍想看日志，可考虑在 .env.production 里把 NEXT_PUBLIC_DEBUG=true，并在代码里用 if (process.env.NEXT_PUBLIC_DEBUG) console.log(...)。
+
+Group/Ungroup 时清理引用：在 handleGroupSelected、handleUngroup 里，应确认在 createGroup 或 ungroupObjects 后，同时移除之前所有子对象的 highlight，高亮逻辑写得还算完整，但建议在 createGroup 成功后立即给新 group 添加一次 highlight（如果需要），保证 UI 一致性。
+
+类型安全：既然是 TypeScript，建议给 getAllObjectsInScene、addHighlight、removeHighlight 等函数加上准确的返回类型（如 void 或 THREE.Object3D[]），以提高可维护性。
+
+四、总结
+综上所述，原始代码在开发模式下之所以看似“可用”，很大程度上是 React 热更新、Three.js 在浏览器环境下的延迟加载，以及 Webpack 在开发模式下对 process.env.NODE_ENV 不做严格替换所致。但在生产打包时（Next.js 会强制进行 Tree-Shaking、Uglify、CSS 优化、SSR 静态分析等），会暴露以下主要隐患：
+
+React Hooks 依赖写得不完整 → 导致闭包捕获旧值、事件绑定/逻辑未更新
+
+事件监听器使用手动递归 setTimeout 绑定/解绑逻辑复杂 → 在生产下容易因为节省打包体积去除 console.log 或者延迟更长而导致“canvas 找不到”
+
+TransformControls/DragControls 创建与销毁混在一起 → 重复创建积累资源、事件冲突、性能下降
+
+未对 window/document 做 SSR 安全检查 → 生产构建直接报错
+
+动态获取所有物体每次都做深度遍历 → 性能瓶颈（尤其在大场景下）
+
+定时器未统一清理 → 内存泄漏及持续无用计算
+
+针对这些问题，建议你按照上面的拆分思路，分步重构各个功能模块，并严格遵循：
+
+Hooks 依赖：所有外部引用都要列入依赖数组，用 useCallback / useMemo 缓存函数与结果
+
+拆分 Effect：一个 effect 只管一件事（创建/切换控件、绑定/解绑事件、定时刷新、监听 selectedObject 变化……）
+
+SSR 安全：所有直接访问浏览器全局对象的逻辑都放在 useEffect 里，并在开头判断 typeof window === "undefined"
+
+事件监听：保证“添加”和“移除”用的是同一个函数引用，一一对应，避免重复绑定/解绑失败
+
+深度遍历优化：用 useMemo 缓存可选对象列表，或者在添加/删除子物体时手动更新一次缓存，而不是每帧都递归
+
+完成以上重构后，你在生产环境下就能保证：
+
+不会因为函数引用变化导致监听器残留或“事件没生效”
+
+不会因为深度遍历耗时导致体验差甚至超时
+
+不会因为 SSR 阶段直接引用 document 报错
+
+TransformControls/DragControls 实例生命周期清晰，不会冗余蔓延
+
+多选/高亮逻辑能前后一致且状态不易出错
+
+
+
+一、整体架构与功能简介
+简要重述一下组件的主要职责，以便后续定位问题更精准：
+
+作用：在 Three.js 场景中，使用 TransformControls 和 DragControls 让用户可以通过鼠标直接选中并平移/旋转/缩放三维物体，同时支持多选（Shift 多选）以及把选中物体 “Group/Ungroup”。
+
+数据源：使用了 useSceneStore，从 store 中获取：
+
+场景对象 scene
+
+动态对象根节点 dynamicGroup
+
+当前选中物体 selectedObject
+
+选中回调 selectObject(...)
+
+更新物体状态的 updateObjectState(uuid)
+
+创建组 createGroup
+
+解散组 ungroupObjects
+
+……等
+
+主要 Hook：
+
+useEffect(() => { … 初始化 TransformControls & DragControls … }, [scene, dynamicGroup, transformMode]);
+
+useEffect(() => { … 当 selectedObject 改变时 attach/detach TransformControls … }, [selectedObject, selectObject]);
+
+useEffect(() => { transformControlsRef.current.setMode(transformMode) }, [transformMode]);
+
+以及多处带定时器（setTimeout、setInterval）的逻辑。
+
+二、潜在问题汇总
+以下从几个不同层面，分别列出可能导致你在“开发环境可用、生产环境失效”或是功能不稳定、内存泄漏、性能问题等常见陷阱。
+
+1. React Hook 依赖项 (Dependency Array) 缺失或不完整
+核心影响：React 在优化时会根据依赖项判断是否重新执行 useEffect、useCallback。如果依赖项写得不完整，一方面可能导致“闭包捕获了过期值”，另一方面也可能反复重复执行初始化/清理逻辑，从而出现功能丢失或多次绑定监听器、定时器没有正确清理等问题。
+
+1.1. 第一个 useEffect 的依赖只写了 [scene, dynamicGroup, transformMode]
+
+useEffect(() => {
+  // …大量初始化 TransformControls & DragControls 逻辑…
+}, [scene, dynamicGroup, transformMode]);
+问题：
+
+该 effect 里引用了不少外部变量/函数，但依赖数组里并未列出它们，具体包括：
+
+selectedObject（在初始化时如果已有选中，需要 attach）
+
+selectObject（在初始化回调里会调用）
+
+getAllObjectsInScene（动态获取一堆对象）
+
+findSelectableParent（对象选择时判断父级逻辑）
+
+addHighlight、removeHighlight（给物体添加/移除高亮）
+
+updateObjectState（物体变换时回调）
+
+multiSelectMode、selectedObjects（在事件处理逻辑里会读取这些值）
+
+useSceneStore 里拿到的其他函数（createGroup、ungroupObjects）虽然没有在 init 里直接调用，但在 Bind event 时可能被引用
+
+如此一来，这些变量发生变化时（例如切换选中物体 selectedObject，或者切换 multiSelectMode）并不会触发重新绑定或更新，就会导致 effect 中的回调持有“过期的引用”。在开发环境里因为热更新/快速反复测试，可能未必明显出错，生产打包时逻辑更严格，极易出现“选不中”、“点击没有反应”或“无法 attach/正常移动”的现象。
+
+改进建议：
+
+补全依赖数组：
+将所有在 effect 回调里直接引用或间接引用的外部变量、回调函数都加进依赖数组。大致像下面这样：
+
+
+useEffect(() => {
+  // …初始化逻辑…
+}, [
+  scene,
+  dynamicGroup,
+  transformMode,
+  selectedObject,
+  selectObject,
+  getAllObjectsInScene,
+  findSelectableParent,
+  addHighlight,
+  removeHighlight,
+  updateObjectState,
+  createGroup,
+  ungroupObjects,
+  multiSelectMode,
+  selectedObjects
+]);
+这样可以保证当这些值发生变化（比如 selectedObject 变了、selectedObjects 变了、multiSelectMode 变了），React 会重新执行这个 effect，重新绑定事件并保证所有引用都是最新值。
+
+拆分过大的 effect：
+该 effect 做了很多事情（初始化 Three 控件、动态重建 DragControls、绑定/解绑事件、定时器等），建议把它拆分成多个更小的逻辑块，例如：
+
+初始化 Three 控件：监听 scene、dynamicGroup、camera、renderer。一旦这些准备好了，先创建 TransformControls、DragControls 并挂到场景上，同时在 transformMode 变化时只切换模式，不重新初始化控件本身。
+
+绑定事件监听器：单独一个 effect，依赖于 canvas 元素、selectedObjects、multiSelectMode、findSelectableParent、handleObjectSelection 等。这样可以精细地在多选模式或选中列表发生变化时动态调整。
+
+定时更新可选对象：可以写成 useEffect(() => { const id = setInterval(updateSelectableObjects, 2000); return () => clearInterval(id) }, [dynamicGroup, updateSelectableObjects])。
+这样不仅使得每块逻辑更清晰，也避免了不必要的重复创建或“闭包引用过期”的问题。
+
+1.2. useCallback 的依赖遗漏
+组件里有几个 useCallback 包裹的函数，例如 findSelectableParent、handleObjectSelection、addHighlight、removeHighlight。它们在内部引用了不少外部变量和函数，却没有完全列在依赖里。
+
+findSelectableParent：
+
+
+const findSelectableParent = useCallback(
+  (object: THREE.Object3D): THREE.Object3D => {
+    let current = object;
+    let parent = object.parent;
+    while (parent && parent !== scene && parent !== dynamicGroup) {
+      if (parent.userData && parent.userData.selectable !== false) {
+        current = parent;
+      }
+      parent = parent.parent;
+    }
+    return current;
+  },
+  [scene, dynamicGroup]
+);
+依赖里只有 [scene, dynamicGroup]，这是合理的。但是如果未来 dynamicGroup 变成 null 或者 scene 更新时，就能及时更新逻辑。
+
+handleObjectSelection：
+
+
+const handleObjectSelection = useCallback(
+  (object: THREE.Object3D | null, event?: MouseEvent) => {
+    // …这里会用到 selectObject、selectedObjects、addHighlight、removeHighlight…
+  },
+  [selectObject, selectedObjects]
+);
+问题在于：
+
+该回调体内部会调用 addHighlight(object) 和 removeHighlight(object)，但依赖数组中没有列出 addHighlight、removeHighlight。如果后续这两个函数内部逻辑发生变化（或重建），handleObjectSelection 并不能拿到最新引用。
+
+还会读取 selectedObjects（列在依赖里了）以及 selectObject（列在依赖里）。但如果 addHighlight、removeHighlight 或其他引用也变了，都应该加进依赖。
+
+addHighlight / removeHighlight：
+
+
+const addHighlight = useCallback((object: THREE.Object3D) => { … }, []);
+const removeHighlight = useCallback((object: THREE.Object3D) => { … }, []);
+这里把依赖数组写成 []，意味着它们内部引用的变量都会被“固化”在初始渲染时的值。如果未来你有意在这两个函数里使用了外部状态，就不能及时更新。目前这两个函数体内部仅使用了 object、THREE.Mesh、object.userData 等原生 Three.js 属性，表面上似乎没“闭包问题”，暂时可以接受。但如果未来想引用 React State（比如高亮颜色从 props 里读取），就要把对应依赖加进来。
+
+1. 事件监听器绑定与移除逻辑不完善
+整个组件最复杂的部分，是在第一个 useEffect 里，使用 bindEventListeners() 来给 canvas（Three.js 渲染的 <canvas>）和 window 绑定了多个事件，包括 click、mousemove、contextmenu、keydown、keyup，并且依赖于一些临时变量（如 handleClick, handleMouseMove 等）才能在清理阶段移除对应的监听器。
+
+2.1. 定义在闭包里的事件处理函数，清理时可能无法对应
+示例：
+
+
+let handleClick: (event: MouseEvent) => void;
+let handleMouseMove: (event: MouseEvent) => void;
+let handleContextMenu: (event: MouseEvent) => void;
+let handleKeyDown: (event: KeyboardEvent) => void;
+let handleKeyUp: (event: KeyboardEvent) => void;
+
+const bindEventListeners = () => {
+  handleClick = (event) => { … };
+  handleMouseMove = (event) => { … };
+  handleContextMenu = (event) => { … };
+  handleKeyDown = (event) => { … };
+  handleKeyUp = (event) => { … };
+
+  canvas.addEventListener("click", handleClick, eventOptions);
+  canvas.addEventListener("contextmenu", handleContextMenu, eventOptions);
+  canvas.addEventListener("mousemove", handleMouseMove, { passive: true });
+  window.addEventListener("keydown", handleKeyDown);
+  window.addEventListener("keyup", handleKeyUp);
+  return true;
+};
+然后在 cleanup 函数里尝试移除：
+
+
+if (handleClick) canvas.removeEventListener("click", handleClick);
+if (handleContextMenu) canvas.removeEventListener("contextmenu", handleContextMenu);
+if (handleMouseMove) canvas.removeEventListener("mousemove", handleMouseMove);
+if (handleKeyDown) window.removeEventListener("keydown", handleKeyDown);
+if (handleKeyUp) window.removeEventListener("keyup", handleKeyUp);
+问题1： 如果 bindEventListeners 在多次重渲染/依赖变化时被重复调用，它会多次给同一个 canvas 和 window 添加监听器，但若在 cleanup 时没有与之成对的移除（比如函数引用早已变化、或并未执行 cleanup），就会导致内存泄漏、重复触发。
+
+问题2： bindEventListeners 本身会先判断 canvas 是否存在、再返回 true/false，但其调用是在一个递归 initializeControls 中，如果一开始 canvas 不在 DOM，仅仅 console.log 后 setTimeout(initializeControls, 100)； 重新尝试，可能造成多次 bindEventListeners。如果某个阶段失败（返回 false），会在 50ms 后再次调用 initializeControls，期间若上一个绑定没有清理，就会积累。
+
+改进建议：
+
+尽量避免在一个大型函数里做“自己调用自己”的递归绑定。可以把“等待 canvas 准备好再绑定事件”这段逻辑拆成：
+
+
+// 1) 首先用一个 useEffect 监听 scene.userData.renderer/domElement 的变化，一旦 canvas 元素明确存在，就执行 bindEventListeners；
+// 2) 在返回的 cleanup 中，只需移除一次这批监听器（一次性移除），而不需要依赖递归 setTimeout。
+// 3) 如果未来 canvas 可能被卸载重建，React 会先执行 cleanup，再在新 canvas 挂载时执行绑定，保持一一对应。
+永远确保“添加监听器”和“移除监听器”对应：
+
+如果你在 useEffect 内写 canvas.addEventListener(...)，就必须在 return 的 cleanup 函数里立即使用相同的引用 canvas.removeEventListener(...)。
+
+不要用 let handleClick 这样在闭包里动态赋值，而最好在外层先 const handleClick = (e) => { … }，然后在 useEffect 里直接引用该函数并移除。
+
+把 handleClick、handleMouseMove 等事件处理函数定义提升到组件顶层（或至少放在一次 useCallback 中），并且为它们添加依赖，让 React 知道什么时候需要重建/解绑。像：
+
+
+const handleClick = useCallback((event: MouseEvent) => { … }, [/* 列出所有依赖 */]);
+然后在 useEffect 中：
+
+
+useEffect(() => {
+  if (!canvas) return;
+  canvas.addEventListener("click", handleClick, options);
+  // …其余监听器…
+  return () => {
+    canvas.removeEventListener("click", handleClick, options);
+    // …其余移除…
+  };
+}, [canvas, handleClick, handleMouseMove, handleContextMenu, handleKeyDown, handleKeyUp]);
+这样就能确保“绑定/解绑”时引用的是同一个函数，并且只在需要时刻执行一次。
+
+2.2. 递归 initializeControls + 定时器 setTimeout 复杂度太高
+
+const initializeControls = () => {
+  try {
+    if (!document.contains(canvas) || !canvas.offsetParent) {
+      setTimeout(initializeControls, 50);
+      return;
+    }
+    // …创建 TransformControls、DragControls、绑定事件…
+  } catch (error) {
+    setTimeout(initializeControls, 200);
+  }
+};
+
+// 首次使用小延迟保证 DOM 准备好
+const initTimeout = setTimeout(initializeControls, 10);
+return () => {
+  clearTimeout(initTimeout);
+  // 清理 TransformControls
+  // …
+};
+问题：
+
+每次 initializeControls 进入「canvas 尚未准备好」的分支时，会继续 setTimeout 自己（50ms 后再次尝试）。若最终成功前多次重渲染，可能产生多个并行的 initializeControls 调用，增大绑定事件次数。
+
+在 catch 的时候还会 setTimeout(initializeControls, 200)，如果内部报错，并没有对应的 clearTimeout 或同一逻辑控制，就会不断在后台尝试，可能导致逻辑混乱或堆栈累积。
+
+initTimeout 只在组件卸载时清理最初那一次的定时器引用。也就是说，如果在后续 setTimeout(initializeControls, 50) 成功后仍有新的重试任务排队，组件卸载时并未清理所有任务。
+
+改进建议：
+
+拆分“等待 canvas 就绪”与“真正初始化”的逻辑。最推荐做法是监听一个 React State（或 store）来标记 “canvas 是否挂载在 DOM 上并且可用”，而不是手动轮询/递归。比如你在渲染 Three.js 画布的地方，一旦 <canvas> 挂载完毕就把一个 ref 或状态传给此组件。这样不需要 setTimeout 轮询。
+
+如果确实需要轮询，也必须在 cleanup 阶段清理所有定时器。可以把 let retryTimeoutId: NodeJS.Timeout | null = null; 放在外层，当 re-run initializeControls 时，把上一个 retryTimeoutId 保存在变量里，并在任何一次 useEffect cleanup 阶段统一 clearTimeout(retryTimeoutId)。
+
+对于失败重试，防止无限重试：可以设一个最大重试次数，超过后警告用户或抛出错误，不要无节制循环。
+
+1. 定时器 (setInterval) 没有在所有分支中正确清理
+3.1. 更新可选对象列表的定时器
+在 initializeControls 内部，如果绑定成功，就启动了一个周期性更新：
+
+
+if (scene) {
+  const updateInterval = setInterval(updateSelectableObjects, 2000);
+  // …把 cleanup 函数挂到 transformControlsRef.current._cleanup 上…
+}
+问题：
+
+如果在某次 initializeControls 调用里 scene 存在，就创建了 updateInterval。而在 cleanup 时，只会通过 (transformControlsRef.current as …)._cleanup() 来清理一次对应的 interval。但是，如果 initializeControls 重复成功执行多次，就会创建多个独立的 updateInterval，只有最后一次的 _cleanup 被挂在 transformControlsRef.current 上，而前面那些定时器可能就无法被清理，造成内存泄漏和持续无谓计算。
+
+updateSelectableObjects 本身访问了 dynamicGroup、dragControlsRef.current 等外部变量，但并未列入依赖，因此如果这些变量在后续变化，可能导致循环引用旧的变量或出现不可预期的行为。
+
+改进建议：
+
+把 setInterval 独立到一个 useEffect 里，并且依赖于 dynamicGroup 或其他必要条件。举例：
+
+
+useEffect(() => {
+  if (!dynamicGroup || !dragControlsRef.current) return;
+  const id = setInterval(() => {
+    // 这里拿到最新的 dragControlsRef.current
+    const updatedObjects = getAllObjectsInScene(dynamicGroup)...
+    // 重建 dragControlsRef.current
+  }, 2000);
+  return () => clearInterval(id);
+}, [dynamicGroup, getAllObjectsInScene]);
+如此一来，这个定时器只会在 dynamicGroup 真正非空时运行，且每次 dynamicGroup 变时都会自动清理旧的定时器，保证只存在一个有效的 interval。
+
+避免把定时器与 transformControls 绑定在一起，职责分离：一个 effect 专管 TransformControls/DragControls 的 create/dispose；另一个 effect 专门管定时刷新。
+
+1. Three.js TransformControls / DragControls 的多次创建与销毁
+4.1. 多次重复创建 TransformControls
+在 initializeControls 里，每次“canvas 准备好” 就会创建一个新的 TransformControls(camera, canvas) 并添加到 scene。如果你切换 transformMode（依赖项里包含 transformMode），会重走一次 effect，从而再次创建新的 TransformControls，并挂到 scene 上，而旧的控件可能并未被完整销毁，导致场景里同时存在多个 TransformControls，进而冲突、性能下降，甚至“显示多个 gizmo”、“事件被重复触发”。
+
+改进建议：
+
+将 TransformControls 的创建与 transformMode 变化分开。比如一个 effect 只监听 scene、camera、canvas 等基础资源，当这些从 “null” 变为 “非 null” 时只创建一次 TransformControls；而监听 transformMode 的 effect 只做 transformControls.setMode(transformMode)。切忌“创建 & 切换模式”写在同一个 effect 里。
+
+确保在 cleanup 时完整销毁：
+
+
+useEffect(() => {
+  if (!scene || !camera || !canvas) return;
+  const controls = new TransformControls(camera, canvas);
+  scene.add(controls);
+  controls.setMode(transformMode);
+  transformControlsRef.current = controls;
+
+  const onDragChange = (event) => { … };
+  controls.addEventListener("dragging-changed", onDragChange);
+  const onObjectChange = () => { … };
+  controls.addEventListener("objectChange", onObjectChange);
+
+  return () => {
+    // 必须先移除监听器
+    controls.removeEventListener("dragging-changed", onDragChange);
+    controls.removeEventListener("objectChange", onObjectChange);
+    // 再 detach & dispose
+    controls.detach();
+    controls.enabled = false;
+    scene.remove(controls);
+    controls.dispose();
+    transformControlsRef.current = null;
+  };
+}, [scene, camera, canvas]); // 仅依赖基础资源，不要依赖 transformMode
+4.2. DragControls 的创建与销毁
+类似地，DragControls 也会反复地在 initializeControls 里被 new DragControls(selectableObjects, camera, canvas)，并赋给 dragControlsRef.current。如果不加以分离，同样会导致“老的实例没被销毁”，“频繁 new + dispose 也影响性能”。
+
+改进建议：
+
+重新设计一个 effect 专门负责“当 selectableObjects（即 dynamicGroup 内子节点列表）发生变化时，创建新的 DragControls 并 dispose 旧的“。大致模式：
+
+
+useEffect(() => {
+  if (!canvas || !camera) return;
+  // 筛选出所有可选物体
+  const objects = getAllObjectsInScene(dynamicGroup).filter(…);
+  const drag = new DragControls(objects, camera, canvas);
+  drag.enabled = false;
+  dragControlsRef.current = drag;
+
+  return () => {
+    drag.dispose();
+    dragControlsRef.current = null;
+  };
+}, [dynamicGroup, camera, canvas, getAllObjectsInScene]);
+不要在一个 “递归初始化” 里把 TransformControls 和 DragControls 混在一起。职责分离可以让你更清楚地知道什么时候创建/销毁哪一个控件。
+
+1. 浏览器 API（window、document）与服务端渲染问题
+5.1. 代码里多处直接使用 window / document
+在第一个 useEffect 中，最开头就有：
+
+
+const canvas = renderer.domElement;
+if (!canvas || !canvas.parentElement || !document.contains(canvas)) {
+  // …
+  window.dispatchEvent(event);
+}
+以及后面给 canvas.addEventListener、window.addEventListener('keydown') 等。这意味着在服务端渲染（SSR）或构建阶段，document、window 均不存在，会报 ReferenceError: document is not defined。在开发模式下，Next.js 的快速刷新可能掩盖了这类错误，而生产打包（next build）会严格检查，导致构建出错或运行时报错。
+
+改进建议：
+
+将所有对 window、document 的访问放到 useEffect 中，因为 useEffect 只在浏览器端执行，不会在 SSR 时跑。例如：
+
+useEffect(() => {
+  if (typeof window === "undefined" || typeof document === "undefined") return;
+  // 这里安全地访问 window、document
+}, []);
+你已把逻辑放在 useEffect 里，这是对的。但是初始判断时也要额外校验：
+
+
+useEffect(() => {
+  if (!scene || !dynamicGroup) return;
+  const renderer = scene.userData.renderer as THREE.WebGLRenderer;
+  if (!renderer) return;
+  const canvas = renderer.domElement;
+  if (!canvas) return;
+  if (typeof document === "undefined" || !document.contains(canvas)) {
+    // SSR 阶段会先走到这里？建议加上 typeof document 判断
+    return;
+  }
+  // …其余绑定逻辑…
+}, [scene, dynamicGroup]);
+这样就能避免 process.env.NODE_ENV === "production" 的构建阶段抛错。
+
+1. selectedObjects 与 selectedObject 状态管理的竞态
+组件里维护了两个状态：
+
+
+const [selectedObjects, setSelectedObjects] = useState<THREE.Object3D[]>([]);
+以及 selectedObject 来自 useSceneStore()。
+在 handleObjectSelection 中，你会同时调用 setSelectedObjects(...) 与 selectObject(...)。如果调用这两个操作很接近，会出现“stale state”或“竞态”问题。例如：
+
+当 Shift + 点击时，如果对象已被选中，你先做 newSelectedObjects.splice(...)，然后 setSelectedObjects(newSelectedObjects)，接着 selectObject(newSelected)。但此时如果 selectObject 触发 store 更新（并在 store 里也维护一份 selectedObject），而你在下一个渲染周期里会触发 useEffect attach，如果时序发生微小偏差，可能会 attach 到错误的对象，导致“工具（TransformControls）attach 失败”。
+
+此外，在 handleClick 里，如果点击空白并且没有 Shift，就会 handleObjectSelection(null, event) —— 这时会 selectedObjects.forEach((obj) => removeHighlight(obj))。但是由于 selectedObjects 是当前渲染里的值，如果在短时间内多个事件并发，可能会出现“有的对象 highlight 没有清理干净”或“回调里拿到的 selectedObjects 不是最新值”的情况。
+
+改进建议：
+
+使用函数式更新 setSelectedObjects(prev => { … })。在可能同时多次调用 setSelectedObjects 的地方，使用 prev 确保读到的是最新 state：
+
+
+setSelectedObjects((prevSelected) => {
+  // 基于 prevSelected 来计算新数组，避免 stale 问题
+  const idx = prevSelected.findIndex(obj => obj.uuid === clickedObject.uuid);
+  // …其余逻辑…
+});
+在调用 selectObject(...)（store 更新）前，先把 setSelectedObjects(...) 的结果确认好。或者在回调里使用 useEffect 监听 selectedObjects 的更新，再去执行 selectObject，保证“先更新本地数组，再触发全局选中状态”的顺序，而不是在同一回调里混合两种更新。
+
+避免直接在点击事件中同时修改两个状态。可以先处理“highlight 切换”、“selectedObjects 列表计算”，等 React 重新渲染后，再通过副作用去 selectObject(newSelected)，或者统一在一个 Redux-like action（store）里做“选中逻辑”。
+
+1. getAllObjectsInScene 函数效率与副作用
+ts
+复制
+编辑
+function getAllObjectsInScene(root: THREE.Object3D): THREE.Object3D[] {
+  if (!root) return [];
+  const objects: THREE.Object3D[] = [];
+  if (!root.userData?.isTransformControl && !root.userData?.isOutline && !root.userData?.isHelper) {
+    objects.push(root);
+    if (root.children && Array.isArray(root.children)) {
+      root.children.forEach((child) => {
+        if ((child.userData && (child.userData.isHelper || child.userData.isOutline)) || (child.type === "LineSegments" && child.userData.isHelper)) {
+          return;
+        }
+        objects.push(...getAllObjectsInScene(child));
+      });
+    }
+  }
+  return objects;
+}
+问题：
+
+每次点击、鼠标移动甚至定时器触发时，都要遍历整个 dynamicGroup 树。若场景里物体数量较多（几十个、几百个 Mesh/Group），就会频繁递归，导致性能瓶颈（特别是 intersectObjects 需要完整数组）。
+
+该函数是递归实现，且每次调用都会重新分配新数组，GC 压力大。如果在一个渲染帧里被多次调用，会严重拖慢帧率。
+
+改进建议：
+
+缓存可选对象列表：在 dynamicGroup 变更（增删子节点）时，重新生成一次“可选对象数组”，保存在 useRef 或 useState 里。这可以通过监听 store 中“子节点变化”事件，或者在扔进场景的代码里手动通知“列表已更新”。
+
+只在必要时更新：比如把 “可选对象数组” 存入一个 useState，当 dynamicGroup.children.length 发生变化、或检测到新增/删除对象时才更新，而不是每次点击都重新深度递归。
+
+对 intersectObjects 使用层级过滤：如果某些 Group 下的节点本质不可选，可以在其 userData 上标记 selectable: false，然后在裁剪时就直接 skip 整棵子树，而不是 getAllObjectsInScene 里再一级一级往下搜。
+
+8. CSS-in-JS 以及样式加载问题
+组件底部用了 styled-jsx 来包裹一段 CSS：
+
+<style jsx>{`
+  .controls-container { … }
+  .control-button { … }
+  /* …其余样式… */
+`}</style>
+注意事项：
+
+这种写法在开发模式下 CSS 会直接注入到 <head>，热更新也很方便。但在生产打包时，如果你启用了某些 next.config.js 里的 optimizeCss 或 minifyCss，有时会误删没有被显式引用的类名，从而导致“样式不生效”。
+
+原则上，凡是写过 className="control-button active"，都要在对应的 <style jsx> 里定义 .control-button.active { … }，否则在生产或 SSR 时，样式选择器可能不够具体。你在源码里写的是：
+
+
+.control-button.active { background-color: rgb(22, 94, 152); }
+这种是没问题的；但若你在 JS 里动态拼写类名（例如拼接 active），又或许生产打包时会把 .control-button { … } 与 .control-button.active { … } 拆散、合并到其他规则里。
+
+如果发现生产环境样式错乱，可以尝试先注释掉 styled-jsx 相关优化项，或用浏览器 DevTools 查看最终注入的 CSS，确认 class 名确实被保留。
+
+1. 环境变量与 NODE_ENV 判断
+代码中有这样一段：
+
+
+// 在开发环境中添加额外的延迟，确保ThreeCodeEditor完全初始化
+const initDelay = process.env.NODE_ENV === "development" ? 200 : 10;
+问题：
+
+process.env.NODE_ENV 在 Next.js/React 里，在浏览器端通过 useEffect 取到的值是打包时决定的：如果你 npm run build，在打出来的 bundle 中就只有 process.env.NODE_ENV === "production"，因为 Next.js 会在打包时把 process.env.* 自动替换成字符串常量。开发模式下（npm run dev），它的值是 "development"。
+
+但如果在生产部署时（next start），NODE_ENV 一定是 "production"，这段逻辑会把延迟只有 10ms。如果 Three.js Canvas 或其他依赖在生产模式下加载更慢、或者加载顺序与开发时不同，这 10ms 很有可能不够，导致 initializeControls 未能正确检测到 canvas.offsetParent，反而进入“canvasNotReady”分支。
+
+这样就有可能在生产环境里启动太快，导致后续找不到 canvas，从而不停地 setTimeout 重试，又或者直接放弃，出现“在生产环境下根本绑不到事件”的情况。
+
+改进建议：
+
+适当增大生产环境延迟，比如从 10ms 调整到 100ms 或 200ms，给 Canvas 加载、Three.js 初始化更多缓冲时间。
+
+改用“观察器”而非定时器：可以监听 renderer.domElement 是否被插入到 document.body 或者挂到某个父容器上，一旦存在即可触发初始化，而不用「猜延迟」。举例：
+
+const canvasRef = useRef<HTMLElement | null>(null);
+useEffect(() => {
+  const canvas = renderer.domElement;
+  if (!canvas) return;
+  const observer = new MutationObserver(() => {
+    if (document.contains(canvas)) {
+      // 代表 canvas 已挂到 DOM 上
+      initControls();
+      observer.disconnect();
+    }
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
+  return () => observer.disconnect();
+}, [renderer]);
+1.  生产模式与开发模式下的差异
+结合你最初“开发环境正常、生产环境出问题”的情况，以下列出几条最常见的“在开发下没发现，在生产打包后才显现”的典型点，并与本组件做对照，看看有没有遗漏的风险：
+
+代码被 Tree-Shaking 或者 Uglify 优化掉
+
+如果某些函数（例如 addHighlight、removeHighlight）在开发环境里仅在某些分支调用，而生产打包时被认为“未被使用”，就可能被移除。
+
+建议给这些函数加上 /*#__PURE__*/ 注释或把它们放在外层 import。
+
+另外，如果你在组件里写了大量 console.log(...)，生产打包时可能会移除它们，导致调试信息丢失。
+
+环境变量 process.env.NODE_ENV 差异
+
+之前提到“延迟时间不同”可能导致载入顺序差异。
+
+另外，如果你通过 process.env.XXX 去读取某些自定义变量（比如决定是否显示某个调试面板），生产时可能是 undefined，从而直接略过某些逻辑。
+
+大小写敏感 & 路径问题
+
+你在 import { useSceneStore } from "../stores/useSceneStore"; 时，请确认生产构建的文件系统（Linux 环境）中是否确实存在 stores/useSceneStore.ts(x)，且目录名/文件名没有大小写拼写错误。
+
+类似 import { DragControls } from "three/examples/jsm/controls/DragControls";，在生产编译时 Three.js 可能做了路径别名映射，建议确认同样版本的 three 包在生产依赖里也存在。
+
+第三方库在生产下与 Node 版本兼容性
+
+Three.js 控件在某些 Node 版本下需要 polyfill window 或 global。虽然我们把逻辑放在 useEffect，但在构建阶段（next build）也可能静态分析到 import * as THREE from "three"，从而报错误。
+
+建议确认你在生产环境里 Node 和打包工具（Webpack/SWC）版本与本地一致。
+
+三、逐行重点问题与改进
+下面以你原始代码为基础，列出一些需要特别注意或改动的片段，并给出示例修改方案。
+
+3.1. 改写钩子依赖与事件绑定逻辑
+
+export default function ObjectManipulationControls() {
+  const {
+    scene,
+    dynamicGroup,
+    selectObject,
+    selectedObject,
+    updateObjectState,
+    createGroup,
+    ungroupObjects,
+  } = useSceneStore();
+
+  const [transformMode, setTransformMode] =
+    useState<TransformMode>("translate");
+  const [isDragging, setIsDragging] = useState(false);
+  const [multiSelectMode, setMultiSelectMode] = useState(false);
+  const [selectedObjects, setSelectedObjects] = useState<THREE.Object3D[]>([]);
+
+  // refs
+  const transformControlsRef = useRef<TransformControls | null>(null);
+  const dragControlsRef = useRef<DragControls | null>(null);
+  const raycasterRef = useRef<THREE.Raycaster>(new THREE.Raycaster());
+
+  // ------------ 1. 把事件处理函数抽到组件顶层，用 useCallback 包裹，并列出依赖 ------------
+  const findSelectableParent = useCallback(
+    (object: THREE.Object3D): THREE.Object3D => {
+      let current = object;
+      let parent = object.parent;
+      while (parent && parent !== scene && parent !== dynamicGroup) {
+        if (parent.userData && parent.userData.selectable !== false) {
+          current = parent;
+        }
+        parent = parent.parent;
+      }
+      return current;
+    },
+    [scene, dynamicGroup]
+  );
+
+  // 提前声明，便于 addEventListener/removeEventListener 时引用同一个函数
+  const handleObjectSelection = useCallback(
+    (object: THREE.Object3D | null, event?: MouseEvent) => {
+      if (!object && (!event || !event.shiftKey)) {
+        // 全部取消高亮
+        setSelectedObjects((prevArr) => {
+          prevArr.forEach((obj) => {
+            if (obj && obj.parent) removeHighlight(obj);
+          });
+          return [];
+        });
+        selectObject(null);
+        return;
+      }
+      if (!object) return;
+
+      if (
+        !object.parent ||
+        object.userData?.isHelper ||
+        object.userData?.isOutline ||
+        object.userData?.isTransformControl
+      ) {
+        return;
+      }
+
+      const isShiftPressed = event?.shiftKey ?? false;
+
+      setSelectedObjects((prevArr) => {
+        const idx = prevArr.findIndex((obj) => obj.uuid === object.uuid);
+        let newArr = [...prevArr];
+        let newSelected: THREE.Object3D | null = null;
+        if (isShiftPressed) {
+          if (idx !== -1) {
+            // 取消选中
+            removeHighlight(object);
+            newArr.splice(idx, 1);
+            newSelected = newArr.length > 0 ? newArr[newArr.length - 1] : null;
+          } else {
+            // 新增选中
+            newArr.push(object);
+            addHighlight(object);
+            newSelected = object;
+          }
+        } else {
+          // 单选模式：先取消原来所有高亮
+          prevArr.forEach((obj) => removeHighlight(obj));
+          newArr = [object];
+          addHighlight(object);
+          newSelected = object;
+        }
+        // 用 store 更新当前 “主要选中” 对象
+        selectObject(newSelected);
+        return newArr;
+      });
+    },
+    [removeHighlight, addHighlight, selectObject]
+  );
+
+  const addHighlight = useCallback((object: THREE.Object3D) => {
+    if (!object || !object.parent) return;
+    try {
+      if (object instanceof THREE.Mesh) {
+        if (!object.userData.isHighlighted && !object.userData.isOutline) {
+          const material = Array.isArray(object.material)
+            ? object.material[0]
+            : (object.material as THREE.Material);
+          if (!material) return;
+
+          // 存储原始属性，高亮显示
+          if ("emissive" in material && material.emissive) {
+            object.userData.originalEmissive = material.emissive.clone();
+            material.emissive.set(0x333333);
+          } else if ("color" in material && material.color) {
+            object.userData.originalColor = material.color.clone();
+            const color = material.color.clone();
+            color.r = Math.min(color.r + 0.2, 1.0);
+            color.g = Math.min(color.g + 0.2, 1.0);
+            color.b = Math.min(color.b + 0.2, 1.0);
+            material.color.copy(color);
+          }
+
+          // 删除旧的 outline
+          if (object.userData.outlineEffect) {
+            try {
+              if (object.userData.outlineEffect.parent === object) {
+                object.remove(object.userData.outlineEffect);
+              }
+            } catch (e) {
+              console.warn("Could not remove old outline effect:", e);
+            }
+            delete object.userData.outlineEffect;
+          }
+
+          // 添加新的 outline
+          if (object.geometry) {
+            const outlineMaterial = new THREE.MeshBasicMaterial({
+              color: 0x00ffff,
+              wireframe: true,
+              transparent: true,
+              opacity: 0.5,
+            });
+            const outlineMesh = new THREE.Mesh(object.geometry, outlineMaterial);
+            outlineMesh.scale.multiplyScalar(1.03);
+            outlineMesh.userData.isHelper = true;
+            outlineMesh.userData.isOutline = true;
+            object.add(outlineMesh);
+            object.userData.outlineEffect = outlineMesh;
+          }
+          object.userData.isHighlighted = true;
+        }
+      } else if (object instanceof THREE.Group) {
+        object.traverse((child) => {
+          if (
+            child instanceof THREE.Mesh &&
+            !child.userData.isOutline &&
+            !child.userData.isHelper &&
+            child.parent
+          ) {
+            addHighlight(child);
+          }
+        });
+        object.userData.isHighlighted = true;
+      }
+    } catch (error) {
+      console.error("Error adding highlight:", error);
+    }
+  }, []);
+
+  const removeHighlight = useCallback((object: THREE.Object3D) => {
+    if (!object || !object.parent) return;
+    try {
+      if (object instanceof THREE.Mesh) {
+        const material = Array.isArray(object.material)
+          ? object.material[0]
+          : (object.material as THREE.Material);
+        if (!material) return;
+
+        if (
+          object.userData.originalEmissive &&
+          "emissive" in material &&
+          material.emissive
+        ) {
+          material.emissive.copy(object.userData.originalEmissive);
+          delete object.userData.originalEmissive;
+        }
+        if (
+          object.userData.originalColor &&
+          "color" in material &&
+          material.color
+        ) {
+          material.color.copy(object.userData.originalColor);
+          delete object.userData.originalColor;
+        }
+
+        if (object.userData.outlineEffect) {
+          try {
+            const outlineEffect = object.userData.outlineEffect;
+            if (outlineEffect && outlineEffect.parent === object) {
+              object.remove(outlineEffect);
+            }
+          } catch (e) {
+            console.warn("Error removing outline:", e);
+          }
+          delete object.userData.outlineEffect;
+        }
+        object.userData.isHighlighted = false;
+      } else if (object instanceof THREE.Group) {
+        object.traverse((child) => {
+          if (
+            child instanceof THREE.Mesh &&
+            !child.userData.isOutline &&
+            child.parent
+          ) {
+            removeHighlight(child);
+          }
+        });
+        object.userData.isHighlighted = false;
+      }
+    } catch (error) {
+      console.error("Error removing highlight:", error);
+    }
+  }, []);
+这样做的好处：
+
+所有事件回调都是稳定引用，useEffect 里绑定/解绑时，不会因为函数变更而造成重复绑定。
+
+依赖数组清晰，React 能自动判断是否需要重新生成回调。
+
+3.2. 拆分 TransformControls / DragControls 的创建与销毁
+
+// ------ Effect A：创建 & 销毁 TransformControls ------
+useEffect(() => {
+  if (typeof window === "undefined") return; // SSR 时跳过
+  if (!scene || !dynamicGroup) return;
+  const renderer = scene.userData.renderer as THREE.WebGLRenderer;
+  const camera = scene.userData.camera as THREE.Camera;
+  if (!renderer || !camera) return;
+  const canvas = renderer.domElement;
+  if (!canvas) return;
+
+  // 实例化 TransformControls
+  const controls = new TransformControls(camera, canvas);
+  controls.userData.isTransformControl = true;
+  controls.setSize(1.2);
+  scene.add(controls);
+  transformControlsRef.current = controls;
+
+  // 监听拖拽切换（enable/disable orbitControls）
+  const onDraggingChanged = (e: { value: boolean }) => {
+    if (scene.userData.orbitControls) {
+      scene.userData.orbitControls.enabled = !e.value;
+    }
+    setIsDragging(e.value);
+  };
+  controls.addEventListener("dragging-changed", onDraggingChanged);
+
+  // 监听对象变化后更新物体状态
+  const onObjectChange = () => {
+    if (selectedObject && selectedObject.parent) {
+      try {
+        const isModel =
+          selectedObject.userData &&
+          (selectedObject.userData.modelId ||
+            selectedObject.userData.isModelObject ||
+            selectedObject.userData.isPersistentModel ||
+            selectedObject.userData.originalModelUrl ||
+            selectedObject.name === "Superman");
+
+        if (isModel) {
+          console.log(`模型变换更新: ${selectedObject.name || "unnamed"}`);
+        }
+        updateObjectState(selectedObject.uuid);
+        if (isModel) {
+          console.log(
+            `新位置: x=${selectedObject.position.x.toFixed(
+              2
+            )}, y=${selectedObject.position.y.toFixed(
+              2
+            )}, z=${selectedObject.position.z.toFixed(2)}`
+          );
+        }
+      } catch (error) {
+        console.error("Error updating object state:", error);
+      }
+    }
+  };
+  controls.addEventListener("objectChange", onObjectChange);
+
+  // 如果渲染时已经有选中物体，先 attach
+  if (selectedObject) {
+    controls.attach(selectedObject);
+  }
+
+  return () => {
+    // Cleanup: 移除监听器 & 销毁控件
+    controls.removeEventListener("dragging-changed", onDraggingChanged);
+    controls.removeEventListener("objectChange", onObjectChange);
+    controls.detach();
+    controls.enabled = false;
+    scene.remove(controls);
+    controls.dispose();
+    transformControlsRef.current = null;
+  };
+}, [scene, dynamicGroup, selectedObject, updateObjectState]);
+解释与要点：
+
+以 selectedObject 作为依赖，让 if (selectedObject) attach 逻辑在 selectedObject 变化时自动执行。
+
+将“切换模式”逻辑独立到另一个 effect 中，不在这个 effect 里反复创建控件。
+
+
+// ------ Effect B：响应 transformMode，切换 TransformControls 模式 ------
+useEffect(() => {
+  if (!transformControlsRef.current) return;
+  transformControlsRef.current.setMode(transformMode);
+}, [transformMode]);
+这样 transformMode 的变化只会调用 setMode，而不会销毁重建整个控件。
+
+3.3. 单独处理 DragControls 和可选对象列表
+
+// ------ Effect C：管理 DragControls 实例 ------
+useEffect(() => {
+  if (typeof window === "undefined") return; // SSR 跳过
+  if (!scene || !dynamicGroup) return;
+  const renderer = scene.userData.renderer as THREE.WebGLRenderer;
+  const camera = scene.userData.camera as THREE.Camera;
+  if (!renderer || !camera) return;
+  const canvas = renderer.domElement;
+  if (!canvas) return;
+
+  // 筛选出所有可选对象 (利用 memo 或单独 useMemo 缓存)
+  const selectableObjects = getAllObjectsInScene(dynamicGroup).filter(
+    (obj) =>
+      !obj.userData?.isHelper &&
+      !obj.userData?.isOutline &&
+      !obj.userData?.isTransformControl
+  );
+  // 创建 DragControls
+  const dragControls = new DragControls(selectableObjects, camera, canvas);
+  dragControls.enabled = false;
+  dragControlsRef.current = dragControls;
+
+  return () => {
+    dragControls.dispose();
+    dragControlsRef.current = null;
+  };
+}, [scene, dynamicGroup, getAllObjectsInScene]);
+这样能确保每当 dynamicGroup 或场景改变（出现新的物体、删除物体）时，都会重新创建 DragControls。
+
+getAllObjectsInScene 可以改成 useCallback 并列入依赖，或把结果缓存到 useMemo。
+
+3.4. 分离事件监听器绑定
+
+// ------ Effect D：绑定/解绑 canvas 与 window 事件 ------
+useEffect(() => {
+  if (typeof window === "undefined") return;
+  if (!scene || !dynamicGroup) return;
+  const renderer = scene.userData.renderer as THREE.WebGLRenderer;
+  const camera = scene.userData.camera as THREE.Camera;
+  if (!renderer || !camera) return;
+  const canvas = renderer.domElement;
+  if (!canvas) return;
+
+  // 定义事件处理函数：注意必须引用最外层 useCallback 的 handleClick 等
+  /**
+   * handleClick 已用 useCallback 包裹并列出了依赖，
+   * 因此只要它的依赖没变，函数引用就保持一致，
+   * 不会重复绑定/解绑。
+   */
+  canvas.addEventListener("click", handleClick, { passive: false });
+  canvas.addEventListener("contextmenu", handleContextMenu, { passive: false });
+  canvas.addEventListener("mousemove", handleMouseMove, { passive: true });
+  window.addEventListener("keydown", handleKeyDown);
+  window.addEventListener("keyup", handleKeyUp);
+
+  console.log("[ObjectControls] Event listeners bound.");
+
+  return () => {
+    canvas.removeEventListener("click", handleClick);
+    canvas.removeEventListener("contextmenu", handleContextMenu);
+    canvas.removeEventListener("mousemove", handleMouseMove);
+    window.removeEventListener("keydown", handleKeyDown);
+    window.removeEventListener("keyup", handleKeyUp);
+    console.log("[ObjectControls] Event listeners cleaned up.");
+  };
+}, [scene, dynamicGroup, handleClick, handleMouseMove, handleContextMenu, handleKeyDown, handleKeyUp]);
+这样做的好处：避免了手动嵌套 setTimeout、不断重试，也避免了同一个函数在多次绑定后无法移除的问题。
+
+如果你确实需要等 canvas 在 DOM 中完全就绪，可以先写一个检查逻辑，但一旦确认后就不要“重复循环”去重试。或者完全由上层把 canvas 传下来，此组件直接拿到 canvas 引用就行。
+
+3.5. 优化 getAllObjectsInScene 性能
+
+const getAllObjectsInScene = useCallback((root: THREE.Object3D): THREE.Object3D[] => {
+  const result: THREE.Object3D[] = [];
+  function recurse(node: THREE.Object3D) {
+    if (
+      node.userData?.isTransformControl ||
+      node.userData?.isOutline ||
+      node.userData?.isHelper
+    ) {
+      return;
+    }
+    result.push(node);
+    node.children.forEach((child) => {
+      recurse(child);
+    });
+  }
+  recurse(root);
+  return result;
+}, []);
+然后在创建 DragControls 的 effect 里用 getAllObjectsInScene(dynamicGroup)。如果你担心频繁遍历带来的性能瓶颈，可以进一步把该值缓存：
+const allSelectableObjects = useMemo(() => {
+  return getAllObjectsInScene(dynamicGroup).filter(
+    (obj) =>
+      !obj.userData?.isHelper &&
+      !obj.userData?.isOutline &&
+      !obj.userData?.isTransformControl
+  );
+}, [dynamicGroup, getAllObjectsInScene]);
+再把 allSelectableObjects 传给创建 DragControls 的 effect，这样只有当 dynamicGroup 发生改变，才会重新遍历一次；而非每次 render 都走一次。
+
+3.6. 拆分定时器（setInterval）逻辑
+将“定时更新 DragControls 可选对象列表”的逻辑抽成一个单独 effect：
+
+
+useEffect(() => {
+  if (!dynamicGroup) return;
+  // 每 2s 重新获取一次物体列表，并重建 DragControls
+  const intervalId = setInterval(() => {
+    if (dragControlsRef.current) {
+      dragControlsRef.current.dispose();
+    }
+    if (!scene || !dynamicGroup) return;
+    const renderer = scene.userData.renderer as THREE.WebGLRenderer;
+    const camera = scene.userData.camera as THREE.Camera;
+    if (!renderer || !camera) return;
+    const canvas = renderer.domElement;
+    if (!canvas) return;
+
+    const updatedObjects = getAllObjectsInScene(dynamicGroup).filter(
+      (obj) =>
+        !obj.userData?.isHelper &&
+        !obj.userData?.isOutline &&
+        !obj.userData?.isTransformControl
+    );
+    const newDrag = new DragControls(updatedObjects, camera, canvas);
+    newDrag.enabled = false;
+    dragControlsRef.current = newDrag;
+  }, 2000);
+
+  return () => clearInterval(intervalId);
+}, [dynamicGroup, scene, getAllObjectsInScene]);
+这样，即便 dynamicGroup 里子节点数量千变万化，也只在依赖变化时或每 2s 更新时做一次，而不存在多个重复定时器难以清理的问题。
+
+3.7. 对生产环境延迟与 SSR 问题再补充
+延迟（延迟初始化 vs 递归 setTimeout）
+通过上面把事件监听和控件创建都拆开后，就不需要递归 setTimeout。只要保证：
+
+
+// 在你的 Three.js 组件里（负责渲染 <canvas>）：
+useEffect(() => {
+  // Three.js 渲染完成后，通过某种方式通知此组件“canvas 已就绪”
+  // 例如使用一个全局 EventBus，或者直接把 renderer.domElement 通过 React Context/prop 传递
+  eventBus.emit("canvasReady");
+}, [renderer]);
+在 ObjectManipulationControls 里监听一次 eventBus.on("canvasReady", () => { /* 绑定事件，创建控件 */ }); 即可。
+
+避免在 SSR 时访问 window/document
+在所有 useEffect（只要访问 window/document）的开头都加入：
+
+
+if (typeof window === "undefined" || typeof document === "undefined") return;
+这样建造生产 bundle 时，就不会在 Node 阶段就报 ReferenceError。
+
+3.8. 其他细节与最佳实践
+key 属性：如果你的组件在 React 树里可能被“条件渲染”多次卸载/重挂，可以为 ObjectManipulationControls 整个组件外层包一个 key（基于某个唯一值），确保 React 能正确回收。
+
+错误边界：由于 Three.js 操作极易出错，建议在父组件或此组件里包一个 <ErrorBoundary>，防止某次报错导致整个页面崩溃。
+
+开发日志与生产日志：你大量使用了 console.log / console.warn / console.error。在生产环境下，Next.js 默认会移除 console.log，如果你仍想看日志，可考虑在 .env.production 里把 NEXT_PUBLIC_DEBUG=true，并在代码里用 if (process.env.NEXT_PUBLIC_DEBUG) console.log(...)。
+
+Group/Ungroup 时清理引用：在 handleGroupSelected、handleUngroup 里，应确认在 createGroup 或 ungroupObjects 后，同时移除之前所有子对象的 highlight，高亮逻辑写得还算完整，但建议在 createGroup 成功后立即给新 group 添加一次 highlight（如果需要），保证 UI 一致性。
+
+类型安全：既然是 TypeScript，建议给 getAllObjectsInScene、addHighlight、removeHighlight 等函数加上准确的返回类型（如 void 或 THREE.Object3D[]），以提高可维护性。
+
+四、总结
+综上所述，原始代码在开发模式下之所以看似“可用”，很大程度上是 React 热更新、Three.js 在浏览器环境下的延迟加载，以及 Webpack 在开发模式下对 process.env.NODE_ENV 不做严格替换所致。但在生产打包时（Next.js 会强制进行 Tree-Shaking、Uglify、CSS 优化、SSR 静态分析等），会暴露以下主要隐患：
+
+React Hooks 依赖写得不完整 → 导致闭包捕获旧值、事件绑定/逻辑未更新
+
+事件监听器使用手动递归 setTimeout 绑定/解绑逻辑复杂 → 在生产下容易因为节省打包体积去除 console.log 或者延迟更长而导致“canvas 找不到”
+
+TransformControls/DragControls 创建与销毁混在一起 → 重复创建积累资源、事件冲突、性能下降
+
+未对 window/document 做 SSR 安全检查 → 生产构建直接报错
+
+动态获取所有物体每次都做深度遍历 → 性能瓶颈（尤其在大场景下）
+
+定时器未统一清理 → 内存泄漏及持续无用计算
+
+针对这些问题，建议你按照上面的拆分思路，分步重构各个功能模块，并严格遵循：
+
+Hooks 依赖：所有外部引用都要列入依赖数组，用 useCallback / useMemo 缓存函数与结果
+
+拆分 Effect：一个 effect 只管一件事（创建/切换控件、绑定/解绑事件、定时刷新、监听 selectedObject 变化……）
+
+SSR 安全：所有直接访问浏览器全局对象的逻辑都放在 useEffect 里，并在开头判断 typeof window === "undefined"
+
+事件监听：保证“添加”和“移除”用的是同一个函数引用，一一对应，避免重复绑定/解绑失败
+
+深度遍历优化：用 useMemo 缓存可选对象列表，或者在添加/删除子物体时手动更新一次缓存，而不是每帧都递归
+
+完成以上重构后，你在生产环境下就能保证：
+
+不会因为函数引用变化导致监听器残留或“事件没生效”
+
+不会因为深度遍历耗时导致体验差甚至超时
+
+不会因为 SSR 阶段直接引用 document 报错
+
+TransformControls/DragControls 实例生命周期清晰，不会冗余蔓延
+
+多选/高亮逻辑能前后一致且状态不易出错
