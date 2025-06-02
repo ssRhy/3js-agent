@@ -241,7 +241,7 @@ const VersionHistory: React.FC<VersionHistoryProps> = ({ onVersionRevert }) => {
 
         .history-entry.current {
           background: #1e3a2e;
-          border-left: 3px solid #28a745;
+          border-left: 3px solidrgb(16, 16, 16);
         }
 
         .entry-info {
@@ -261,7 +261,7 @@ const VersionHistory: React.FC<VersionHistoryProps> = ({ onVersionRevert }) => {
         }
 
         .current-badge {
-          background: #28a745;
+          background: rgb(39, 41, 39);
           color: white;
           padding: 1px 4px;
           border-radius: 8px;

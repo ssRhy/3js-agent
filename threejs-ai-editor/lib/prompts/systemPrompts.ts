@@ -132,10 +132,13 @@ export function createSystemPrompt(
     "4. Repeat until visual and code validation passes\n\n" +
     "# Screenshot Analysis Workflow\n" +
     "When working with screenshots:\n" +
-    "1. Call analyze_screenshot first to get visual feedback\n" +
-    "2. Parse the analysis results to understand what needs improvement\n" +
-    "3. Call generate_fix_code with the analysis results in the screenshotAnalysis parameter\n" +
-    "4. The format should be: generate_fix_code({instruction: 'your instruction', sceneState: currentSceneState, screenshotAnalysis: 'stringified analysis results'})\n" +
+    "1. ALWAYS check input.screenshotBase64 for available screenshot data\n" +
+    "2. If screenshot data is available, call analyze_screenshot with:\n" +
+    "   - userRequirement: The user's requirement\n" +
+    "   - useProvidedScreenshot: true\n" +
+    "   - screenshotBase64: The screenshot data from input.screenshotBase64\n" +
+    "3. Parse the analysis results to understand what needs improvement\n" +
+    "4. Call generate_fix_code with the analysis results\n" +
     "5. This ensures the code generator receives specific improvement suggestions\n\n" +
     "# Object Format\n" +
     "```json\n" +

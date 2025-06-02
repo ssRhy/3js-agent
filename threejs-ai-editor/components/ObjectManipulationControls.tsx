@@ -32,6 +32,8 @@ export default function ObjectManipulationControls() {
     updateObjectState,
     createGroup,
     ungroupObjects,
+    saveCurrentState,
+    deleteObject,
   } = useSceneStore();
 
   const [transformMode, setTransformMode] =
@@ -354,6 +356,36 @@ export default function ObjectManipulationControls() {
         scene.userData.orbitControls.enabled = !event.value;
       }
       setIsDragging(Boolean(event.value));
+
+      // When dragging ends, save current state to history
+      if (!event.value && selectedObject) {
+        // Use timeout to ensure transform is fully applied
+        setTimeout(() => {
+          try {
+            // 首先立即更新当前选中对象的状态
+            updateObjectState(selectedObject.uuid);
+
+            // 然后批量更新所有对象状态，确保状态缓存是最新的
+            const { updateAllObjectStates } = useSceneStore.getState();
+            updateAllObjectStates();
+
+            // 最后保存到历史记录
+            saveCurrentState();
+
+            console.log("物体移动完成，状态已保存到历史记录", {
+              objectId: selectedObject.uuid,
+              objectName: selectedObject.name,
+              newPosition: {
+                x: selectedObject.position.x.toFixed(2),
+                y: selectedObject.position.y.toFixed(2),
+                z: selectedObject.position.z.toFixed(2),
+              },
+            });
+          } catch (error) {
+            console.error("保存状态失败:", error);
+          }
+        }, 100);
+      }
     });
 
     // Update object state when transformed
@@ -661,6 +693,7 @@ export default function ObjectManipulationControls() {
     selectedObjects,
     removeHighlight,
     selectObject,
+    saveCurrentState,
   ]);
 
   // Update transform controls when selected object changes
@@ -734,32 +767,30 @@ export default function ObjectManipulationControls() {
       selectedObject instanceof THREE.Group &&
       selectedObject.children.length > 0
     ) {
-      if (selectedObject === dynamicGroup) {
-        console.warn("Cannot ungroup system group");
-        return;
-      }
-
-      // Remove highlight from the selected group before ungrouping
-      removeHighlight(selectedObject);
-
-      // Also remove highlights from all currently selected objects
-      selectedObjects.forEach((obj) => {
-        if (obj && obj.parent) {
-          removeHighlight(obj);
-        }
-      });
-
-      // Detach transform controls before ungrouping
-      if (transformControlsRef.current) {
-        transformControlsRef.current.detach();
-      }
-
-      // Perform the ungrouping
       ungroupObjects(selectedObject as THREE.Group);
-
-      // Clear selection state
+      // After ungrouping, update selection to null since the group no longer exists
       selectObject(null);
       setSelectedObjects([]);
+      console.log(`组 "${selectedObject.name}" 已解组`);
+    }
+  };
+
+  // 新增：删除物体处理函数
+  const handleDeleteObject = () => {
+    if (selectedObject) {
+      if (
+        window.confirm(
+          `确定要删除物体 "${
+            selectedObject.name || "未命名对象"
+          }" 吗？此操作不可撤销。`
+        )
+      ) {
+        deleteObject(selectedObject);
+        // 清除选择状态
+        selectObject(null);
+        setSelectedObjects([]);
+        console.log(`物体 "${selectedObject.name || "未命名对象"}" 已删除`);
+      }
     }
   };
 
@@ -945,6 +976,16 @@ export default function ObjectManipulationControls() {
             <span>UNGROUP</span>
           </button>
         </div>
+
+        <div className="action-buttons">
+          <button
+            className="control-button delete-button"
+            onClick={handleDeleteObject}
+            disabled={!selectedObject}
+          >
+            <span>🗑 DELETE</span>
+          </button>
+        </div>
       </div>
 
       <div className="footer">
@@ -963,8 +1004,6 @@ export default function ObjectManipulationControls() {
           Selected {selectedObjects.length} objects
         </div>
       )}
-
-      <div className="info-text">Hold Shift to select multiple objects</div>
 
       <style jsx>{`
         .controls-container {
@@ -1030,6 +1069,22 @@ export default function ObjectManipulationControls() {
           grid-template-columns: 1fr 1fr;
           gap: 5px;
           margin-top: 5px;
+        }
+
+        .action-buttons {
+          display: grid;
+          grid-template-columns: 1fr;
+          gap: 5px;
+          margin-top: 5px;
+        }
+
+        .delete-button {
+          background-color: rgba(244, 67, 54, 0.2);
+          color: #ff7961;
+        }
+
+        .delete-button:hover:not(:disabled) {
+          background-color: rgba(244, 67, 54, 0.3);
         }
 
         .footer {

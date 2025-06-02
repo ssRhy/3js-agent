@@ -76,6 +76,9 @@ interface SceneState {
   selectObject: (object: Object3D | null) => void;
   setIsDraggingOrSelecting: (value: boolean) => void; // 添加设置操作模式的方法
 
+  // 对象操作方法
+  deleteObject: (object: Object3D) => void; // 新增删除物体方法
+
   // 组合对象相关方法
   createGroup: (objects: Object3D[], name?: string) => Group; // 创建一个新组
   addToGroup: (group: Group, object: Object3D) => void; // 添加对象到组
@@ -91,6 +94,7 @@ interface SceneState {
   deleteHistoryEntry: (index: number) => void;
   clearHistory: () => void;
   getCurrentVersion: () => number;
+  saveCurrentState: () => void; // 保存当前物体状态
 
   // 错误处理方法
   addError: (error: string) => void; // 添加错误
@@ -110,6 +114,7 @@ interface SceneState {
   // 对象状态管理
   updateObjectState: (uuid: string) => void;
   applyObjectState: (uuid: string, state: Partial<ObjectState>) => void;
+  updateAllObjectStates: () => void; // 批量更新所有对象状态
 
   // 代码映射管理
   mapCodeToObjects: (codeSnippet: string, objectUuids: string[]) => void;
@@ -420,6 +425,9 @@ export const useSceneStore = create<SceneState>((set, get) => ({
         state.applyObjectState(uuid, objState);
       }
     });
+
+    // 应用完成后批量更新状态缓存
+    state.updateAllObjectStates();
   },
 
   // 序列化场景状态，用于API调用
@@ -430,6 +438,9 @@ export const useSceneStore = create<SceneState>((set, get) => ({
     if (!dynamicGroup) {
       return [];
     }
+
+    // 在序列化前先更新所有对象状态，确保获得最新位置
+    state.updateAllObjectStates();
 
     // 定义包含modelUrl的类型，并确保它也是Record<string, unknown>的扩展
     interface SerializedObject extends Record<string, unknown> {
@@ -451,8 +462,8 @@ export const useSceneStore = create<SceneState>((set, get) => ({
       const registry = state.getRegistryEntry(obj.uuid);
 
       if (registry) {
-        const objState =
-          state.objectStates.get(obj.uuid) || extractObjectState(obj);
+        // 优先使用实时提取的状态，确保是最新的
+        const objState = extractObjectState(obj);
 
         // 只创建包含基本元数据的对象
         const baseObject: SerializedObject = {
@@ -488,6 +499,13 @@ export const useSceneStore = create<SceneState>((set, get) => ({
         }
 
         serializedObjects.push(baseObject);
+
+        // 调试日志：记录序列化的对象位置
+        console.log(`序列化对象 ${registry.name}:`, {
+          id: obj.uuid,
+          position: baseObject.position,
+          type: registry.type,
+        });
       }
 
       // 递归处理子对象
@@ -497,6 +515,7 @@ export const useSceneStore = create<SceneState>((set, get) => ({
     // 从动态组开始处理
     dynamicGroup.children.forEach((child) => processObject(child));
 
+    console.log(`场景序列化完成，共 ${serializedObjects.length} 个对象`);
     return serializedObjects;
   },
 
@@ -759,23 +778,38 @@ export const useSceneStore = create<SceneState>((set, get) => ({
     return get().history;
   },
 
-  revertToVersion: (index: number) => {
+  revertToVersion: async (index: number) => {
     const state = get();
     const history = state.history;
 
     if (index < 0 || index >= history.length) {
       console.warn("无效的历史记录索引");
-      return Promise.resolve(false);
+      return false;
     }
 
     try {
-      // Note: This is a placeholder implementation
-      // In a full implementation, you would restore the scene state here
-      console.log(`恢复到版本 ${index + 1}`);
-      return Promise.resolve(true);
+      const targetEntry = history[index];
+
+      console.log(`开始恢复到版本 ${index + 1}`);
+
+      // 应用目标版本的场景快照
+      state.applySceneSnapshot(targetEntry.sceneState);
+
+      // 确保所有对象状态已更新
+      state.updateAllObjectStates();
+
+      // 如果需要重新执行代码，可以在这里添加逻辑
+      // 但为了保持历史回溯功能不变，我们只恢复状态
+
+      console.log(`成功恢复到版本 ${index + 1}`, {
+        objects: Object.keys(targetEntry.sceneState.objectStates).length,
+        timestamp: targetEntry.timestamp,
+      });
+
+      return true;
     } catch (error) {
       console.error("版本恢复失败:", error);
-      return Promise.resolve(false);
+      return false;
     }
   },
 
@@ -799,5 +833,118 @@ export const useSceneStore = create<SceneState>((set, get) => ({
   getCurrentVersion: () => {
     const state = get();
     return state.history.length - 1;
+  },
+
+  // 新增：批量更新所有对象状态
+  updateAllObjectStates: () => {
+    const state = get();
+    const registry = state.objectRegistry;
+    const states = state.objectStates;
+
+    registry.forEach((entry, uuid) => {
+      const obj = entry.object;
+      if (obj) {
+        states.set(uuid, extractObjectState(obj));
+        entry.lastUpdated = new Date();
+        entry.isVisible = obj.visible;
+      }
+    });
+
+    set({
+      objectStates: new Map(states),
+      objectRegistry: new Map(registry),
+    });
+  },
+
+  // 新增：保存当前状态到最新的历史记录
+  saveCurrentState: () => {
+    const state = get();
+    const history = state.history;
+
+    if (history.length === 0) {
+      return; // 没有历史记录时不执行
+    }
+
+    // 更新所有对象的状态
+    state.updateAllObjectStates();
+
+    // 获取当前场景快照
+    const currentSnapshot = state.getSceneSnapshot();
+
+    // 更新最新的历史记录条目中的场景状态
+    const latestIndex = history.length - 1;
+    const latestEntry = history[latestIndex];
+
+    if (latestEntry) {
+      // 创建新的历史记录条目，保持代码不变但更新场景状态
+      const updatedEntry: HistoryEntry = {
+        ...latestEntry,
+        sceneState: currentSnapshot,
+        timestamp: new Date().toISOString(), // 更新时间戳
+      };
+
+      // 更新历史记录
+      const newHistory = [...history];
+      newHistory[latestIndex] = updatedEntry;
+
+      set({ history: newHistory });
+
+      console.log("当前物体状态已保存到历史记录");
+    }
+  },
+
+  // 新增：删除物体方法
+  deleteObject: (object: Object3D) => {
+    const state = get();
+
+    if (!object || !object.parent) {
+      console.warn("无法删除无效的对象");
+      return;
+    }
+
+    const registry = state.objectRegistry;
+    const states = state.objectStates;
+
+    console.log(`开始删除对象: ${object.name || object.uuid}`);
+
+    // 递归删除所有子对象
+    const deleteRecursive = (obj: Object3D) => {
+      // 先删除所有子对象
+      const children = [...obj.children];
+      children.forEach((child) => {
+        deleteRecursive(child);
+      });
+
+      // 从注册表中移除
+      registry.delete(obj.uuid);
+      // 从状态映射中移除
+      states.delete(obj.uuid);
+
+      // 从父级移除
+      if (obj.parent) {
+        obj.parent.remove(obj);
+      }
+
+      console.log(`已删除对象: ${obj.name || obj.uuid}`);
+    };
+
+    // 执行递归删除
+    deleteRecursive(object);
+
+    // 如果删除的是当前选中的对象，清除选择
+    if (state.selectedObject && state.selectedObject.uuid === object.uuid) {
+      state.selectObject(null);
+    }
+
+    // 更新注册表和状态映射
+    set({
+      objectRegistry: new Map(registry),
+      objectStates: new Map(states),
+    });
+
+    // 保存当前状态到历史记录
+    state.saveCurrentState();
+
+    console.log(`对象删除完成，剩余对象数量: ${registry.size}`);
   },
 }));
