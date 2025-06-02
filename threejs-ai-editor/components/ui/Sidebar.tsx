@@ -2,6 +2,8 @@ import React from "react";
 import { SocketConnectionStatus } from "../../hooks/socket/useSocketConnection";
 import StatusSection from "./StatusSection";
 import CodeEditor from "../editor/CodeEditor";
+import VersionHistory from "./VersionHistory";
+import { HistoryEntry } from "../../stores/useSceneStore";
 
 interface SidebarProps {
   socketConnectionStatus: SocketConnectionStatus;
@@ -12,8 +14,6 @@ interface SidebarProps {
   isLoading: boolean;
   isModelLoading: boolean;
   error: string;
-  success: string;
-  showUpdateCodeReminder: boolean;
   code: string;
   setCode: (code: string) => void;
   lintErrors: Array<{
@@ -27,6 +27,7 @@ interface SidebarProps {
   setShowDiff: (show: boolean) => void;
   diff: string;
   previousCode: string;
+  onVersionRevert?: (index: number, entry: HistoryEntry) => void;
 }
 
 const Sidebar: React.FC<SidebarProps> = ({
@@ -38,8 +39,6 @@ const Sidebar: React.FC<SidebarProps> = ({
   isLoading,
   isModelLoading,
   error,
-  success,
-  showUpdateCodeReminder,
   code,
   setCode,
   lintErrors,
@@ -47,6 +46,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   setShowDiff,
   diff,
   previousCode,
+  onVersionRevert,
 }) => {
   return (
     <div className="sidebar">
@@ -108,12 +108,9 @@ const Sidebar: React.FC<SidebarProps> = ({
         </div>
       )}
 
-      <StatusSection
-        error={error}
-        success={success}
-        showUpdateCodeReminder={showUpdateCodeReminder}
-        isModelLoading={isModelLoading}
-      />
+      <StatusSection error={error} isModelLoading={isModelLoading} />
+
+      <VersionHistory onVersionRevert={onVersionRevert} />
 
       {previousCode && code !== previousCode && (
         <div className="diff-toggle">

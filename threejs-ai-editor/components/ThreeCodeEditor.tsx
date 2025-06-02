@@ -87,11 +87,8 @@ export default function ThreeCodeEditor() {
   const [previousCode] = useState("");
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
   const [showDiff, setShowDiff] = useState(false);
   const [diff] = useState("");
-  const [showUpdateCodeReminder, setShowUpdateCodeReminder] =
-    useState<boolean>(false);
 
   // Lint state
   const [lintErrors, setLintErrors] = useState<
@@ -246,12 +243,6 @@ export default function ThreeCodeEditor() {
       console.log("操作模式已自动启用");
     }
   }, [isDraggingOrSelecting, setIsDraggingOrSelecting]);
-
-  useEffect(() => {
-    if (isDraggingOrSelecting) {
-      setShowUpdateCodeReminder(true);
-    }
-  }, [isDraggingOrSelecting]);
 
   // Socket message handling
   useEffect(() => {
@@ -993,8 +984,6 @@ export default function ThreeCodeEditor() {
 
     setIsLoading(true);
     setError("");
-    setSuccess("");
-    setShowUpdateCodeReminder(false);
 
     try {
       setAllModelUrls((prev) =>
@@ -1068,70 +1057,63 @@ export default function ThreeCodeEditor() {
       console.log("[Generate] Received response from backend:", data);
 
       if (data.directCode) {
-        const code = data.directCode.trim();
-        setCode(code);
-        setSuccess("Code generated");
+        const newCode = data.directCode.trim();
+
+        // 添加历史记录
+        const addHistoryEntry = useSceneStore.getState().addHistoryEntry;
+        addHistoryEntry(newCode);
+
+        setCode(newCode);
         console.log("[Generate] Set new code to editor");
       } else if (data.modelUrls && data.modelUrls.length > 0) {
-        setSuccess(`Generated ${data.modelUrls.length} models! Loading...`);
+        console.log("[Generate] Processing model URLs:", data.modelUrls);
 
-        try {
-          console.log("[Generate] Processing model URLs:", data.modelUrls);
+        const firstModelUrl = data.modelUrls[0];
+        const existingModelUrl = allModelUrls.find(
+          (item) => item.url === firstModelUrl
+        );
 
-          const firstModelUrl = data.modelUrls[0];
-          const existingModelUrl = allModelUrls.find(
-            (item) => item.url === firstModelUrl
-          );
-
-          if (existingModelUrl) {
-            console.log(
-              "[Generate] Using stored model URL:",
-              existingModelUrl.url
-            );
-          }
-
-          const modelLoaded = await loadModel(data.modelUrls[0]);
-
-          if (modelLoaded) {
-            setSuccess("Model loaded successfully!");
-
-            const updatedSceneState = await captureSceneStateForChromaDB();
-            console.log(
-              `[Generate] The updated scene state contains ${
-                updatedSceneState?.length || 0
-              } objects`
-            );
-
-            if (
-              threeRef.current &&
-              threeRef.current.renderer &&
-              threeRef.current.scene &&
-              threeRef.current.camera
-            ) {
-              threeRef.current.renderer.render(
-                threeRef.current.scene,
-                threeRef.current.camera
-              );
-            }
-
-            if (updatedSceneState && updatedSceneState.length > 0) {
-              console.log(
-                `[Generate] The scene state has been updated, containing ${updatedSceneState.length} objects`
-              );
-            }
-          } else {
-            throw new Error("Failed to load model");
-          }
-        } catch (loadError) {
-          console.error("[Generate] Failed to load model:", loadError);
-          setError(
-            `Failed to load model: ${
-              loadError instanceof Error ? loadError.message : String(loadError)
-            }`
+        if (existingModelUrl) {
+          console.log(
+            "[Generate] Using stored model URL:",
+            existingModelUrl.url
           );
         }
+
+        const modelLoaded = await loadModel(data.modelUrls[0]);
+
+        if (modelLoaded) {
+          const updatedSceneState = await captureSceneStateForChromaDB();
+          console.log(
+            `[Generate] The updated scene state contains ${
+              updatedSceneState?.length || 0
+            } objects`
+          );
+
+          if (
+            threeRef.current &&
+            threeRef.current.renderer &&
+            threeRef.current.scene &&
+            threeRef.current.camera
+          ) {
+            threeRef.current.renderer.render(
+              threeRef.current.scene,
+              threeRef.current.camera
+            );
+          }
+
+          if (updatedSceneState && updatedSceneState.length > 0) {
+            console.log(
+              `[Generate] The scene state has been updated, containing ${updatedSceneState.length} objects`
+            );
+          }
+        } else {
+          throw new Error("Failed to load model");
+        }
       } else {
-        setSuccess("Request processed, but no code or model updates");
+        console.log(
+          "[Generate] Request processed, but no code or model updates"
+        );
       }
     } catch (error) {
       console.error("[Generate] Failed to process request:", error);
@@ -1142,6 +1124,44 @@ export default function ThreeCodeEditor() {
       );
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  // 版本回溯处理函数
+  const handleVersionRevert = async (
+    index: number,
+    entry: { code: string; modelUrls?: string[] }
+  ) => {
+    try {
+      console.log(`开始恢复到版本 ${index + 1}`);
+
+      // 更新代码编辑器
+      setCode(entry.code);
+
+      // 如果有模型URL，需要重新加载模型
+      if (entry.modelUrls && entry.modelUrls.length > 0) {
+        try {
+          // 重新加载第一个模型（简化处理）
+          const modelLoaded = await loadModel(entry.modelUrls[0]);
+          if (!modelLoaded) {
+            setError("模型加载失败，但场景状态已恢复");
+          }
+        } catch (modelError) {
+          console.error("恢复版本时模型加载失败:", modelError);
+          setError("模型加载失败，但场景状态已恢复");
+        }
+      }
+
+      // 清空当前的错误
+      setError("");
+      console.log(`版本 ${index + 1} 恢复完成`);
+    } catch (error) {
+      console.error("版本恢复失败:", error);
+      setError(
+        `版本恢复失败: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
     }
   };
 
@@ -1156,8 +1176,6 @@ export default function ThreeCodeEditor() {
         isLoading={isLoading}
         isModelLoading={isModelLoading}
         error={error}
-        success={success}
-        showUpdateCodeReminder={showUpdateCodeReminder}
         code={code}
         setCode={setCode}
         lintErrors={lintErrors}
@@ -1165,6 +1183,7 @@ export default function ThreeCodeEditor() {
         setShowDiff={setShowDiff}
         diff={diff}
         previousCode={previousCode}
+        onVersionRevert={handleVersionRevert}
       />
 
       <div className="resize-handle"></div>

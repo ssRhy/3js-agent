@@ -28,16 +28,19 @@ const ThreePreview: React.FC<ThreePreviewProps> = ({
     <>
       <div className="preview" ref={containerRef}></div>
 
-      {/* Scene Exporter component for image export */}
-      {threeRef.current?.renderer && (
-        <div className="scene-exporter-container">
-          <UnifiedExportTools renderer={threeRef.current.renderer} />
-        </div>
-      )}
+      {/* Right side controls container */}
+      <div className="right-controls-container">
+        {/* Scene Exporter component for image export */}
+        {threeRef.current?.renderer && (
+          <div className="scene-exporter-wrapper">
+            <UnifiedExportTools renderer={threeRef.current.renderer} />
+          </div>
+        )}
 
-      {/* 始终显示操作控制面板 */}
-      <div className="ui-controls-container">
-        <ObjectManipulationControls />
+        {/* Object manipulation controls */}
+        <div className="ui-controls-wrapper">
+          <ObjectManipulationControls />
+        </div>
       </div>
 
       {lintOverlayVisible && lintErrors.length > 0 && (

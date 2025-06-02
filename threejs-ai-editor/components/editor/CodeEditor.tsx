@@ -13,11 +13,7 @@ interface CodeEditorProps {
   }>;
 }
 
-const CodeEditor: React.FC<CodeEditorProps> = ({
-  code,
-  onChange,
-  
-}) => {
+const CodeEditor: React.FC<CodeEditorProps> = ({ code, onChange }) => {
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
 
   const handleEditorDidMount: OnMount = (editor) => {
@@ -26,7 +22,6 @@ const CodeEditor: React.FC<CodeEditorProps> = ({
 
   return (
     <div className="code-section">
-      <h3 className="code-header">Three.js Scene Code</h3>
       <Editor
         height="100%"
         defaultLanguage="javascript"

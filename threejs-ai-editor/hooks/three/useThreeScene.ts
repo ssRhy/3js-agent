@@ -4,6 +4,12 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
 import { useSceneStore } from "../../stores/useSceneStore";
 
+// Extend OrbitControls interface to include our custom properties
+interface ExtendedOrbitControls extends OrbitControls {
+  enabled: boolean;
+  cleanup?: () => void;
+}
+
 export interface ThreeSceneRef {
   scene: THREE.Scene;
   camera: THREE.PerspectiveCamera;
@@ -161,7 +167,10 @@ export const useThreeScene = (
 
       try {
         console.log("[Controls] Creating OrbitControls...");
-        const controls = new OrbitControls(camera, canvas);
+        const controls = new OrbitControls(
+          camera,
+          canvas
+        ) as ExtendedOrbitControls;
 
         // 配置控件
         controls.enableDamping = true;
@@ -179,34 +188,39 @@ export const useThreeScene = (
         controlsInitializationRef.current = true;
         console.log("[Controls] OrbitControls initialized successfully");
 
-        // 添加事件监听器来响应物体操作时的控件切换
-        const handleToggleControls = (event: CustomEvent) => {
+        // 添加事件监听器来响应外部控制请求
+        const handleToggleOrbitControls = (event: CustomEvent) => {
           const { enabled } = event.detail;
-          if (controls && "enabled" in controls) {
-            (controls as any).enabled = enabled;
-            console.log(
-              `[Controls] OrbitControls ${
-                enabled ? "enabled" : "disabled"
-              } via event`
-            );
+          console.log(
+            `[Controls] Received toggleOrbitControls event: ${
+              enabled ? "enable" : "disable"
+            }`
+          );
+          if (controls) {
+            try {
+              controls.enabled = enabled;
+              console.log(
+                `[Controls] ✓ OrbitControls ${
+                  enabled ? "enabled" : "disabled"
+                } via custom event`
+              );
+            } catch (error) {
+              console.error(
+                `[Controls] Failed to ${
+                  enabled ? "enable" : "disable"
+                } OrbitControls:`,
+                error
+              );
+            }
+          } else {
+            console.warn("[Controls] No controls available to toggle");
           }
         };
 
         window.addEventListener(
           "toggleOrbitControls",
-          handleToggleControls as EventListener
+          handleToggleOrbitControls as EventListener
         );
-
-        // 存储清理函数的引用
-        const cleanup = () => {
-          window.removeEventListener(
-            "toggleOrbitControls",
-            handleToggleControls as EventListener
-          );
-        };
-
-        // 将清理函数存储在controls上，以便在销毁时调用
-        (controls as any)._cleanup = cleanup;
 
         // 发送自定义事件通知控件已就绪
         try {
@@ -221,6 +235,17 @@ export const useThreeScene = (
             eventError
           );
         }
+
+        // 返回清理函数
+        const cleanup = () => {
+          window.removeEventListener(
+            "toggleOrbitControls",
+            handleToggleOrbitControls as EventListener
+          );
+        };
+
+        // 将清理函数存储在controls上，以便后续清理
+        controls.cleanup = cleanup;
 
         return true;
       } catch (error) {
@@ -339,9 +364,10 @@ export const useThreeScene = (
       // 清理控件
       if (threeRef.current?.controls) {
         try {
-          // 调用清理函数来移除事件监听器
-          if ((threeRef.current.controls as any)._cleanup) {
-            (threeRef.current.controls as any)._cleanup();
+          // 清理OrbitControls的事件监听器
+          const controls = threeRef.current.controls as ExtendedOrbitControls;
+          if (controls.cleanup && typeof controls.cleanup === "function") {
+            controls.cleanup();
           }
           threeRef.current.controls = undefined;
         } catch (controlsDisposeError) {

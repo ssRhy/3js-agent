@@ -350,37 +350,10 @@ export default function ObjectManipulationControls() {
 
     // Handle dragging state to toggle orbit controls
     transformControls.addEventListener("dragging-changed", (event) => {
-      const isDragging = Boolean(event.value);
-      setIsDragging(isDragging);
-
-      // 禁用/启用 OrbitControls 以防止冲突
       if (scene.userData.orbitControls) {
-        scene.userData.orbitControls.enabled = !isDragging;
-        console.log(
-          `[ObjectManipulation] ${
-            isDragging ? "Disabled" : "Enabled"
-          } OrbitControls (scene.userData)`
-        );
+        scene.userData.orbitControls.enabled = !event.value;
       }
-
-      // 通过事件系统通知其他组件禁用/启用controls
-      try {
-        const controlEvent = new CustomEvent("toggleOrbitControls", {
-          detail: { enabled: !isDragging },
-        });
-        window.dispatchEvent(controlEvent);
-      } catch (error) {
-        console.warn(
-          "[ObjectManipulation] Failed to dispatch control event:",
-          error
-        );
-      }
-
-      console.log(
-        `[ObjectManipulation] Object manipulation ${
-          isDragging ? "started" : "ended"
-        }`
-      );
+      setIsDragging(Boolean(event.value));
     });
 
     // Update object state when transformed

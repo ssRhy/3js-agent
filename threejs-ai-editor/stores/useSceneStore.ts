@@ -85,6 +85,13 @@ interface SceneState {
   // 历史记录管理
   addHistoryEntry: (code: string, modelUrls?: string[]) => void;
 
+  // 版本回溯功能
+  getHistoryEntries: () => HistoryEntry[];
+  revertToVersion: (index: number) => Promise<boolean>;
+  deleteHistoryEntry: (index: number) => void;
+  clearHistory: () => void;
+  getCurrentVersion: () => number;
+
   // 错误处理方法
   addError: (error: string) => void; // 添加错误
   setErrors: (errors: string[]) => void; // 设置错误数组
@@ -745,5 +752,52 @@ export const useSceneStore = create<SceneState>((set, get) => ({
   // 检查是否有存储的场景
   hasStoredScene: () => {
     return localStorage.getItem(SCENE_STORAGE_KEY) !== null;
+  },
+
+  // 版本回溯功能
+  getHistoryEntries: () => {
+    return get().history;
+  },
+
+  revertToVersion: (index: number) => {
+    const state = get();
+    const history = state.history;
+
+    if (index < 0 || index >= history.length) {
+      console.warn("无效的历史记录索引");
+      return Promise.resolve(false);
+    }
+
+    try {
+      // Note: This is a placeholder implementation
+      // In a full implementation, you would restore the scene state here
+      console.log(`恢复到版本 ${index + 1}`);
+      return Promise.resolve(true);
+    } catch (error) {
+      console.error("版本恢复失败:", error);
+      return Promise.resolve(false);
+    }
+  },
+
+  deleteHistoryEntry: (index: number) => {
+    const state = get();
+    const history = state.history;
+
+    if (index < 0 || index >= history.length) {
+      console.warn("无效的历史记录索引");
+      return;
+    }
+
+    const newHistory = history.filter((_, i) => i !== index);
+    set({ history: newHistory });
+  },
+
+  clearHistory: () => {
+    set({ history: [] });
+  },
+
+  getCurrentVersion: () => {
+    const state = get();
+    return state.history.length - 1;
   },
 }));
