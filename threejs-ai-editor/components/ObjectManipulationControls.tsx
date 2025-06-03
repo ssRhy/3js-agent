@@ -352,8 +352,22 @@ export default function ObjectManipulationControls() {
 
     // Handle dragging state to toggle orbit controls
     transformControls.addEventListener("dragging-changed", (event) => {
+      // 完全禁用轨道控制器当开始变换操作
       if (scene.userData.orbitControls) {
-        scene.userData.orbitControls.enabled = !event.value;
+        const orbitControls = scene.userData.orbitControls;
+        orbitControls.enabled = !event.value;
+
+        // 如果开始拖拽，保存当前状态并禁用所有轨道控制器功能
+        if (event.value) {
+          orbitControls.enableRotate = false;
+          orbitControls.enableZoom = false;
+          orbitControls.enablePan = false;
+        } else {
+          // 如果结束拖拽，恢复所有轨道控制器功能
+          orbitControls.enableRotate = true;
+          orbitControls.enableZoom = true;
+          orbitControls.enablePan = true;
+        }
       }
       setIsDragging(Boolean(event.value));
 

@@ -40,19 +40,13 @@ const VersionHistory: React.FC<VersionHistoryProps> = ({ onVersionRevert }) => {
 
   const handleDeleteEntry = (index: number, event: React.MouseEvent) => {
     event.stopPropagation();
-    if (
-      window.confirm("Are you sure you want to delete this history version?")
-    ) {
+    if (window.confirm("确定要删除这个历史版本吗?")) {
       deleteHistoryEntry(index);
     }
   };
 
   const handleClearHistory = () => {
-    if (
-      window.confirm(
-        "Are you sure you want to clear all history versions? This action cannot be undone."
-      )
-    ) {
+    if (window.confirm("确定要清空所有历史版本吗? 此操作无法撤销。")) {
       clearHistory();
     }
   };
@@ -60,20 +54,20 @@ const VersionHistory: React.FC<VersionHistoryProps> = ({ onVersionRevert }) => {
   const formatTimestamp = (timestamp: string) => {
     try {
       const date = new Date(timestamp);
-      return date.toLocaleString("en-US", {
+      return date.toLocaleString("zh-CN", {
         month: "short",
         day: "numeric",
         hour: "2-digit",
         minute: "2-digit",
       });
     } catch {
-      return "Unknown time";
+      return "未知时间";
     }
   };
 
-  const truncateCode = (code: string, maxLength: number = 50) => {
-    if (code.length <= maxLength) return code;
-    return code.substring(0, maxLength) + "...";
+  const truncatePrompt = (prompt: string, maxLength: number = 30) => {
+    if (!prompt || prompt.length <= maxLength) return prompt || "无需求记录";
+    return prompt.substring(0, maxLength) + "...";
   };
 
   if (historyEntries.length === 0) {
@@ -83,11 +77,11 @@ const VersionHistory: React.FC<VersionHistoryProps> = ({ onVersionRevert }) => {
           className="history-toggle"
           onClick={() => setShowHistory(!showHistory)}
         >
-          Version History (0)
+          版本历史 (0)
         </button>
         {showHistory && (
           <div className="history-panel">
-            <p className="no-history">No history version</p>
+            <p className="no-history">暂无历史版本</p>
           </div>
         )}
       </div>
@@ -100,19 +94,19 @@ const VersionHistory: React.FC<VersionHistoryProps> = ({ onVersionRevert }) => {
         className="history-toggle"
         onClick={() => setShowHistory(!showHistory)}
       >
-        Version History ({historyEntries.length})
+        版本历史 ({historyEntries.length})
       </button>
 
       {showHistory && (
         <div className="history-panel">
           <div className="history-header">
-            <h3>History Version</h3>
+            <span>历史版本</span>
             <button
-              className="clear-history-btn"
+              className="clear-btn"
               onClick={handleClearHistory}
               disabled={isReverting}
             >
-              Clear
+              清空
             </button>
           </div>
 
@@ -120,16 +114,16 @@ const VersionHistory: React.FC<VersionHistoryProps> = ({ onVersionRevert }) => {
             {historyEntries.map((entry, index) => (
               <div
                 key={index}
-                className={`history-entry ${
+                className={`history-item ${
                   index === currentVersion ? "current" : ""
                 }`}
                 onClick={() => handleRevertToVersion(index)}
               >
-                <div className="entry-info">
-                  <span className="version-number">
+                <div className="item-header">
+                  <span className="version-label">
                     v{index + 1}
                     {index === currentVersion && (
-                      <span className="current-badge">Current</span>
+                      <span className="current-tag">当前</span>
                     )}
                   </span>
                   <span className="timestamp">
@@ -139,19 +133,21 @@ const VersionHistory: React.FC<VersionHistoryProps> = ({ onVersionRevert }) => {
                     className="delete-btn"
                     onClick={(e) => handleDeleteEntry(index, e)}
                     disabled={isReverting}
-                    title="Delete this version"
+                    title="删除版本"
                   >
                     ×
                   </button>
                 </div>
-                <div className="code-preview">{truncateCode(entry.code)}</div>
+                <div className="user-prompt">
+                  {truncatePrompt(entry.userPrompt || "")}
+                </div>
               </div>
             ))}
           </div>
 
           {isReverting && (
-            <div className="reverting-overlay">
-              <div className="reverting-message">Reverting...</div>
+            <div className="loading-overlay">
+              <div className="loading-text">恢复中...</div>
             </div>
           )}
         </div>
@@ -164,27 +160,28 @@ const VersionHistory: React.FC<VersionHistoryProps> = ({ onVersionRevert }) => {
 
         .history-toggle {
           width: 100%;
-          padding: 6px 10px;
-          background: #333;
-          border: 1px solid #444;
-          border-radius: 3px;
-          color: #ddd;
+          padding: 8px 12px;
+          background: #2a2a2a;
+          border: 1px solid #404040;
+          border-radius: 4px;
+          color: #e0e0e0;
           cursor: pointer;
-          font-size: 12px;
-          transition: background-color 0.2s;
+          font-size: 13px;
+          transition: all 0.2s;
         }
 
         .history-toggle:hover {
-          background: #444;
+          background: #333;
+          border-color: #555;
         }
 
         .history-panel {
           position: relative;
-          background: #1a1a1a;
+          background: #1e1e1e;
           border: 1px solid #333;
-          border-radius: 3px;
+          border-radius: 4px;
           margin-top: 6px;
-          max-height: 200px;
+          max-height: 240px;
           overflow: hidden;
         }
 
@@ -192,106 +189,103 @@ const VersionHistory: React.FC<VersionHistoryProps> = ({ onVersionRevert }) => {
           display: flex;
           justify-content: space-between;
           align-items: center;
-          padding: 6px 10px;
+          padding: 8px 12px;
           border-bottom: 1px solid #333;
-          background: #2a2a2a;
+          background: #252525;
+          font-size: 12px;
+          color: #ccc;
         }
 
-        .history-header h3 {
-          margin: 0;
-          color: #ddd;
-          font-size: 11px;
-          font-weight: normal;
-        }
-
-        .clear-history-btn {
-          padding: 2px 6px;
-          background: #dc3545;
+        .clear-btn {
+          padding: 4px 8px;
+          background: #e74c3c;
           border: none;
-          border-radius: 2px;
+          border-radius: 3px;
           color: white;
           cursor: pointer;
-          font-size: 10px;
+          font-size: 11px;
+          transition: background 0.2s;
         }
 
-        .clear-history-btn:hover:not(:disabled) {
-          background: #c82333;
+        .clear-btn:hover:not(:disabled) {
+          background: #c0392b;
         }
 
-        .clear-history-btn:disabled {
+        .clear-btn:disabled {
           opacity: 0.5;
           cursor: not-allowed;
         }
 
         .history-list {
-          max-height: 150px;
+          max-height: 180px;
           overflow-y: auto;
         }
 
-        .history-entry {
-          padding: 6px 10px;
-          border-bottom: 1px solid #333;
+        .history-item {
+          padding: 8px 12px;
+          border-bottom: 1px solid #2a2a2a;
           cursor: pointer;
-          transition: background-color 0.2s;
+          transition: background 0.2s;
         }
 
-        .history-entry:hover {
+        .history-item:hover {
           background: #2a2a2a;
         }
 
-        .history-entry.current {
-          background: #1e3a2e;
-          border-left: 3px solidrgb(16, 16, 16);
+        .history-item.current {
+          background: rgb(235, 241, 238);
+          border-left: 3px solidrgb(247, 247, 247);
         }
 
-        .entry-info {
+        .item-header {
           display: flex;
           justify-content: space-between;
           align-items: center;
           margin-bottom: 4px;
         }
 
-        .version-number {
-          color: #007bff;
-          font-size: 10px;
-          font-weight: bold;
+        .version-label {
+          color: rgb(241, 250, 241);
+          font-size: 11px;
+          font-weight: 600;
           display: flex;
           align-items: center;
-          gap: 4px;
+          gap: 6px;
         }
 
-        .current-badge {
-          background: rgb(39, 41, 39);
+        .current-tag {
+          background: rgb(246, 248, 246);
           color: white;
-          padding: 1px 4px;
-          border-radius: 8px;
-          font-size: 8px;
+          padding: 1px 6px;
+          border-radius: 10px;
+          font-size: 9px;
         }
 
         .timestamp {
           color: #888;
-          font-size: 9px;
+          font-size: 10px;
         }
 
         .delete-btn {
           background: none;
           border: none;
-          color: #dc3545;
+          color: #e74c3c;
           cursor: pointer;
-          font-size: 12px;
+          font-size: 14px;
           font-weight: bold;
-          padding: 0;
-          width: 14px;
-          height: 14px;
+          padding: 2px;
+          width: 16px;
+          height: 16px;
           display: flex;
           align-items: center;
           justify-content: center;
+          border-radius: 2px;
+          transition: all 0.2s;
         }
 
         .delete-btn:hover:not(:disabled) {
-          background: #dc3545;
+          background: #e74c3c;
           color: white;
-          border-radius: 50%;
         }
 
         .delete-btn:disabled {
@@ -299,25 +293,25 @@ const VersionHistory: React.FC<VersionHistoryProps> = ({ onVersionRevert }) => {
           cursor: not-allowed;
         }
 
-        .code-preview {
-          background: #333;
-          padding: 2px 4px;
-          border-radius: 2px;
-          color: #e6db74;
-          font-size: 9px;
-          font-family: monospace;
-          overflow: hidden;
+        .user-prompt {
+          background: #2a2a2a;
+          padding: 4px 8px;
+          border-radius: 3px;
+          color: #f39c12;
+          font-size: 10px;
+          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+          line-height: 1.3;
         }
 
         .no-history {
-          padding: 12px;
+          padding: 16px;
           text-align: center;
-          color: #888;
+          color: #666;
           margin: 0;
-          font-size: 11px;
+          font-size: 12px;
         }
 
-        .reverting-overlay {
+        .loading-overlay {
           position: absolute;
           top: 0;
           left: 0;
@@ -329,12 +323,12 @@ const VersionHistory: React.FC<VersionHistoryProps> = ({ onVersionRevert }) => {
           justify-content: center;
         }
 
-        .reverting-message {
-          background: #007bff;
+        .loading-text {
+          background: #4caf50;
           color: white;
           padding: 8px 16px;
-          border-radius: 3px;
-          font-size: 11px;
+          border-radius: 4px;
+          font-size: 12px;
         }
       `}</style>
     </div>

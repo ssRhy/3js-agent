@@ -1061,7 +1061,7 @@ export default function ThreeCodeEditor() {
 
         // 添加历史记录
         const addHistoryEntry = useSceneStore.getState().addHistoryEntry;
-        addHistoryEntry(newCode);
+        addHistoryEntry(newCode, undefined, prompt);
 
         setCode(newCode);
         console.log("[Generate] Set new code to editor");

@@ -687,3 +687,110 @@ const handleDeleteObject = () => {
 - **历史记录集成**: 删除操作无缝集成到版本管理系统
 
 这个删除功能实现了最简单但完整的物体删除体验，与现有的版本历史系统完美兼容，确保用户操作的可靠性和系统的稳定性。
+
+## 版本历史组件简化优化 - 2024 年 12 月
+
+### 优化内容
+
+1. **移除代码预览显示**
+
+   - 简化界面元素，提升视觉清晰度
+   - 减少信息冗余，专注于版本管理
+
+2. **添加用户需求显示**
+
+   - 在 `HistoryEntry` 接口中新增 `userPrompt` 字段
+   - 显示每个版本对应的用户输入需求
+   - 帮助用户快速识别版本内容
+
+3. **简化 UI 设计**
+   - 扁平化设计风格
+   - 统一颜色系统使用
+   - 优化间距和布局
+   - 简化交互元素
+
+### 技术实现
+
+#### 1. 数据结构更新
+
+```typescript
+export interface HistoryEntry {
+  code: string;
+  sceneState: SceneSnapshot;
+  timestamp: string;
+  modelUrls?: string[];
+  userPrompt?: string; // 新增用户需求字段
+}
+```
+
+#### 2. Store 方法更新
+
+```typescript
+addHistoryEntry: (code: string, modelUrls?: string[], userPrompt?: string) => void;
+```
+
+#### 3. 组件优化
+
+- **移除**: `code-preview` 代码预览区域
+- **新增**: `user-prompt` 用户需求显示区域
+- **简化**: UI 元素和样式
+- **优化**: 响应式布局和交互
+
+#### 4. 样式更新
+
+```css
+.history-item {
+  padding: 8px 12px;
+  background: #1e1e1e;
+  border-bottom: 1px solid #2a2a2a;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.user-prompt {
+  background: #2a2a2a;
+  padding: 4px 8px;
+  border-radius: 3px;
+  color: #f39c12;
+  font-size: 10px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  line-height: 1.3;
+}
+
+.current-tag {
+  background: #4caf50;
+  color: white;
+  padding: 1px 6px;
+  border-radius: 10px;
+  font-size: 9px;
+}
+```
+
+### 用户体验改进
+
+1. **信息层次更清晰**
+
+   - 版本号和时间戳显示在顶部
+   - 用户需求作为主要信息显示
+   - 当前版本明确标识
+
+2. **操作更直观**
+
+   - 简化的删除按钮
+   - 统一的视觉风格
+   - 更好的悬浮效果
+
+3. **内容更有意义**
+   - 显示用户输入的需求而非代码
+   - 帮助用户理解每个版本的目的
+   - 便于快速定位所需版本
+
+### 调用更新
+
+```typescript
+// ThreeCodeEditor.tsx 中更新调用
+const addHistoryEntry = useSceneStore.getState().addHistoryEntry;
+addHistoryEntry(newCode, undefined, prompt);
+```
+
+这次优化使版本历史功能更加用户友好，专注于版本的业务含义而非技术细节。

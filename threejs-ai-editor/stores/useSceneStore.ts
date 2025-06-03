@@ -24,6 +24,7 @@ export interface HistoryEntry {
   sceneState: SceneSnapshot;
   timestamp: string;
   modelUrls?: string[];
+  userPrompt?: string; // 添加用户需求字段
 }
 
 // 对象注册表接口
@@ -86,7 +87,11 @@ interface SceneState {
   ungroupObjects: (group: Group) => Object3D[]; // 解组
 
   // 历史记录管理
-  addHistoryEntry: (code: string, modelUrls?: string[]) => void;
+  addHistoryEntry: (
+    code: string,
+    modelUrls?: string[],
+    userPrompt?: string
+  ) => void;
 
   // 版本回溯功能
   getHistoryEntries: () => HistoryEntry[];
@@ -208,7 +213,11 @@ export const useSceneStore = create<SceneState>((set, get) => ({
   clearErrors: () => set({ errors: [] }),
 
   // 简化的历史记录管理方法
-  addHistoryEntry: (code: string, modelUrls?: string[]) => {
+  addHistoryEntry: (
+    code: string,
+    modelUrls?: string[],
+    userPrompt?: string
+  ) => {
     const state = get();
     const sceneSnapshot = state.getSceneSnapshot();
 
@@ -217,6 +226,7 @@ export const useSceneStore = create<SceneState>((set, get) => ({
       sceneState: sceneSnapshot,
       timestamp: new Date().toISOString(),
       modelUrls,
+      userPrompt, // 添加用户需求
     };
 
     // 简单地追加历史记录
