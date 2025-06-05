@@ -46,12 +46,24 @@ interface ObjectState {
   // 其他状态...
 }
 
-// 持久化数据接口
+// 持久化数据接口 - 增强版本，包含更多状态信息
 interface PersistedSceneData {
   sceneSnapshot: SceneSnapshot;
   modelUrls: string[];
   timestamp: string;
   version: string;
+  // 新增：代码和UI状态
+  currentCode?: string;
+  currentPrompt?: string;
+  historyEntries?: HistoryEntry[];
+  errors?: string[];
+  selectedObjectId?: string | null;
+  // 新增：页面状态
+  pageState?: {
+    isGenerating?: boolean;
+    lastGenerateTime?: string;
+    renderingComplete?: boolean;
+  };
 }
 
 interface SceneState {
@@ -61,7 +73,16 @@ interface SceneState {
   selectedObject: Object3D | null;
   errors: string[]; // 添加错误跟踪数组
   history: HistoryEntry[]; // 历史记录数组
+  transformHistory: SceneSnapshot[]; // 物体变换历史记录数组
+  currentTransformIndex: number; // 当前变换历史索引
   isDraggingOrSelecting: boolean; // 添加物体操作模式状态
+
+  // 新增：UI状态持久化
+  currentCode: string;
+  currentPrompt: string;
+  isGenerating: boolean;
+  renderingComplete: boolean;
+  modelUrls: string[]; // 添加modelUrls到状态接口
 
   // 对象注册表 - UUID到对象的映射
   objectRegistry: Map<string, ObjectRegistryEntry>;
@@ -76,6 +97,13 @@ interface SceneState {
   addToHistory: (code: string) => void;
   selectObject: (object: Object3D | null) => void;
   setIsDraggingOrSelecting: (value: boolean) => void; // 添加设置操作模式的方法
+
+  // 新增：UI状态管理
+  setCurrentCode: (code: string) => void;
+  setCurrentPrompt: (prompt: string) => void;
+  setIsGenerating: (generating: boolean) => void;
+  setRenderingComplete: (complete: boolean) => void;
+  setModelUrls: (urls: string[]) => void; // 添加设置modelUrls的方法
 
   // 对象操作方法
   deleteObject: (object: Object3D) => void; // 新增删除物体方法
@@ -100,6 +128,16 @@ interface SceneState {
   clearHistory: () => void;
   getCurrentVersion: () => number;
   saveCurrentState: () => void; // 保存当前物体状态
+
+  // 撤回/重做功能
+  undoLastChange: () => Promise<boolean>;
+  redoLastChange: () => Promise<boolean>;
+  canUndo: () => boolean;
+  canRedo: () => boolean;
+
+  // 物体变换历史记录
+  addTransformSnapshot: (description?: string) => void;
+  undoLastTransform: () => boolean;
 
   // 错误处理方法
   addError: (error: string) => void; // 添加错误
@@ -135,10 +173,14 @@ interface SceneState {
   getAllObjects: () => Map<string, ObjectRegistryEntry>;
   getVisibleObjects: () => string[];
 
-  // 持久化方法
+  // 持久化方法 - 增强版本
   saveSceneToStorage: () => void;
   loadSceneFromStorage: () => PersistedSceneData | null;
   hasStoredScene: () => boolean;
+  // 新增：完整页面状态保存和恢复
+  savePageStateToStorage: () => void;
+  loadPageStateFromStorage: () => boolean;
+  restoreCompleteState: () => Promise<boolean>;
 }
 
 // 确定对象类型的辅助函数
@@ -186,12 +228,21 @@ export const useSceneStore = create<SceneState>((set, get) => ({
   selectedObject: null,
   errors: [], // 初始化为空数组
   history: [], // 初始化历史记录数组
+  transformHistory: [], // 初始化变换历史记录数组
+  currentTransformIndex: -1, // 初始化变换历史索引
   isDraggingOrSelecting: false, // 初始化为false
 
   // 初始化对象注册表和状态映射
   objectRegistry: new Map(),
   objectStates: new Map(),
   codeToObjectMap: new Map(),
+
+  // 新增：UI状态持久化
+  currentCode: "",
+  currentPrompt: "",
+  isGenerating: false,
+  renderingComplete: true,
+  modelUrls: [], // 初始化为空数组
 
   // 原有方法
   setScene: (scene: Scene) => set({ scene }),
@@ -203,6 +254,14 @@ export const useSceneStore = create<SceneState>((set, get) => ({
   selectObject: (object: Object3D | null) => set({ selectedObject: object }),
   setIsDraggingOrSelecting: (value: boolean) =>
     set({ isDraggingOrSelecting: value }),
+
+  // 新增：UI状态管理
+  setCurrentCode: (code: string) => set({ currentCode: code }),
+  setCurrentPrompt: (prompt: string) => set({ currentPrompt: prompt }),
+  setIsGenerating: (generating: boolean) => set({ isGenerating: generating }),
+  setRenderingComplete: (complete: boolean) =>
+    set({ renderingComplete: complete }),
+  setModelUrls: (urls: string[]) => set({ modelUrls: urls }),
 
   // 错误处理方法
   addError: (error: string) =>
@@ -740,6 +799,21 @@ export const useSceneStore = create<SceneState>((set, get) => ({
         modelUrls: [...new Set(modelUrls)], // 去重
         timestamp: new Date().toISOString(),
         version: "1.0",
+        // 新增：代码和UI状态
+        currentCode: state.currentCode,
+        currentPrompt: state.currentPrompt,
+        historyEntries: state.history,
+        errors: state.errors,
+        selectedObjectId: state.selectedObject?.uuid || null,
+        // 新增：页面状态
+        pageState: {
+          isGenerating: state.isGenerating,
+          lastGenerateTime:
+            state.history.length > 0
+              ? state.history[state.history.length - 1].timestamp
+              : undefined,
+          renderingComplete: state.renderingComplete,
+        },
       };
 
       localStorage.setItem(SCENE_STORAGE_KEY, JSON.stringify(persistedData));
@@ -843,6 +917,102 @@ export const useSceneStore = create<SceneState>((set, get) => ({
   getCurrentVersion: () => {
     const state = get();
     return state.history.length - 1;
+  },
+
+  // 撤回/重做功能
+  undoLastChange: async () => {
+    const state = get();
+    const currentVersion = state.getCurrentVersion();
+
+    if (currentVersion > 0) {
+      const previousVersion = currentVersion - 1;
+      console.log(`撤回到版本 ${previousVersion + 1}`);
+      return await state.revertToVersion(previousVersion);
+    }
+
+    console.warn("没有可撤回的操作");
+    return false;
+  },
+
+  redoLastChange: async () => {
+    const state = get();
+    const currentVersion = state.getCurrentVersion();
+    const totalVersions = state.history.length;
+
+    if (currentVersion < totalVersions - 1) {
+      const nextVersion = currentVersion + 1;
+      console.log(`重做到版本 ${nextVersion + 1}`);
+      return await state.revertToVersion(nextVersion);
+    }
+
+    console.warn("没有可重做的操作");
+    return false;
+  },
+
+  canUndo: () => {
+    const state = get();
+    return state.getCurrentVersion() > 0;
+  },
+
+  canRedo: () => {
+    const state = get();
+    const currentVersion = state.getCurrentVersion();
+    return currentVersion < state.history.length - 1;
+  },
+
+  // 物体变换历史记录
+  addTransformSnapshot: (description = "物体变换") => {
+    const state = get();
+
+    // 更新所有对象状态
+    state.updateAllObjectStates();
+
+    // 获取当前场景快照
+    const snapshot = state.getSceneSnapshot();
+    snapshot.createdAt = new Date().toISOString();
+
+    // 如果当前不在历史末尾，清除后续历史
+    const newHistory = state.transformHistory.slice(
+      0,
+      state.currentTransformIndex + 1
+    );
+    newHistory.push(snapshot);
+
+    // 限制历史记录数量（最多保留20个）
+    const maxHistory = 20;
+    if (newHistory.length > maxHistory) {
+      newHistory.shift();
+    } else {
+      set({ currentTransformIndex: state.currentTransformIndex + 1 });
+    }
+
+    set({ transformHistory: newHistory });
+
+    console.log(
+      `已保存变换快照: ${description}，历史数量: ${newHistory.length}`
+    );
+  },
+
+  undoLastTransform: () => {
+    const state = get();
+
+    if (state.currentTransformIndex > 0) {
+      const previousIndex = state.currentTransformIndex - 1;
+      const previousSnapshot = state.transformHistory[previousIndex];
+
+      if (previousSnapshot) {
+        // 应用之前的快照
+        state.applySceneSnapshot(previousSnapshot);
+
+        set({ currentTransformIndex: previousIndex });
+
+        console.log(`已撤回到变换历史索引: ${previousIndex}`);
+        return true;
+      }
+    }
+
+    console.warn("没有可撤回的变换操作");
+    return false;
   },
 
   // 新增：批量更新所有对象状态
@@ -956,5 +1126,158 @@ export const useSceneStore = create<SceneState>((set, get) => ({
     state.saveCurrentState();
 
     console.log(`对象删除完成，剩余对象数量: ${registry.size}`);
+  },
+
+  // 新增：完整页面状态保存和恢复
+  savePageStateToStorage: () => {
+    const state = get();
+    const persistedData: PersistedSceneData = {
+      sceneSnapshot: state.getSceneSnapshot(),
+      modelUrls: [...new Set(state.modelUrls)],
+      timestamp: new Date().toISOString(),
+      version: "1.0",
+      currentCode: state.currentCode,
+      currentPrompt: state.currentPrompt,
+      historyEntries: state.history,
+      errors: state.errors,
+      selectedObjectId: state.selectedObject?.uuid || null,
+      pageState: {
+        isGenerating: state.isGenerating,
+        lastGenerateTime:
+          state.history.length > 0
+            ? state.history[state.history.length - 1].timestamp
+            : undefined,
+        renderingComplete: state.renderingComplete,
+      },
+    };
+
+    localStorage.setItem(SCENE_STORAGE_KEY, JSON.stringify(persistedData));
+
+    console.log("页面状态已保存到localStorage", {
+      objects: Object.keys(state.getSceneSnapshot().objectStates).length,
+      models: state.modelUrls.length,
+    });
+  },
+
+  loadPageStateFromStorage: () => {
+    try {
+      const storedData = localStorage.getItem(SCENE_STORAGE_KEY);
+
+      if (!storedData) {
+        console.log("没有找到保存的页面状态");
+        return false;
+      }
+
+      const persistedData: PersistedSceneData = JSON.parse(storedData);
+
+      console.log("找到保存的页面状态", {
+        objects: Object.keys(persistedData.sceneSnapshot.objectStates).length,
+        models: persistedData.modelUrls.length,
+        timestamp: persistedData.timestamp,
+      });
+
+      const state = get();
+
+      // 安全地恢复状态，使用可选链和默认值
+      if (persistedData.currentCode) {
+        state.setCurrentCode(persistedData.currentCode);
+      }
+      if (persistedData.currentPrompt) {
+        state.setCurrentPrompt(persistedData.currentPrompt);
+      }
+
+      // 恢复页面状态
+      if (persistedData.pageState) {
+        state.setIsGenerating(persistedData.pageState.isGenerating || false);
+        state.setRenderingComplete(
+          persistedData.pageState.renderingComplete || true
+        );
+      }
+
+      // 恢复其他状态
+      if (persistedData.errors) {
+        state.setErrors(persistedData.errors);
+      }
+      if (persistedData.selectedObjectId) {
+        const selectedObj = state.getObjectByUuid(
+          persistedData.selectedObjectId
+        );
+        if (selectedObj) {
+          state.selectObject(selectedObj);
+        }
+      }
+      if (persistedData.historyEntries) {
+        set({ history: persistedData.historyEntries });
+      }
+      if (persistedData.modelUrls) {
+        state.setModelUrls(persistedData.modelUrls);
+      }
+
+      return true;
+    } catch (error) {
+      console.error("加载页面状态失败:", error);
+      return false;
+    }
+  },
+
+  restoreCompleteState: async () => {
+    return new Promise<boolean>((resolve) => {
+      try {
+        const state = get();
+        const persistedData = state.loadSceneFromStorage();
+
+        if (!persistedData) {
+          console.log("没有找到保存的完整状态");
+          resolve(false);
+          return;
+        }
+
+        // 安全地恢复状态，使用可选链和默认值
+        if (persistedData.currentCode) {
+          state.setCurrentCode(persistedData.currentCode);
+        }
+        if (persistedData.currentPrompt) {
+          state.setCurrentPrompt(persistedData.currentPrompt);
+        }
+
+        // 恢复页面状态
+        if (persistedData.pageState) {
+          state.setIsGenerating(persistedData.pageState.isGenerating || false);
+          state.setRenderingComplete(
+            persistedData.pageState.renderingComplete || true
+          );
+        }
+
+        // 恢复其他状态
+        if (persistedData.errors) {
+          state.setErrors(persistedData.errors);
+        }
+        if (persistedData.selectedObjectId) {
+          const selectedObj = state.getObjectByUuid(
+            persistedData.selectedObjectId
+          );
+          if (selectedObj) {
+            state.selectObject(selectedObj);
+          }
+        }
+        if (persistedData.historyEntries) {
+          set({ history: persistedData.historyEntries });
+        }
+        if (persistedData.modelUrls) {
+          state.setModelUrls(persistedData.modelUrls);
+        }
+
+        // 应用场景快照
+        if (persistedData.sceneSnapshot) {
+          state.applySceneSnapshot(persistedData.sceneSnapshot);
+        }
+
+        console.log("完整状态恢复成功");
+        resolve(true);
+      } catch (error) {
+        console.error("恢复完整状态失败:", error);
+        resolve(false);
+      }
+    });
   },
 }));

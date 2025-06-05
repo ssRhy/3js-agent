@@ -11,6 +11,7 @@ import { useSocketConnection } from "../hooks/socket/useSocketConnection";
 import { useThreeScene } from "../hooks/three/useThreeScene";
 import { useModelLoader } from "../hooks/model/useModelLoader";
 import { useScreenshot } from "../hooks/screenshot/useScreenshot";
+import { usePageStatePreservation } from "../hooks/usePageStatePreservation";
 
 // Components
 import Sidebar from "./ui/Sidebar";
@@ -68,10 +69,17 @@ export default function ThreeCodeEditor() {
   // Container ref for Three.js scene
   const containerRef = useRef<HTMLDivElement | null>(null);
 
-  // State
-  const [prompt, setPrompt] = useState<string>("");
-  const [code, setCode] =
-    useState(`function setup(scene, camera, renderer, THREE, OrbitControls) {
+  // 使用页面状态保留hook
+  const { syncCodeToStore, syncPromptToStore, isInitialized } =
+    usePageStatePreservation();
+
+  // State - 从store中获取初始值
+  const { currentCode, currentPrompt, setIsGenerating, setRenderingComplete } =
+    useSceneStore();
+  const [prompt, setPrompt] = useState<string>(currentPrompt || "");
+  const [code, setCode] = useState<string>(
+    currentCode ||
+      `function setup(scene, camera, renderer, THREE, OrbitControls) {
   // Create OrbitControls
   const controls = OrbitControls.create(camera, renderer.domElement);
   controls.enableDamping = true;
@@ -83,7 +91,8 @@ export default function ThreeCodeEditor() {
   
   // Return the scene so that all future objects added to it will be rendered
   return scene;
-}`);
+}`
+  );
   const [previousCode] = useState("");
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState("");
@@ -130,6 +139,34 @@ export default function ThreeCodeEditor() {
     autoScaleModel,
   } = useModelLoader(threeRef);
   const { captureScreenshot } = useScreenshot(threeRef);
+
+  // 同步代码变化到store
+  useEffect(() => {
+    if (isInitialized) {
+      syncCodeToStore(code);
+    }
+  }, [code, isInitialized, syncCodeToStore]);
+
+  // 同步提示变化到store
+  useEffect(() => {
+    if (isInitialized) {
+      syncPromptToStore(prompt);
+    }
+  }, [prompt, isInitialized, syncPromptToStore]);
+
+  // 生成状态管理
+  useEffect(() => {
+    setIsGenerating(isLoading);
+  }, [isLoading, setIsGenerating]);
+
+  // 渲染完成状态管理
+  useEffect(() => {
+    if (renderingCompleteRef.current) {
+      setRenderingComplete(true);
+    } else {
+      setRenderingComplete(false);
+    }
+  }, [setRenderingComplete]);
 
   // Page load/unload effects
   useEffect(() => {

@@ -794,3 +794,207 @@ addHistoryEntry(newCode, undefined, prompt);
 ```
 
 这次优化使版本历史功能更加用户友好，专注于版本的业务含义而非技术细节。
+
+## 页面刷新状态保留功能 - 2024 年 12 月
+
+### 功能概述
+
+实现了完整的浏览器刷新状态保留功能，确保用户在页面刷新后能够保持编辑器状态、场景对象、代码内容和历史记录。
+
+### UI 优化 - 移除手动控制按钮
+
+基于用户反馈，移除了手动保存和恢复状态的 UI 按钮，因为：
+
+1. **自动状态管理已足够**
+
+   - 页面加载时自动恢复状态
+   - 页面关闭前自动保存状态
+   - 页面隐藏时自动保存（切换标签页）
+   - 每 30 秒定期自动保存
+
+2. **简化用户界面**
+
+   - 减少 UI 复杂度
+   - 专注于核心功能
+   - 提升界面美观度
+
+3. **移除的 UI 元素**
+   - 💾 保存状态按钮
+   - 🔄 恢复状态按钮
+   - 状态检测提示信息
+   - 相关 CSS 样式和组件 props
+
+### 核心功能特性（保留）
+
+1. **完整状态持久化**
+
+   - 代码编辑器内容保存
+   - 用户输入提示保存
+   - 场景对象状态保存
+   - 历史记录完整保留
+   - UI 交互状态保存
+
+2. **自动状态管理**
+   - 页面加载时自动恢复状态
+   - 页面关闭前自动保存状态
+   - 页面隐藏时自动保存（切换标签页）
+   - 每 30 秒定期自动保存
+
+### 技术实现架构
+
+#### 1. 增强的存储数据结构
+
+```typescript
+interface PersistedSceneData {
+  sceneSnapshot: SceneSnapshot;
+  modelUrls: string[];
+  timestamp: string;
+  version: string;
+  // 新增：代码和UI状态
+  currentCode?: string;
+  currentPrompt?: string;
+  historyEntries?: HistoryEntry[];
+  errors?: string[];
+  selectedObjectId?: string | null;
+  // 新增：页面状态
+  pageState?: {
+    isGenerating?: boolean;
+    lastGenerateTime?: string;
+    renderingComplete?: boolean;
+  };
+}
+```
+
+#### 2. Store 状态管理增强
+
+在`useSceneStore`中新增了以下状态和方法：
+
+```typescript
+interface SceneState {
+  // 新增：UI状态持久化
+  currentCode: string;
+  currentPrompt: string;
+  isGenerating: boolean;
+  renderingComplete: boolean;
+  modelUrls: string[];
+
+  // 新增：UI状态管理方法
+  setCurrentCode: (code: string) => void;
+  setCurrentPrompt: (prompt: string) => void;
+  setIsGenerating: (generating: boolean) => void;
+  setRenderingComplete: (complete: boolean) => void;
+  setModelUrls: (urls: string[]) => void;
+
+  // 新增：完整页面状态保存和恢复
+  savePageStateToStorage: () => void;
+  loadPageStateFromStorage: () => boolean;
+  restoreCompleteState: () => Promise<boolean>;
+}
+```
+
+#### 3. 页面状态保留 Hook
+
+创建了专用的`usePageStatePreservation` Hook 来处理状态保留逻辑：
+
+```typescript
+export const usePageStatePreservation = () => {
+  // 页面加载时自动恢复状态
+  // 页面关闭前自动保存状态
+  // 定期自动保存状态
+  // 提供手动保存和恢复方法
+
+  return {
+    manualSave,
+    manualRestore,
+    syncCodeToStore,
+    syncPromptToStore,
+    isInitialized,
+  };
+};
+```
+
+#### 4. UI 界面集成
+
+在 Sidebar 组件中新增了状态保留功能区域：
+
+- 💾 保存状态按钮
+- 🔄 恢复状态按钮
+- 状态检测提示信息
+
+### 用户体验优化
+
+1. **无感知保存**
+
+   - 用户无需手动操作，系统自动保存状态
+   - 页面刷新后自动恢复到之前的工作状态
+   - 支持代码编辑、场景对象、模型加载等完整状态
+
+2. **智能同步**
+
+   - 代码编辑器内容实时同步到 store
+   - 用户输入提示实时同步
+   - 生成状态和渲染状态自动管理
+
+3. **可视化反馈**
+   - 状态保存成功/失败的控制台日志
+   - 检测到保存状态时的 UI 提示
+   - 恢复状态的进度反馈
+
+### 技术亮点
+
+1. **类型安全**
+
+   - 完整的 TypeScript 类型定义
+   - 安全的可选链访问
+   - 错误处理和边界情况处理
+
+2. **性能优化**
+
+   - 防抖处理避免频繁保存
+   - 增量状态更新
+   - 异步操作优化
+
+3. **健壮性设计**
+   - 错误恢复机制
+   - 数据版本兼容性
+   - 浏览器兼容性考虑
+
+### 使用场景
+
+1. **开发工作流保护**
+
+   - 防止意外刷新导致的工作丢失
+   - 支持长时间开发会话
+   - 跨会话工作连续性
+
+2. **演示和教学**
+
+   - 演示过程中的状态保持
+   - 学习进度保存
+   - 实验结果保留
+
+3. **协作开发**
+   - 状态分享和恢复
+   - 工作成果保护
+   - 版本控制增强
+
+### 未来扩展计划
+
+1. **云端同步**
+
+   - 跨设备状态同步
+   - 用户账户绑定
+   - 远程备份功能
+
+2. **状态分析**
+
+   - 使用模式分析
+   - 性能监控
+   - 用户行为跟踪
+
+3. **智能优化**
+   - 基于使用频率的保存策略
+   - 预测性状态恢复
+   - 自适应存储管理
+
+## UI 美化优化 - 2024 年 12 月

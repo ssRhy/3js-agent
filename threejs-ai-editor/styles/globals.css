@@ -213,7 +213,7 @@ a {
 .button-group {
   display: flex;
   gap: 12px;
-  margin-bottom: 16px;
+  margin-bottom: 0;
 }
 
 .generate-button {
@@ -666,7 +666,7 @@ textarea:focus {
 .button-group {
   display: flex;
   gap: 12px;
-  margin-bottom: 16px;
+  margin-bottom: 0;
 }
 
 .button-group button {

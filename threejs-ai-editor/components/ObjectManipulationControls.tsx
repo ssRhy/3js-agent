@@ -34,6 +34,8 @@ export default function ObjectManipulationControls() {
     ungroupObjects,
     saveCurrentState,
     deleteObject,
+    addTransformSnapshot,
+    undoLastTransform,
   } = useSceneStore();
 
   const [transformMode, setTransformMode] =
@@ -352,21 +354,29 @@ export default function ObjectManipulationControls() {
 
     // Handle dragging state to toggle orbit controls
     transformControls.addEventListener("dragging-changed", (event) => {
-      // 完全禁用轨道控制器当开始变换操作
       if (scene.userData.orbitControls) {
         const orbitControls = scene.userData.orbitControls;
-        orbitControls.enabled = !event.value;
 
-        // 如果开始拖拽，保存当前状态并禁用所有轨道控制器功能
         if (event.value) {
+          // 开始拖拽时，保存变换前的状态快照
+          addTransformSnapshot("拖拽开始前状态");
+
+          // 完全禁用轨道控制器
+          orbitControls.enabled = false;
           orbitControls.enableRotate = false;
           orbitControls.enableZoom = false;
           orbitControls.enablePan = false;
+
+          // 确保轨道控制器不会响应任何鼠标事件
+          orbitControls.enabled = false;
+          orbitControls.update(); // 强制更新轨道控制器状态
         } else {
-          // 如果结束拖拽，恢复所有轨道控制器功能
+          // 结束拖拽时，恢复轨道控制器
+          orbitControls.enabled = true;
           orbitControls.enableRotate = true;
           orbitControls.enableZoom = true;
           orbitControls.enablePan = true;
+          orbitControls.update(); // 强制更新轨道控制器状态
         }
       }
       setIsDragging(Boolean(event.value));
@@ -383,7 +393,10 @@ export default function ObjectManipulationControls() {
             const { updateAllObjectStates } = useSceneStore.getState();
             updateAllObjectStates();
 
-            // 最后保存到历史记录
+            // 保存变换后的状态快照
+            addTransformSnapshot("拖拽操作完成");
+
+            // 保存到历史记录
             saveCurrentState();
 
             console.log("物体移动完成，状态已保存到历史记录", {
@@ -785,7 +798,7 @@ export default function ObjectManipulationControls() {
       // After ungrouping, update selection to null since the group no longer exists
       selectObject(null);
       setSelectedObjects([]);
-      console.log(`组 "${selectedObject.name}" 已解组`);
+      console.log(`The group "${selectedObject.name}" has been ungrouped`);
     }
   };
 
@@ -794,17 +807,32 @@ export default function ObjectManipulationControls() {
     if (selectedObject) {
       if (
         window.confirm(
-          `确定要删除物体 "${
-            selectedObject.name || "未命名对象"
-          }" 吗？此操作不可撤销。`
+          `Are you sure you want to delete the object "${
+            selectedObject.name || "Unnamed object"
+          }" ? This action cannot be undone.`
         )
       ) {
         deleteObject(selectedObject);
         // 清除选择状态
         selectObject(null);
         setSelectedObjects([]);
-        console.log(`物体 "${selectedObject.name || "未命名对象"}" 已删除`);
+        console.log(
+          `The object "${
+            selectedObject.name || "Unnamed object"
+          }" has been deleted`
+        );
       }
+    }
+  };
+
+  // 新增：撤回上一次变换操作
+  const handleUndoTransform = () => {
+    const success = undoLastTransform();
+    if (success) {
+      console.log("已撤回上一次变换操作");
+      // 清除当前选择，因为物体状态已改变
+      selectObject(null);
+      setSelectedObjects([]);
     }
   };
 
@@ -993,6 +1021,13 @@ export default function ObjectManipulationControls() {
 
         <div className="action-buttons">
           <button
+            className="control-button undo-button"
+            onClick={handleUndoTransform}
+          >
+            <span>↶ UNDO</span>
+          </button>
+
+          <button
             className="control-button delete-button"
             onClick={handleDeleteObject}
             disabled={!selectedObject}
@@ -1087,9 +1122,18 @@ export default function ObjectManipulationControls() {
 
         .action-buttons {
           display: grid;
-          grid-template-columns: 1fr;
+          grid-template-columns: 1fr 1fr;
           gap: 5px;
           margin-top: 5px;
+        }
+
+        .undo-button {
+          background-color: rgba(33, 150, 243, 0.2);
+          color: #64b5f6;
+        }
+
+        .undo-button:hover:not(:disabled) {
+          background-color: rgba(33, 150, 243, 0.3);
         }
 
         .delete-button {
