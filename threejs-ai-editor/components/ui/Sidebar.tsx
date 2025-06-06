@@ -1211,7 +1211,7 @@ const Sidebar: React.FC<SidebarProps> = ({
         }
 
         .fix-bug-button:hover:not(:disabled) {
-          background: #f59e0b;
+          background: rgb(95, 91, 85);
         }
 
         .loading-spinner {

@@ -142,17 +142,18 @@ export async function createAgent(
     sceneHistory
   );
 
-  // 创建人类消息提示
-  const humanPromptTemplate = createHumanPrompt(modelHistory, sceneState);
+  // 创建人类消息提示 - 注意这里不需要传递dynamic数据，因为会通过变量映射处理
+  const humanPromptTemplate = createHumanPrompt();
 
-  // 创建提示模板，包含系统消息、人类消息和 Agent 工作区
+  // 创建提示模板，包含系统消息、聊天历史、人类消息和 Agent 工作区
   const promptTemplate = ChatPromptTemplate.fromMessages([
     systemMessage,
+    new MessagesPlaceholder("chat_history"),
     humanPromptTemplate,
     new MessagesPlaceholder("agent_scratchpad"),
   ]);
 
-  // 创建并返回 Agent
+  // 创建并返回 Agent - 使用标准的createOpenAIFunctionsAgent
   const agent = await createOpenAIFunctionsAgent({
     llm: model,
     tools,

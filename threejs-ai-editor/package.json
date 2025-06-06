@@ -11,6 +11,7 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@dimforge/rapier3d-compat": "^0.14.0",
     "@headlessui/react": "^2.2.2",
     "@heroicons/react": "^2.2.0",
     "@langchain/community": "^0.3.42",
@@ -20,6 +21,7 @@
     "@react-spring/three": "^9.7.5",
     "@react-three/drei": "^9.122.0",
     "@react-three/fiber": "^8.18.0",
+    "@react-three/rapier": "^1.0.0",
     "@vercel/analytics": "^1.2.2",
     "chromadb": "^2.4.3",
     "chromadb-default-embed": "^2.14.0",

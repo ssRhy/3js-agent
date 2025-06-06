@@ -8,6 +8,8 @@ import { screenshotTool } from "./screenshotTool";
 import { retrievalTool } from "./retrievalTool";
 import { writeChromaTool } from "./writeChromaTool";
 import { fixBugTool } from "./fixBugTool";
+import { physicsSceneTool } from "./physicsSceneTool";
+import { physicsControlTool, physicsTemplateTool } from "./physicsControlTool";
 
 /**
  * 工具类别枚举
@@ -20,6 +22,7 @@ export enum ToolCategory {
   MODEL_GEN = "modelGenTool",
   SEARCH = "search",
   STORAGE = "storage",
+  PHYSICS = "physics",
 }
 
 /**
@@ -122,7 +125,28 @@ export class ToolRegistry {
       ToolCategory.CODE
     );
 
-    console.log("[ToolRegistry] Initialized tools");
+    // 注册物理场景生成工具
+    this.registerTool(
+      physicsSceneTool.name,
+      physicsSceneTool as unknown as Tool,
+      ToolCategory.PHYSICS
+    );
+
+    // 注册物理参数控制工具
+    this.registerTool(
+      physicsControlTool.name,
+      physicsControlTool as unknown as Tool,
+      ToolCategory.PHYSICS
+    );
+
+    // 注册物理模板工具
+    this.registerTool(
+      physicsTemplateTool.name,
+      physicsTemplateTool as unknown as Tool,
+      ToolCategory.PHYSICS
+    );
+
+    console.log("[ToolRegistry] Initialized tools including physics tools");
     this.initialized = true;
   }
 

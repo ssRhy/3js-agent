@@ -430,13 +430,39 @@ export async function executeAgentWorkflow(
       historyMessagesKey: "chat_history",
     });
 
-    // 准备输入和会话配置
+    // 准备输入和会话配置 - 确保所有模板变量都有值
     const inputForAgent = {
       input: userPrompt,
-      suggestion: systemInstructions,
-      currentCode,
-      userPrompt: userPrompt || "无特定需求",
+      currentCode: currentCode || "// No current code",
       historyContext: enhancedHistoryContext || "",
+      modelHistory:
+        modelHistory && modelHistory.length > 0
+          ? modelHistory
+              .map((entry: ModelHistoryEntry, index: number) => {
+                const modelName = entry.prompt
+                  ? entry.prompt.substring(0, 30) +
+                    (entry.prompt.length > 30 ? "..." : "")
+                  : `Model${index + 1}`;
+                return `${index + 1}. ${modelName}: ${entry.modelUrl}`;
+              })
+              .join("\n")
+          : "No model resources available",
+      sceneStateInfo:
+        combinedSceneState && combinedSceneState.length > 0
+          ? combinedSceneState
+              .map((obj, index) => {
+                const position = obj.position
+                  ? `[${obj.position.join(",")}]`
+                  : "[0,0,0]";
+                return `${index + 1}. ${obj.name || `Object${index}`} (${
+                  obj.type
+                }) @ ${position}`;
+              })
+              .join("\n")
+          : "No scene objects",
+      // 保留其他可能需要的变量
+      suggestion: systemInstructions,
+      userPrompt: userPrompt || "无特定需求",
       lintErrors: safeLintErrors || [],
       modelRequired: modelSize !== undefined && modelSize > 0,
       conversationSummary: conversationContext.conversationSummary || "",

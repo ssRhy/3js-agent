@@ -85,7 +85,6 @@ function formatSceneStateForPrompt(
 
   return (
     "\n# Current Scene State (EXACT POSITIONS)\n" +
-    "重要提示：以下是场景中对象的准确位置信息。修复代码时必须保持这些确切的位置、旋转和缩放值。\n" +
     "CRITICAL: Below are the EXACT positions, rotations, and scales of objects in the scene. You MUST preserve these values when fixing bugs:\n" +
     sceneState
       .map((obj) => {
@@ -174,21 +173,21 @@ export const fixBugTool = new DynamicStructuredTool({
     // Log scene state information
     if (sceneState && Array.isArray(sceneState)) {
       console.log(
-        `[${requestId}] [FixBug Tool] 🔄 Received scene state with ${sceneState.length} objects to preserve`
+        `[${requestId}] [FixBug Tool]  Received scene state with ${sceneState.length} objects to preserve`
       );
     }
 
     // Log lint errors
     if (lintErrors && Array.isArray(lintErrors)) {
       console.log(
-        `[${requestId}] [FixBug Tool] 🔍 Received ${lintErrors.length} lint errors to fix`
+        `[${requestId}] [FixBug Tool]  Received ${lintErrors.length} lint errors to fix`
       );
     }
 
     try {
       // Step 1: Get current code - prioritize passed code, fallback to cached
       console.log(
-        `[${requestId}] [FixBug Tool] 📁 Retrieving current code for analysis...`
+        `[${requestId}] [FixBug Tool]  Retrieving current code for analysis...`
       );
 
       let codeToFix = currentCode;
@@ -200,24 +199,24 @@ export const fixBugTool = new DynamicStructuredTool({
 
       if (!codeToFix) {
         console.error(
-          `[${requestId}] [FixBug Tool] ❌ No current code available for bug fixing`
+          `[${requestId}] [FixBug Tool]  No current code available for bug fixing`
         );
         return "Error: No current code available for bug fixing. Please ensure code is provided in the request.";
       }
 
       console.log(
-        `[${requestId}] [FixBug Tool] ✅ Current code retrieved (${codeToFix.length} characters)`
+        `[${requestId}] [FixBug Tool]  Current code retrieved (${codeToFix.length} characters)`
       );
 
       // Step 2: Get model history if preservation is enabled
       let modelHistorySection = "";
       if (preserveModels) {
         console.log(
-          `[${requestId}] [FixBug Tool] 📚 Retrieving model history for preservation...`
+          `[${requestId}] [FixBug Tool]  Retrieving model history for preservation...`
         );
         modelHistorySection = await formatModelHistoryForPrompt();
         console.log(
-          `[${requestId}] [FixBug Tool] ✅ Model history retrieved for preservation`
+          `[${requestId}] [FixBug Tool]  Model history retrieved for preservation`
         );
       }
 
@@ -275,7 +274,7 @@ ${sceneStateSection}
 **IMPORTANT**: Return ONLY the corrected JavaScript code without any explanations, markdown formatting, or code blocks. The code should be ready to execute immediately.`;
 
       console.log(
-        `[${requestId}] [FixBug Tool] 🤖 Sending bug fix request to LLM...`
+        `[${requestId}] [FixBug Tool]  Sending bug fix request to LLM...`
       );
 
       // Step 6: Generate fixed code using LLM
@@ -283,19 +282,19 @@ ${sceneStateSection}
       const fixedCode = handleLLMResponseContent(response.content);
 
       console.log(
-        `[${requestId}] [FixBug Tool] ✅ Bug fix completed (${fixedCode.length} characters)`
+        `[${requestId}] [FixBug Tool]  Bug fix completed (${fixedCode.length} characters)`
       );
 
       // Step 7: Validate URLs in the fixed code
       console.log(
-        `[${requestId}] [FixBug Tool] 🔗 Validating model URLs in fixed code...`
+        `[${requestId}] [FixBug Tool]  Validating model URLs in fixed code...`
       );
       const validatedCode = await ensureValidUrlsInCode(fixedCode);
 
       const endTime = Date.now();
       const duration = endTime - startTime;
       console.log(
-        `[${requestId}] [FixBug Tool] ⚡ Bug fix process completed in ${duration}ms`
+        `[${requestId}] [FixBug Tool]  Bug fix process completed in ${duration}ms`
       );
 
       return validatedCode;
@@ -304,7 +303,7 @@ ${sceneStateSection}
       const duration = endTime - startTime;
 
       console.error(
-        `[${requestId}] [FixBug Tool] ❌ Bug fix failed after ${duration}ms:`,
+        `[${requestId}] [FixBug Tool]  Bug fix failed after ${duration}ms:`,
         error
       );
 

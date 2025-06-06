@@ -96,12 +96,52 @@ function formatSceneStateForPrompt(
 }
 
 /**
+ * 检测是否为物理教育场景请求
+ */
+function detectPhysicsEducationRequest(instruction: string): boolean {
+  const physicsKeywords = [
+    "物理",
+    "重力",
+    "摩擦",
+    "碰撞",
+    "弹性",
+    "动量",
+    "能量",
+    "下落",
+    "运动",
+    "力",
+    "加速度",
+    "振动",
+    "钟摆",
+    "弹簧",
+    "physics",
+    "gravity",
+    "friction",
+    "collision",
+    "momentum",
+    "energy",
+    "force",
+    "acceleration",
+    "pendulum",
+    "spring",
+    "rapier",
+    "物理引擎",
+    "实验",
+    "experiment",
+  ];
+
+  return physicsKeywords.some((keyword) =>
+    instruction.toLowerCase().includes(keyword.toLowerCase())
+  );
+}
+
+/**
  * Code Generation Tool - Generates initial Three.js code or fixes existing code based on errors
  */
 export const codeGenTool = new DynamicStructuredTool({
   name: "generate_fix_code",
   description:
-    "Generate or fix Three.js code based on user prompts. Provide complete setup function code.",
+    "Generate or fix Three.js code based on user prompts. Supports both regular 3D scenes and physics education scenes with Rapier physics engine. Provide complete setup function code.",
   schema: z.object({
     instruction: z
       .string()
@@ -118,8 +158,19 @@ export const codeGenTool = new DynamicStructuredTool({
       .describe(
         "Analysis results from screenshot analysis tool with specific improvement suggestions"
       ),
+    physicsMode: z
+      .boolean()
+      .optional()
+      .describe(
+        "Whether this is for a physics education scene with Rapier engine"
+      ),
   }),
-  func: async ({ instruction, sceneState, screenshotAnalysis }) => {
+  func: async ({
+    instruction,
+    sceneState,
+    screenshotAnalysis,
+    physicsMode,
+  }) => {
     const requestId = `codegen_${Date.now()}`;
     const startTime = Date.now();
     console.log(
@@ -131,6 +182,16 @@ export const codeGenTool = new DynamicStructuredTool({
         100
       )}${instruction.length > 100 ? "..." : ""}"`
     );
+
+    // 自动检测物理教育场景
+    const isPhysicsScene =
+      physicsMode || detectPhysicsEducationRequest(instruction);
+
+    if (isPhysicsScene) {
+      console.log(
+        `[${requestId}] [CodeGen Tool] 🧪 Detected physics education scene request`
+      );
+    }
 
     // Log scene state information
     if (sceneState && Array.isArray(sceneState)) {
@@ -250,7 +311,41 @@ Please use this analysis to improve the scene according to the user's requiremen
         );
       }
 
-      const prompt = `As a Three.js expert, please generate or fix code based on the following instructions:
+      // 构建不同类型的提示词
+      let prompt = "";
+
+      if (isPhysicsScene) {
+        // 物理教育场景专用提示词
+        prompt = `作为物理教育专家和Three.js + Rapier物理引擎专家，请生成物理教育场景代码：
+
+${instruction}
+
+${modelHistorySection}
+
+${sceneStateSection}
+
+${screenshotAnalysisSection}
+
+## 物理教育场景要求:
+1. 必须集成Rapier物理引擎 (使用@dimforge/rapier3d-compat)
+2. 代码格式: function setup(scene, camera, renderer, THREE, OrbitControls, RAPIER) { ... }
+3. 初始化物理世界: const world = new RAPIER.World({ x: 0.0, y: -9.81, z: 0.0 });
+4. 为所有物理对象创建刚体和碰撞器
+5. 实现物理循环同步Three.js对象位置
+6. 添加教育性标签和说明文字
+7. 使用不同颜色区分不同功能的物体
+8. 设置合适的物理参数(重力、摩擦、弹性)
+9. 添加地面或边界防止物体无限下落
+10. 包含教育说明和概念解释
+
+⚠️ 重要提醒:
+- 必须包含完整的Rapier物理引擎集成
+- 确保所有物理对象都有对应的Three.js视觉对象
+- 添加教育性元素和说明
+- 只返回可执行的JavaScript代码，不要包含markdown标记`;
+      } else {
+        // 常规3D场景提示词
+        prompt = `As a Three.js expert, please generate or fix code based on the following instructions:
 
 ${instruction}
 
@@ -285,6 +380,7 @@ ${
 }
 
 ⚠️ Note: Your answer must only contain executable Three.js code. Don't include any explanations, thought processes, or descriptive text. Don't use markdown code block markers. Don't add any prefixes or suffixes. Directly return executable setup function code.`;
+      }
 
       // Call LLM to generate or modify code
       console.log(
