@@ -5,49 +5,61 @@
 
 import { RunnableWithMessageHistory } from "@langchain/core/runnables";
 import { BaseChatMessageHistory } from "@langchain/core/chat_history";
-import { Tool } from "langchain/tools";
+import { Tool } from "@langchain/core/tools";
 import { NextApiResponse } from "next";
 import { ChatMessageHistory } from "langchain/stores/message/in_memory";
+import { BaseCallbackHandler } from "@langchain/core/callbacks/base";
+import { AgentAction, AgentFinish } from "langchain/agents";
+import { LLMResult } from "@langchain/core/outputs";
+import { ChainValues } from "@langchain/core/utils/types";
 
 // 导入 agent 创建工厂
-import { createAgent, createAgentExecutor } from "./agentFactory";
+import {
+  createAgent,
+  createAgentExecutor,
+  createModelClient,
+} from "./agentFactory";
+
+// 导入内存管理功能
+import {
+  createMemoryCallbackHandler,
+  initializeChromaDB,
+  saveSceneStateToMemory,
+  loadSceneHistoryFromMemory,
+  loadModelHistoryFromMemory,
+  getCodeDigest,
+  prepareHistoryContext,
+} from "../memory/memoryManager";
 
 // 导入代码处理和模型提取工具
 import { cleanCodeOutput } from "../processors/codeProcessor";
 import { extractModelUrls } from "../processors/modelExtractor";
 
-// 导入内存管理功能
-import {
-  createMemoryCallbackHandler,
-  prepareHistoryContext,
-  loadSceneHistoryFromMemory,
-  loadModelHistoryFromMemory,
-  saveSceneStateToMemory,
-  clearSessionState,
-  ModelHistoryEntry,
-  getCodeMemory,
-  getSceneMemory,
-  getCodeDigest,
-} from "../memory/memoryManager";
-
 // 导入工具
-import { screenshotTool } from "../tools/screenshotTool";
 import { ToolRegistry } from "../tools/toolRegistry";
+import { applyPatchTool } from "../tools/applyPatchTool";
+import { screenshotTool } from "../tools/screenshotTool";
 
+// 导入类型
+import { SceneStateObject, ModelHistoryEntry } from "../types/sceneTypes";
+import { LintError } from "../types/codeTypes";
+
+// 用于清理session状态
+import { clearSessionState } from "../memory/memoryManager";
+
+// 引入当前缓存代码管理
+import { getCachedCode, updateCachedCode } from "../tools/applyPatchTool";
+
+// 导入chatbot功能
 import {
-  applyPatchTool,
-  getCachedCode,
-  updateCachedCode,
-} from "../tools/applyPatchTool";
-
-import { chromaService } from "../services/chromaService";
+  initializeChatbot,
+  onAgentComplete,
+  updateChatbotContext,
+  handleUserChatInput,
+} from "./chatbotAgent";
 
 // 将screenshotTool转为Tool类型
 const screenshotToolInstance = screenshotTool as unknown as Tool;
-
-// 导入类型
-import { LintError } from "../types/codeTypes";
-import { SceneStateObject } from "../types/sceneTypes";
 
 // 存储常量
 const MAX_ITERATIONS = 10;
@@ -126,17 +138,6 @@ async function saveInteractionToMemory(
   );
 }
 
-// 初始化 ChromaDB 并确保服务可用
-async function initializeChromaDB(): Promise<void> {
-  try {
-    console.log(`[ChromaDB] Initializing ChromaDB service...`);
-    await chromaService.initialize();
-    console.log(`[ChromaDB] ChromaDB service initialized successfully`);
-  } catch (error) {
-    console.error(`[ChromaDB] Failed to initialize ChromaDB:`, error);
-  }
-}
-
 /**
  * 缓存工具执行结果的包装函数
  * 通过工具注册表的缓存机制执行工具，减少重复API调用
@@ -162,28 +163,6 @@ async function executeLLMToolWithCache(
 ): Promise<unknown> {
   // LLM工具使用更长的缓存时间
   return executeToolWithCache(toolName, params, 5 * 60 * 1000); // 5分钟缓存
-}
-
-/**
- * 当代码或场景状态发生重大变化时，失效特定工具的缓存
- *
- * @param tools 需要清除缓存的工具名称数组
- */
-function invalidateToolCache(tools: string[] = []): void {
-  const registry = ToolRegistry.getInstance();
-
-  if (tools.length === 0) {
-    // 默认清除所有与代码生成和分析相关的工具缓存
-    registry.clearCache("generate_fix_code");
-    registry.clearCache("analyze_screenshot");
-    console.log("[Cache] Cleared cache for all code-related tools");
-  } else {
-    // 清除指定工具的缓存
-    tools.forEach((toolName) => {
-      registry.clearCache(toolName);
-    });
-    console.log(`[Cache] Cleared cache for tools: ${tools.join(", ")}`);
-  }
 }
 
 /**
@@ -229,6 +208,9 @@ export async function executeAgentWorkflow(
       50
     )}..."`
   );
+
+  // 创建WebSocket回调处理器 - 移到外部以便在catch块中访问
+  const wsCallbackHandler = new WebSocketAgentCallbackHandler(requestId);
 
   try {
     // 1. 准备阶段: 检查和准备输入数据
@@ -428,7 +410,17 @@ export async function executeAgentWorkflow(
 
     // 创建agent执行器
     const executor = createAgentExecutor(agent, cachedTools, MAX_ITERATIONS);
-    executor.callbacks = [callbackHandler];
+    executor.callbacks = [callbackHandler, wsCallbackHandler];
+
+    console.log(`[${requestId}] Starting agent execution...`);
+
+    // 发送开始事件
+    wsCallbackHandler.emitChatEvent({
+      type: "chat_start",
+      title: "Starting your request...",
+      message:
+        "Hi there! 🎨 I'm getting ready to work on your amazing 3D scene!",
+    });
 
     // 添加消息历史支持
     const executorWithMemory = new RunnableWithMessageHistory({
@@ -536,9 +528,48 @@ export async function executeAgentWorkflow(
       }
     }
 
+    // 不再发送默认的英文回复，只通过chatbot发送中文总结
+
+    // 6. Chatbot集成: 生成总结和建议
+    // -----------------------------------------------
+
+    // 更新chatbot上下文
+    updateChatbotContext({
+      currentCode: improvedCode,
+      sceneState: combinedSceneState,
+      lastAction: cleanedOutput,
+    });
+
+    // 生成Agent完成后的总结和建议
+    try {
+      const agentSummary = await onAgentComplete(
+        result,
+        userPrompt,
+        improvedCode,
+        combinedSceneState || []
+      );
+
+      console.log(`[${requestId}] Generated agent completion summary`);
+
+      // 将总结发送到前端
+      if (wsCallbackHandler) {
+        wsCallbackHandler.emitChatEvent({
+          type: "agent_summary",
+          title: "✨ 任务完成总结",
+          message: agentSummary,
+        });
+      }
+    } catch (summaryError) {
+      console.error(
+        `[${requestId}] Error generating agent summary:`,
+        summaryError
+      );
+    }
+
     // 组装最终结果
     const finalResult = {
       directCode: improvedCode,
+      chatResponse: "Scene updated successfully", // 简单的确认消息
       ...(modelInfo.modelUrl ? { modelUrl: modelInfo.modelUrl } : {}),
       ...(modelInfo.modelUrls && modelInfo.modelUrls.length > 0
         ? { modelUrls: modelInfo.modelUrls }
@@ -549,10 +580,57 @@ export async function executeAgentWorkflow(
     return finalResult;
   } catch (error) {
     console.error(`[${requestId}] Agent workflow failed:`, error);
+
+    // 个性化错误回复
+    let errorChatResponse =
+      "Hey there! 😊 I encountered a small bump while working on your amazing 3D scene. ";
+
+    // 根据错误类型提供不同的回复
+    const errorMessage =
+      error instanceof Error
+        ? error.message.toLowerCase()
+        : String(error).toLowerCase();
+
+    if (errorMessage.includes("timeout") || errorMessage.includes("time")) {
+      errorChatResponse +=
+        "It looks like the process took a bit longer than expected, but no worries! ";
+    } else if (
+      errorMessage.includes("network") ||
+      errorMessage.includes("connection")
+    ) {
+      errorChatResponse +=
+        "I ran into a network hiccup, but these things happen! ";
+    } else if (
+      errorMessage.includes("memory") ||
+      errorMessage.includes("resource")
+    ) {
+      errorChatResponse +=
+        "I encountered a resource limitation, but I've kept your work safe! ";
+    } else {
+      errorChatResponse +=
+        "I hit a technical challenge, but that's all part of the creative process! ";
+    }
+
+    errorChatResponse +=
+      "The good news is that your original code is completely safe and unchanged. " +
+      "Sometimes these things happen when we're pushing the boundaries of what's possible in 3D! 🎨 " +
+      "Why don't you try again, or maybe we can approach it from a slightly different angle? " +
+      "I'm always here and ready to help bring your vision to life! ✨";
+
+    // 发送错误情况下的聊天回复
+    if (wsCallbackHandler) {
+      wsCallbackHandler.emitChatEvent({
+        type: "chat_error",
+        title: "Encountered a small challenge",
+        message: errorChatResponse,
+      });
+    }
+
     return {
       error: "处理失败",
       details: error instanceof Error ? error.message : String(error),
       directCode: currentCode, // 出错时返回原始代码
+      chatResponse: errorChatResponse,
     };
   }
 }
@@ -643,3 +721,240 @@ export async function runAgentLoop(
 ToolRegistry.getInstance();
 
 export { clearSessionState };
+
+// WebSocket Agent事件类型
+interface AgentEvent {
+  type:
+    | "step_start"
+    | "step_complete"
+    | "tool_start"
+    | "tool_complete"
+    | "llm_start"
+    | "llm_complete"
+    | "agent_complete"
+    | "agent_error";
+  stepId: string;
+  stepType:
+    | "thinking"
+    | "tool_call"
+    | "analysis"
+    | "code_generation"
+    | "completion";
+  title: string;
+  description: string;
+  status: "pending" | "in_progress" | "completed" | "error";
+  timestamp: Date;
+  details?: {
+    toolName?: string;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    input?: any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    output?: any;
+    reasoning?: string;
+    suggestions?: string[];
+    metrics?: Record<string, number | string>;
+  };
+}
+
+// WebSocket回调处理器
+class WebSocketAgentCallbackHandler extends BaseCallbackHandler {
+  name = "WebSocketAgentCallbackHandler";
+  private requestId: string;
+  private currentStepId: string = "";
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private socketServer: any = null;
+
+  constructor(requestId: string) {
+    super();
+    this.requestId = requestId;
+
+    // 获取全局Socket.IO服务器实例
+    if (typeof global !== "undefined" && global.socketIOServer) {
+      this.socketServer = global.socketIOServer;
+    }
+  }
+
+  private emitAgentEvent(event: AgentEvent) {
+    if (this.socketServer) {
+      console.log(
+        `[${this.requestId}] Emitting agent event:`,
+        event.type,
+        event.title
+      );
+      this.socketServer.emit("agent_event", {
+        requestId: this.requestId,
+        ...event,
+      });
+    }
+  }
+
+  private generateStepId(): string {
+    return `step_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  }
+
+  // Agent开始执行
+  handleAgentAction(action: AgentAction): Promise<void> | void {
+    this.currentStepId = this.generateStepId();
+
+    const event: AgentEvent = {
+      type: "step_start",
+      stepId: this.currentStepId,
+      stepType: "tool_call",
+      title: `Using ${action.tool}`,
+      description: `Executing tool: ${action.tool}`,
+      status: "in_progress",
+      timestamp: new Date(),
+      details: {
+        toolName: action.tool,
+        input: action.toolInput,
+      },
+    };
+
+    this.emitAgentEvent(event);
+  }
+
+  // 工具执行开始
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  handleToolStart(tool: any, input: string): Promise<void> | void {
+    const toolName = typeof tool === "string" ? tool : tool?.name || "unknown";
+
+    const event: AgentEvent = {
+      type: "tool_start",
+      stepId: this.currentStepId || this.generateStepId(),
+      stepType: "tool_call",
+      title: `Executing ${toolName}`,
+      description: `Running ${toolName} tool...`,
+      status: "in_progress",
+      timestamp: new Date(),
+      details: {
+        toolName,
+        input,
+      },
+    };
+
+    this.emitAgentEvent(event);
+  }
+
+  // 工具执行完成
+  handleToolEnd(output: string): Promise<void> | void {
+    const event: AgentEvent = {
+      type: "tool_complete",
+      stepId: this.currentStepId,
+      stepType: "tool_call",
+      title: "Tool execution completed",
+      description: "Tool finished successfully",
+      status: "completed",
+      timestamp: new Date(),
+      details: {
+        output,
+      },
+    };
+
+    this.emitAgentEvent(event);
+  }
+
+  // LLM开始执行
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  handleLLMStart(llm: any, prompts: string[]): Promise<void> | void {
+    this.currentStepId = this.generateStepId();
+
+    const event: AgentEvent = {
+      type: "llm_start",
+      stepId: this.currentStepId,
+      stepType: "thinking",
+      title: "AI is thinking...",
+      description: "Processing your request and analyzing context",
+      status: "in_progress",
+      timestamp: new Date(),
+      details: {
+        reasoning: "Analyzing user requirements and generating response",
+      },
+    };
+
+    this.emitAgentEvent(event);
+  }
+
+  // LLM执行完成
+  handleLLMEnd(output: LLMResult): Promise<void> | void {
+    const event: AgentEvent = {
+      type: "llm_complete",
+      stepId: this.currentStepId,
+      stepType: "thinking",
+      title: "AI reasoning completed",
+      description: "Finished processing your request",
+      status: "completed",
+      timestamp: new Date(),
+    };
+
+    this.emitAgentEvent(event);
+  }
+
+  // Agent执行完成
+  handleAgentEnd(action: AgentFinish): Promise<void> | void {
+    const event: AgentEvent = {
+      type: "agent_complete",
+      stepId: this.generateStepId(),
+      stepType: "completion",
+      title: "Task completed",
+      description: "Successfully generated your 3D scene",
+      status: "completed",
+      timestamp: new Date(),
+      details: {
+        output: action.returnValues?.output || action.returnValues,
+      },
+    };
+
+    this.emitAgentEvent(event);
+  }
+
+  // 错误处理
+  handleChainError(error: Error): Promise<void> | void {
+    const event: AgentEvent = {
+      type: "agent_error",
+      stepId: this.currentStepId || this.generateStepId(),
+      stepType: "completion",
+      title: "Error occurred",
+      description: `An error occurred: ${error.message}`,
+      status: "error",
+      timestamp: new Date(),
+      details: {
+        output: error.message,
+      },
+    };
+
+    this.emitAgentEvent(event);
+  }
+
+  emitChatEvent(event: { type: string; title: string; message: string }) {
+    if (this.socketServer) {
+      console.log(
+        `[${this.requestId}] Emitting chat event:`,
+        event.type,
+        event.title,
+        event.message
+      );
+      this.socketServer.emit("chat_event", {
+        requestId: this.requestId,
+        ...event,
+      });
+    }
+  }
+}
+
+/**
+ * 当代码或场景状态发生重大变化时，失效特定工具的缓存
+ */
+function invalidateToolCache(tools: string[] = []): void {
+  const registry = ToolRegistry.getInstance();
+
+  if (tools.length === 0) {
+    registry.clearCache("generate_fix_code");
+    registry.clearCache("analyze_screenshot");
+    console.log("[Cache] Cleared cache for all code-related tools");
+  } else {
+    tools.forEach((toolName) => {
+      registry.clearCache(toolName);
+    });
+    console.log(`[Cache] Cleared cache for tools: ${tools.join(", ")}`);
+  }
+}

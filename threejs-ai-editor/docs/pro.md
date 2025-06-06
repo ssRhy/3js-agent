@@ -1,5 +1,98 @@
 # Three.js AI Editor 开发记录
 
+## 新增 Bug 修复工具 - 2024 年 12 月
+
+### 功能特性
+
+1. **专门的 Bug 修复工具**
+
+   - 新增 `fix_bug` Tool，专门用于修复 Three.js 代码错误
+   - 智能分析当前代码和错误信息
+   - 保持场景状态和 3D 模型 URL 的完整性
+   - 最小化修改策略，只修复特定问题
+
+2. **工具核心功能**
+
+   - **获取当前代码**: 自动获取缓存的代码进行分析
+   - **错误分析**: 处理错误描述、详细错误信息和 Lint 错误
+   - **场景状态保护**: 保持对象的精确位置、旋转和缩放值
+   - **模型 URL 保护**: 确保现有 3D 模型 URL 不丢失
+   - **智能修复**: 使用低温度设置确保精确的错误修复
+
+3. **集成到工作流程**
+   - 更新工具注册表，将 fixBugTool 注册为 CODE 类别
+   - 在系统提示词中添加 Bug 修复工作流程指导
+   - 提供明确的使用场景和参数说明
+
+### 技术实现
+
+#### 1. 工具参数设计
+
+```typescript
+schema: z.object({
+  errorDescription: z.string().describe("需要修复的错误或bug的描述"),
+  errorDetails: z
+    .string()
+    .optional()
+    .describe("详细的错误信息、堆栈跟踪或控制台错误"),
+  sceneState: z
+    .array(z.record(z.unknown()))
+    .optional()
+    .describe("必须保持的场景对象准确位置、旋转和缩放"),
+  lintErrors: z
+    .array(z.record(z.unknown()))
+    .optional()
+    .describe("需要解决的Lint错误"),
+  preserveModels: z
+    .boolean()
+    .optional()
+    .default(true)
+    .describe("是否保护现有3D模型URL"),
+});
+```
+
+#### 2. 修复工作流程
+
+```typescript
+// 步骤1: 获取当前代码
+const currentCode = getCachedCode();
+
+// 步骤2: 获取模型历史记录
+const modelHistorySection = await formatModelHistoryForPrompt();
+
+// 步骤3: 格式化场景状态
+const sceneStateSection = formatSceneStateForPrompt(sceneState);
+
+// 步骤4: 构建修复提示词
+const bugFixPrompt = `# Three.js Bug Fix Request...`;
+
+// 步骤5: 生成修复代码
+const response = await fixBugModel.invoke(bugFixPrompt);
+
+// 步骤6: 验证URL
+const validatedCode = ensureValidUrlsInCode(fixedCode);
+```
+
+#### 3. 集成更新
+
+- **工具注册表更新**: 在`toolRegistry.ts`中添加 fixBugTool 注册
+- **系统提示词更新**: 在`systemPrompts.ts`中添加 Bug 修复工作流程
+- **工作流程指导**: 明确何时使用 fix_bug vs generate_fix_code
+
+### 使用场景
+
+1. **具体错误修复**: 当遇到具体的 JavaScript 错误、Three.js API 错误时
+2. **Lint 错误修复**: 处理代码质量问题
+3. **运行时错误**: 修复场景运行时出现的问题
+4. **保持现有功能**: 在修复错误的同时保持所有现有功能和状态
+
+### 优势特点
+
+- **精确修复**: 使用较低的 temperature(0.1)确保精确的修复方案
+- **最小化影响**: 专注于修复特定问题，不影响其他功能
+- **状态保护**: 确保场景状态和模型 URL 完整性
+- **详细日志**: 提供完整的修复过程日志和统计信息
+
 ## UI 美化优化 - 2024 年 12 月
 
 ### 优化内容

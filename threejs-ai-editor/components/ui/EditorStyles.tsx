@@ -8,97 +8,204 @@ const EditorStyles: React.FC = () => {
         height: 100vh;
         width: 100%;
         overflow: hidden;
-        position: relative;
-        background-color: #0f0f0f;
-        color: #e0e0e0;
+        background: var(--bg-primary);
+        color: var(--text-primary);
       }
 
       .sidebar {
         display: flex;
         flex-direction: column;
-        width: 30%;
-        min-width: 350px;
-        max-width: 45%;
-        padding: 15px;
-        background-color: #121212;
-        border-right: 1px solid #333;
-        overflow-y: auto;
-        resize: horizontal;
+        height: 100vh;
+        background: var(--bg-secondary);
+        border-right: 1px solid var(--border-primary);
+        overflow: hidden;
         position: relative;
-        transition: background-color 0.3s ease;
+        flex-shrink: 0;
       }
 
       .resize-handle {
         width: 4px;
-        height: 100%;
-        background-color: #333;
+        height: 100vh;
+        background: var(--border-primary);
         cursor: col-resize;
-        position: absolute;
-        top: 0;
-        left: 30%;
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        user-select: none;
         z-index: 10;
-        transition: background-color 0.2s ease;
+        transition: all 0.2s ease;
       }
 
       .resize-handle:hover {
-        background-color: #555;
+        background: var(--accent-subtle);
+        width: 6px;
+      }
+
+      .resize-handle.dragging {
+        background: var(--accent-primary);
+        width: 6px;
+      }
+
+      .resize-handle-indicator {
+        width: 2px;
+        height: 40px;
+        background: rgba(255, 255, 255, 0.3);
+        border-radius: 1px;
+        transition: all 0.2s ease;
+      }
+
+      .resize-handle:hover .resize-handle-indicator,
+      .resize-handle.dragging .resize-handle-indicator {
+        background: rgba(255, 255, 255, 0.6);
+        height: 60px;
       }
 
       .sidebar-header {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        margin-bottom: 8px;
-        padding-bottom: 8px;
-        border-bottom: 1px solid #333;
+        padding: var(--spacing-lg);
+        border-bottom: 1px solid var(--border-primary);
+        background: var(--bg-card);
       }
 
       .sidebar-header h2 {
         margin: 0;
-        color: #e0e0e0;
-        font-size: 16px;
-        font-weight: 400;
-        letter-spacing: 0.5px;
+        color: var(--text-primary);
+        font-size: 18px;
+        font-weight: 500;
+        letter-spacing: -0.025em;
       }
 
       .prompt-section {
-        margin-bottom: 8px;
+        padding: var(--spacing-lg);
+        border-bottom: 1px solid var(--border-primary);
       }
 
       .prompt-label {
         display: block;
-        margin-bottom: 4px;
-        font-weight: normal;
-        color: #aaa;
+        margin-bottom: var(--spacing-sm);
+        font-weight: 500;
+        color: var(--text-secondary);
         font-size: 13px;
-        letter-spacing: 0.5px;
+        letter-spacing: -0.01em;
+      }
+
+      .prompt-input {
+        width: 100%;
+        min-height: 80px;
+        padding: var(--spacing-md);
+        background: var(--bg-input);
+        border: 1px solid var(--border-primary);
+        border-radius: var(--radius-md);
+        color: var(--text-primary);
+        font-family: inherit;
+        font-size: 14px;
+        line-height: 1.5;
+        resize: vertical;
+        outline: none;
+        transition: all 0.2s ease;
+      }
+
+      .prompt-input::placeholder {
+        color: var(--text-tertiary);
+      }
+
+      .prompt-input:focus {
+        border-color: var(--accent-subtle);
+        background: var(--bg-card);
+        box-shadow: 0 0 0 1px var(--accent-subtle);
+      }
+
+      .prompt-input:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      .generate-button {
+        position: relative;
+        width: 100%;
+        padding: var(--spacing-md) var(--spacing-lg);
+        background: var(--accent-primary);
+        color: var(--bg-primary);
+        border: none;
+        border-radius: var(--radius-md);
+        font-size: 14px;
+        font-weight: 500;
+        cursor: pointer;
+        overflow: hidden;
+        transition: all 0.2s ease;
+        letter-spacing: -0.01em;
+        margin-top: var(--spacing-md);
+      }
+
+      .generate-button:hover:not(:disabled) {
+        background: var(--accent-secondary);
+        transform: translateY(-1px);
+        box-shadow: var(--shadow-medium);
+      }
+
+      .generate-button:disabled {
+        background: var(--bg-tertiary);
+        color: var(--text-disabled);
+        cursor: not-allowed;
+        transform: none;
+        box-shadow: none;
+      }
+
+      .button-background {
+        position: absolute;
+        top: 0;
+        left: -100%;
+        width: 100%;
+        height: 100%;
+        background: linear-gradient(
+          90deg,
+          transparent,
+          rgba(255, 255, 255, 0.1),
+          transparent
+        );
+        transition: left 0.5s;
+      }
+
+      .button-background.loading {
+        animation: shimmer 1.5s infinite;
+      }
+
+      @keyframes shimmer {
+        0% {
+          left: -100%;
+        }
+        100% {
+          left: 100%;
+        }
       }
 
       .status-section {
-        margin-bottom: 8px;
+        padding: 0 var(--spacing-lg);
       }
 
       .preview {
         flex-grow: 1;
-        height: 100%;
+        height: 100vh;
+        background: var(--bg-primary);
         position: relative;
-        background-color: #0a0a0a;
+        overflow: hidden;
       }
 
       .scene-exporter-container {
         position: absolute;
-        top: 20px;
-        right: 20px;
-        width: 300px;
+        top: var(--spacing-lg);
+        right: var(--spacing-lg);
         z-index: 100;
-        transition: all 0.3s ease;
-        filter: drop-shadow(0 4px 6px rgba(0, 0, 0, 0.3));
+        transition: all 0.2s ease;
       }
 
       .ui-controls-container {
         position: absolute;
         top: 50%;
-        right: 20px;
+        right: var(--spacing-lg);
         transform: translateY(-50%);
         z-index: 90;
       }
@@ -106,18 +213,22 @@ const EditorStyles: React.FC = () => {
       .button-group {
         display: flex;
         flex-direction: column;
-        gap: 6px;
-        margin-top: 8px;
+        gap: var(--spacing-sm);
+        margin-top: var(--spacing-sm);
       }
 
       .ws-status {
-        padding: 4px 8px;
-        margin: 4px 0;
-        border-radius: 3px;
+        padding: 6px 12px;
+        margin: 0;
+        border-radius: var(--radius-md);
         font-size: 12px;
-        display: flex;
+        font-weight: 500;
+        background: var(--bg-tertiary);
+        border: 1px solid var(--border-primary);
+        transition: all 0.2s ease;
+        display: inline-flex;
         align-items: center;
-        gap: 5px;
+        gap: var(--spacing-sm);
       }
 
       .status-dot {
@@ -125,232 +236,96 @@ const EditorStyles: React.FC = () => {
         width: 6px;
         height: 6px;
         border-radius: 50%;
+        flex-shrink: 0;
       }
 
       .ws-status.open {
-        background-color: rgba(35, 35, 35, 0.8);
-        color: #aaa;
+        color: var(--status-success);
+        border-color: rgba(74, 222, 128, 0.3);
+        background: rgba(74, 222, 128, 0.1);
       }
 
       .ws-status.open .status-dot {
-        background-color: #5f5;
+        background: var(--status-success);
+        box-shadow: 0 0 6px rgba(74, 222, 128, 0.4);
       }
 
       .ws-status.connecting {
-        background-color: rgba(35, 35, 35, 0.8);
-        color: #aaa;
+        color: var(--status-warning);
+        border-color: rgba(251, 191, 36, 0.3);
+        background: rgba(251, 191, 36, 0.1);
       }
 
       .ws-status.connecting .status-dot {
-        background-color: #fa3;
+        background: var(--status-warning);
+        animation: pulse 2s ease-in-out infinite;
       }
 
       .ws-status.closed,
       .ws-status.error {
-        background-color: rgba(35, 35, 35, 0.8);
-        color: #aaa;
+        color: var(--status-error);
+        border-color: rgba(239, 68, 68, 0.3);
+        background: rgba(239, 68, 68, 0.1);
       }
 
       .ws-status.closed .status-dot,
       .ws-status.error .status-dot {
-        background-color: #f55;
+        background: var(--status-error);
+      }
+
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.4;
+        }
       }
 
       .success {
-        background-color: rgba(35, 35, 35, 0.8);
-        color: #aaa;
-        padding: 6px 10px;
-        margin: 6px 0;
-        border-radius: 3px;
-        border-left: 3px solid #5f5;
+        background: rgba(74, 222, 128, 0.1);
+        border: 1px solid rgba(74, 222, 128, 0.3);
+        border-left: 3px solid var(--status-success);
+        color: var(--status-success);
+        padding: var(--spacing-md);
+        margin: var(--spacing-md) 0;
+        border-radius: var(--radius-md);
+        font-size: 13px;
         animation: fadeIn 0.3s ease;
-        font-size: 12px;
       }
 
       .error {
-        background-color: rgba(35, 35, 35, 0.8);
-        color: #aaa;
-        padding: 6px 10px;
-        margin: 6px 0;
-        border-radius: 3px;
-        border-left: 3px solid #f55;
+        background: rgba(239, 68, 68, 0.1);
+        border: 1px solid rgba(239, 68, 68, 0.3);
+        border-left: 3px solid var(--status-error);
+        color: var(--status-error);
+        padding: var(--spacing-md);
+        margin: var(--spacing-md) 0;
+        border-radius: var(--radius-md);
+        font-size: 13px;
         animation: fadeIn 0.3s ease;
-        font-size: 12px;
-      }
-
-      .reconnect-button {
-        margin-left: 8px;
-        font-size: 12px;
-        padding: 2px 6px;
-        background: #333;
-        color: #ddd;
-        border: none;
-        border-radius: 2px;
-        cursor: pointer;
-      }
-
-      .reconnect-button:hover {
-        background: #444;
-      }
-
-      .connection-message {
-        background-color: rgba(35, 35, 35, 0.8);
-        border: 1px solid #333;
-        color: #aaa;
-        padding: 12px;
-        margin: 10px 0;
-        border-radius: 3px;
-        text-align: center;
-      }
-
-      .connection-message p {
-        margin: 5px 0;
-      }
-
-      .prompt-input {
-        width: 100%;
-        padding: 8px;
-        margin-bottom: 8px;
-        border: 1px solid #333;
-        background-color: #1a1a1a;
-        color: #e0e0e0;
-        border-radius: 3px;
-        resize: vertical;
-        font-family: "Inter", "Arial", sans-serif;
-        transition: all 0.2s ease;
-        min-height: 80px;
-        max-height: 120px;
-      }
-
-      .prompt-input:focus {
-        border-color: #555;
-        box-shadow: 0 0 0 1px rgba(100, 100, 100, 0.3);
-        outline: none;
-      }
-
-      .prompt-input::placeholder {
-        color: #666;
-      }
-
-      .prompt-input:disabled {
-        opacity: 0.6;
-        cursor: not-allowed;
-      }
-
-      .generate-button {
-        position: relative;
-        background-color: transparent;
-        color: #e0e0e0;
-        border: none;
-        padding: 10px 16px;
-        border-radius: 3px;
-        cursor: pointer;
-        font-weight: 500;
-        font-size: 13px;
-        letter-spacing: 0.5px;
-        transition: all 0.2s ease;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        text-transform: uppercase;
-        overflow: hidden;
-      }
-
-      .generate-button .button-background {
-        position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        z-index: -1;
-        border-radius: 3px;
-        background-color: #333;
-        opacity: 1;
-        transition: all 0.3s ease;
-      }
-
-      .generate-button .button-background.loading {
-        background-size: 200% 200%;
-        animation: loading-gradient 1.5s linear infinite;
-      }
-
-      .generate-button:hover:not(:disabled) .button-background {
-        background-color: #444;
-      }
-
-      .generate-button:active:not(:disabled) .button-background {
-        background-color: #222;
-        transform: scale(0.98);
-      }
-
-      .generate-button:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-      }
-
-      @keyframes loading-gradient {
-        0% {
-          background-position: 0% 50%;
-          background-image: linear-gradient(
-            90deg,
-            #333 0%,
-            #444 50%,
-            #333 100%
-          );
-        }
-        100% {
-          background-position: 100% 50%;
-          background-image: linear-gradient(
-            90deg,
-            #333 0%,
-            #444 50%,
-            #333 100%
-          );
-        }
-      }
-
-      .code-section {
-        display: flex;
-        flex-direction: column;
-        flex-grow: 1;
-        height: calc(100% - 180px);
-        margin-top: 8px;
-        border: 1px solid #333;
-        border-radius: 3px;
-        overflow: hidden;
-      }
-
-      .code-header {
-        background-color: #1a1a1a;
-        color: #aaa;
-        margin: 0;
-        padding: 6px 10px;
-        font-size: 13px;
-        border-bottom: 1px solid #333;
-        font-weight: normal;
-        letter-spacing: 0.5px;
       }
 
       .loading-model {
+        background: var(--bg-tertiary);
+        border: 1px solid var(--border-primary);
+        border-radius: var(--radius-md);
+        color: var(--text-secondary);
+        font-size: 13px;
         display: flex;
         align-items: center;
-        gap: 6px;
-        background-color: rgba(35, 35, 35, 0.8);
-        border: 1px solid #333;
-        border-radius: 3px;
-        padding: 6px 8px;
-        margin: 6px 0;
-        color: #aaa;
-        font-size: 12px;
+        gap: var(--spacing-sm);
+        padding: var(--spacing-md);
+        margin: var(--spacing-md) 0;
       }
 
       .loading-spinner {
-        display: inline-block;
-        width: 10px;
-        height: 10px;
+        width: 14px;
+        height: 14px;
+        border: 2px solid var(--border-primary);
+        border-top: 2px solid var(--text-secondary);
         border-radius: 50%;
-        border: 2px solid #aaa;
-        border-top-color: transparent;
         animation: spin 1s linear infinite;
       }
 
@@ -360,108 +335,38 @@ const EditorStyles: React.FC = () => {
         }
       }
 
-      .diff-toggle {
-        margin: 6px 0;
-      }
-
-      .diff-toggle button {
-        background: #333;
-        color: #ddd;
-        border: none;
+      .reconnect-button {
+        margin-left: var(--spacing-sm);
         padding: 4px 8px;
-        border-radius: 3px;
+        background: var(--bg-tertiary);
+        color: var(--text-secondary);
+        border: 1px solid var(--border-primary);
+        border-radius: var(--radius-sm);
+        font-size: 11px;
         cursor: pointer;
-        font-size: 12px;
+        transition: all 0.2s ease;
       }
 
-      .diff-toggle button:hover {
-        background: #444;
+      .reconnect-button:hover {
+        background: var(--bg-hover);
+        color: var(--text-primary);
       }
 
-      .lint-overlay {
-        position: fixed;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        background-color: rgba(0, 0, 0, 0.7);
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        z-index: 1000;
-      }
-
-      .lint-overlay-content {
-        background-color: #1a1a1a;
-        border-radius: 3px;
-        padding: 20px;
-        width: 80%;
-        max-width: 800px;
-        max-height: 80vh;
-        overflow-y: auto;
-        position: relative;
-        color: #ddd;
-        border: 1px solid #333;
-      }
-
-      .close-button {
-        position: absolute;
-        top: 10px;
-        right: 10px;
-        background: none;
-        border: none;
-        font-size: 20px;
-        cursor: pointer;
-        color: #ddd;
-      }
-
-      .lint-errors-list {
-        list-style: none;
-        padding: 0;
-        margin: 0;
-      }
-
-      .lint-error-item {
-        padding: 8px;
-        border-bottom: 1px solid #333;
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-      }
-
-      .lint-error-location {
-        font-weight: bold;
-        color: #aaa;
-        min-width: 80px;
-      }
-
-      .lint-error-message {
-        flex-grow: 1;
-        color: #ddd;
-      }
-
-      .lint-error-rule {
-        color: #888;
-        font-size: 12px;
-      }
-
-      .update-reminder {
-        display: flex;
-        align-items: center;
-        background-color: rgba(35, 126, 35, 0.2);
-        color: #aaddaa;
-        padding: 6px 10px;
-        margin: 6px 0;
-        border-radius: 3px;
-        border-left: 3px solid #5f5;
-        animation: fadeIn 0.3s ease;
-        font-size: 12px;
+      .connection-message {
+        background: rgba(251, 191, 36, 0.1);
+        border: 1px solid rgba(251, 191, 36, 0.3);
+        border-radius: var(--radius-md);
+        color: var(--status-warning);
+        padding: var(--spacing-md);
+        margin: var(--spacing-md) 0;
+        font-size: 13px;
+        text-align: center;
       }
 
       @keyframes fadeIn {
         from {
           opacity: 0;
-          transform: translateY(-5px);
+          transform: translateY(-10px);
         }
         to {
           opacity: 1;
@@ -469,42 +374,82 @@ const EditorStyles: React.FC = () => {
         }
       }
 
-      @media (max-width: 768px) {
-        .editor-container {
-          flex-direction: column;
-        }
-
-        .sidebar {
-          width: 100%;
-          min-width: 0;
-          height: 50%;
-          max-width: 100%;
-          resize: vertical;
-        }
-
-        .resize-handle {
-          display: none;
-        }
-
-        .preview {
-          height: 50%;
-        }
-
-        .code-section {
-          height: calc(100% - 160px);
-        }
+      /* 代码编辑器 */
+      .monaco-container {
+        background: var(--bg-input);
+        border: 1px solid var(--border-primary);
+        border-radius: var(--radius-md);
+        overflow: hidden;
       }
 
-      @media (max-height: 800px) {
-        .scene-exporter-container {
-          top: 10px;
-        }
+      /* Diff 切换 */
+      .diff-toggle button {
+        width: 100%;
+        padding: var(--spacing-sm) var(--spacing-md);
+        background: var(--bg-tertiary);
+        border: 1px solid var(--border-primary);
+        border-radius: var(--radius-md);
+        color: var(--text-primary);
+        font-size: 13px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+      }
 
-        .ui-controls-container {
-          top: 50%;
-          right: 20px;
-          transform: translateY(-50%);
-        }
+      .diff-toggle button:hover {
+        background: var(--bg-hover);
+        border-color: var(--border-secondary);
+      }
+
+      /* 控制信息 */
+      .controls-help {
+        background: var(--bg-tertiary);
+        border: 1px solid var(--border-primary);
+        border-left: 3px solid var(--accent-subtle);
+        border-radius: var(--radius-md);
+        padding: var(--spacing-md);
+        margin: var(--spacing-md) 0;
+      }
+
+      .controls-help p {
+        margin: 0;
+        color: var(--text-secondary);
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      /* 通用按钮样式 */
+      .model-btn {
+        background: var(--bg-tertiary);
+        border: 1px solid var(--border-primary);
+        color: var(--text-primary);
+        padding: var(--spacing-md) var(--spacing-lg);
+        border-radius: var(--radius-md);
+        font-size: 14px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s ease;
+      }
+
+      .model-btn:hover {
+        background: var(--bg-hover);
+        border-color: var(--border-secondary);
+        transform: translateY(-1px);
+      }
+
+      .model-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+        transform: none;
+      }
+
+      .test-model-btn {
+        background: var(--accent-primary);
+        color: var(--bg-primary);
+        border: none;
+      }
+
+      .test-model-btn:hover {
+        background: var(--accent-secondary);
       }
     `}</style>
   );

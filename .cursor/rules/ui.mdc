@@ -1,206 +1,76 @@
 ---
 description: 
 globs: 
-alwaysApply: false
+alwaysApply: true
 ---
----
-name: tailwind_scifi
-description: Guide for creating advanced sci-fi UI designs with Tailwind CSS
-globs: ["**/*.{js,ts,jsx,tsx,mdx,css}"]
-tags:
-- tailwind
-- ui
-- scifi
----
-
 # 高级科幻风格 UI 设计指南
 
-## 核心设计原则
+## 设计原则
 
-- **未来感审美**: 使用鲜明对比、几何形状和技术感十足的元素
-- **深色背景**: 以黑色和深色为基础，增强科技感
-- **荧光色彩**: 用明亮的霓虹色作为强调色
-- **光效元素**: 添加发光效果、渐变和光晕
-- **动态交互**: 平滑过渡和微妙动画增强用户体验
+### 极简主义与高级科幻感
+- 以黑色和灰色为主色调
+- **严格禁止使用emoji图标** ❌
+- 使用纯文本标签和几何图形
+- 采用现代几何设计语言
+- 参考cursor等 AI IDE 设计
 
-## 色彩系统
-
-### 主色调 (暗色背景)
-- `bg-black`: 纯黑色背景
-- `bg-gray-950`: 接近黑色的深灰
-- `bg-slate-900`: 带蓝调的深色
-- `bg-zinc-900`: 中性深色
-
-### 强调色 (霓虹效果)
-- `text-cyan-400`, `border-cyan-400`: 科技蓝
-- `text-indigo-500`, `border-indigo-500`: 紫罗兰
-- `text-violet-400`, `border-violet-400`: 明亮紫色
-- `text-fuchsia-500`, `border-fuchsia-500`: 未来粉红
-- `text-emerald-400`, `border-emerald-400`: 矩阵绿
-
-### 发光效果
+### 颜色系统
 ```css
-@layer components {
-  .glow-cyan {
-    @apply relative;
-    box-shadow: 0 0 15px 2px theme('colors.cyan.500/50');
-  }
-  .glow-purple {
-    @apply relative;
-    box-shadow: 0 0 15px 2px theme('colors.violet.500/50');
-  }
-  .glow-green {
-    @apply relative;
-    box-shadow: 0 0 15px 2px theme('colors.emerald.500/50');
-  }
-}
+--bg-primary: #0a0a0a     /* 深黑主背景 */
+--bg-secondary: #1a1a1a   /* 黑灰次级背景 */ 
+--bg-tertiary: #2a2a2a    /* 中等灰背景 */
+--bg-card: #151515        /* 卡片背景 */
+--bg-input: #0f0f0f       /* 输入框背景 */
+--bg-hover: #2d2d2d       /* 悬停背景 */
+
+--border-primary: #333333  /* 主边框 */
+--border-secondary: #404040 /* 次级边框 */
+--border-accent: #505050   /* 强调边框 */
+
+--text-primary: #ffffff    /* 主文字 */
+--text-secondary: #a0a0a0  /* 次级文字 */
+--text-tertiary: #666666   /* 三级文字 */
+--text-disabled: #404040   /* 禁用文字 */
+
+--accent-primary: #ffffff  /* 主强调色 */
+--accent-secondary: #e0e0e0 /* 次级强调色 */
+--accent-subtle: #303030   /* 微妙强调 */
 ```
 
-## 排版与字体
+### 几何系统
+- **圆角**: 4px/8px/12px 统一标准
+- **间距**: 4px基准倍数系统 (4px, 8px, 16px, 24px, 32px)
+- **阴影**: 层次分明但不张扬
+- **边框**: 1px细线，营造精确感
 
-- 首选无衬线字体: `font-sans`
-- 等宽字体用于代码展示: `font-mono`
-- 通过字间距增强未来感: `tracking-wider`, `tracking-widest`
-- 使用细体增强科技感: `font-light`, `font-extralight`
-- 大标题使用全大写: `uppercase tracking-widest`
+### 交互原则
+- **无emoji**: 使用纯文本标签代替表情符号
+- **微动画**: 0.2s统一过渡时间
+- **状态反馈**: 清晰的悬停、激活、禁用状态
+- **专业快捷键**: 支持Ctrl+Enter等专业操作
 
-## 组件样式
+### 组件规范
+- **按钮**: 简洁几何形状，清晰状态变化
+- **输入框**: 圆角矩形，微妙边框高亮
+- **标签页**: 底部细线指示当前状态
+- **消息**: 清晰的层次结构，无装饰性图标
 
-### 按钮
-```html
-<button class="px-6 py-2 bg-black border border-cyan-400 text-cyan-400 rounded-md tracking-wider font-light hover:bg-cyan-400/10 transition-all duration-300 glow-cyan">
-  操作命令
-</button>
-```
+### 布局原则
+- **网格对齐**: 所有元素严格对齐
+- **留白**: 充分的空间营造科技感
+- **层次**: 通过颜色深度区分界面层级
+- **响应式**: 保持在各种尺寸下的协调性
 
-### 卡片
-```html
-<div class="bg-black/60 backdrop-blur-md border border-indigo-500/30 rounded-lg p-6 glow-purple">
-  <h3 class="text-indigo-400 uppercase tracking-wider font-light mb-3">数据面板</h3>
-  <p class="text-gray-300 font-light">面板内容</p>
-</div>
-```
+## 禁止事项
+❌ 不使用emoji或表情符号
+❌ 不使用彩色装饰元素
+❌ 不使用花哨的动画效果
+❌ 不使用非几何形状的装饰
 
-### 输入框
-```html
-<input
-  type="text"
-  class="bg-black/30 border border-violet-500/50 text-violet-100 rounded-md px-4 py-2 focus:outline-none focus:ring-1 focus:ring-violet-400 focus:border-violet-400 placeholder-violet-300/30"
-  placeholder="输入指令..."
-/>
-```
+## 推荐做法
+✅ 使用文字标签代替图标
+✅ 保持高对比度确保可读性
+✅ 使用微妙的阴影营造深度
+✅ 统一的设计语言贯穿全应用
 
-### 数据表格
-```html
-<div class="overflow-hidden rounded-lg border border-emerald-500/30 glow-green">
-  <table class="w-full text-left">
-    <thead class="bg-emerald-900/30 border-b border-emerald-500/30">
-      <tr>
-        <th class="px-4 py-3 text-emerald-400 uppercase tracking-wider font-light text-xs">参数</th>
-        <th class="px-4 py-3 text-emerald-400 uppercase tracking-wider font-light text-xs">数值</th>
-      </tr>
-    </thead>
-    <tbody class="divide-y divide-emerald-900/30 bg-black/60">
-      <tr>
-        <td class="px-4 py-3 text-gray-300 font-light">Alpha</td>
-        <td class="px-4 py-3 text-emerald-400 font-light font-mono">92.7%</td>
-      </tr>
-    </tbody>
-  </table>
-</div>
-```
 
-## 背景效果
-
-### 网格背景
-```html
-<div class="absolute inset-0 bg-[radial-gradient(rgba(50,50,200,0.15)_1px,transparent_1px)] bg-[size:30px_30px] z-0"></div>
-```
-
-### 渐变背景
-```html
-<div class="absolute inset-0 bg-gradient-to-br from-black via-slate-900 to-black z-0"></div>
-```
-
-### 光效线条
-```html
-<div class="h-px w-full bg-gradient-to-r from-transparent via-cyan-500 to-transparent opacity-70"></div>
-```
-
-## 动画效果
-
-### 脉冲效果
-```html
-<div class="animate-pulse bg-violet-500/20 rounded-full h-3 w-3"></div>
-```
-
-### 打字效果
-```css
-@keyframes typing {
-  from { width: 0 }
-  to { width: 100% }
-}
-
-.typing-animation {
-  display: inline-block;
-  overflow: hidden;
-  white-space: nowrap;
-  animation: typing 3s steps(40, end);
-}
-```
-
-### 扫描线
-```css
-@keyframes scan {
-  0% { transform: translateY(-100%); }
-  100% { transform: translateY(100%); }
-}
-
-.scan-effect {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 5px;
-  background: linear-gradient(to bottom, transparent, theme('colors.cyan.400'), transparent);
-  animation: scan 2s linear infinite;
-  opacity: 0.5;
-}
-```
-
-## 实用工具类
-
-### 玻璃态效果
-```html
-<div class="backdrop-blur-md bg-white/5 border border-white/10 rounded-lg"></div>
-```
-
-### 参数显示
-```html
-<div class="inline-flex items-center space-x-2 px-2 py-1 bg-black/60 border border-cyan-500/30 rounded text-xs font-mono text-cyan-400">
-  <span class="h-1.5 w-1.5 rounded-full bg-cyan-400 animate-pulse"></span>
-  <span>在线: 98.2%</span>
-</div>
-```
-
-### 3D 效果
-```html
-<div class="transform perspective-1000 hover:rotate-y-12 transition-all duration-500">
-  <!-- 内容 -->
-</div>
-```
-
-## 响应式设计
-
-- 确保在所有设备上都能保持科幻感
-- 使用 Tailwind 的响应式前缀 (`sm:`, `md:`, `lg:`, `xl:`)
-- 在小屏幕上简化复杂效果
-- 考虑使用 `@container` 进行容器查询
-
-## 最佳实践
-
-- 不要过度使用发光效果，以免影响可读性
-- 确保文本有足够对比度，保持可访问性
-- 创建一致的颜色主题，避免使用过多不同的霓虹色
-- 为交互元素添加状态反馈 (悬停、点击效果)
-- 考虑使用暗黑模式切换功能

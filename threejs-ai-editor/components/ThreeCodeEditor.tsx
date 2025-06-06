@@ -95,9 +95,10 @@ export default function ThreeCodeEditor() {
   );
   const [previousCode] = useState("");
   const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<string>("");
   const [showDiff, setShowDiff] = useState(false);
   const [diff] = useState("");
+  const [lastAgentResponse, setLastAgentResponse] = useState<string>("");
 
   // Lint state
   const [lintErrors, setLintErrors] = useState<
@@ -132,7 +133,7 @@ export default function ThreeCodeEditor() {
   const threeRef = useThreeScene(containerRef);
   const {
     loadedModels,
-    isModelLoading,
+    isModelLoading: modelLoaderIsModelLoading,
     allModelUrls,
     setAllModelUrls,
     loadModel,
@@ -725,65 +726,6 @@ export default function ThreeCodeEditor() {
     }
   }, [code]);
 
-  // Resize functionality
-  useEffect(() => {
-    const container = document.querySelector(".editor-container");
-    const sidebar = document.querySelector(".sidebar");
-    const resizeHandle = document.querySelector(".resize-handle");
-
-    if (!container || !sidebar || !resizeHandle) return;
-
-    const setInitialPosition = () => {
-      const sidebarWidth = sidebar.getBoundingClientRect().width;
-      (resizeHandle as HTMLElement).style.left = `${sidebarWidth}px`;
-    };
-
-    setTimeout(setInitialPosition, 0);
-
-    let isResizing = false;
-
-    const startResize = (e: MouseEvent) => {
-      isResizing = true;
-      document.body.style.cursor = "col-resize";
-      document.addEventListener("mousemove", handleMouseMove);
-      document.addEventListener("mouseup", stopResize);
-      e.preventDefault();
-    };
-
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!isResizing) return;
-
-      const containerRect = container.getBoundingClientRect();
-      const newWidth = e.clientX - containerRect.left;
-
-      const minWidth = 350;
-      const maxWidth = containerRect.width * 0.45;
-
-      const clampedWidth = Math.max(minWidth, Math.min(maxWidth, newWidth));
-
-      (sidebar as HTMLElement).style.width = `${clampedWidth}px`;
-      (resizeHandle as HTMLElement).style.left = `${clampedWidth}px`;
-    };
-
-    const stopResize = () => {
-      isResizing = false;
-      document.body.style.cursor = "";
-      document.removeEventListener("mousemove", handleMouseMove);
-      document.removeEventListener("mouseup", stopResize);
-    };
-
-    resizeHandle.addEventListener("mousedown", startResize as EventListener);
-
-    return () => {
-      resizeHandle.removeEventListener(
-        "mousedown",
-        startResize as EventListener
-      );
-      document.removeEventListener("mousemove", handleMouseMove);
-      document.removeEventListener("mouseup", stopResize);
-    };
-  }, []);
-
   // GLTFLoader proxy override
   useEffect(() => {
     if (threeRef.current && threeRef.current.gltfLoader) {
@@ -1017,7 +959,7 @@ export default function ThreeCodeEditor() {
   };
 
   const handleGenerate = async () => {
-    if (isLoading || isModelLoading) return;
+    if (isLoading || modelLoaderIsModelLoading) return;
 
     setIsLoading(true);
     setError("");
@@ -1092,6 +1034,12 @@ export default function ThreeCodeEditor() {
 
       const data = await response.json();
       console.log("[Generate] Received response from backend:", data);
+
+      // Store the conversational response from the agent
+      if (data.chatResponse) {
+        setLastAgentResponse(data.chatResponse);
+        console.log("[Generate] Agent chat response:", data.chatResponse);
+      }
 
       if (data.directCode) {
         const newCode = data.directCode.trim();
@@ -1211,7 +1159,7 @@ export default function ThreeCodeEditor() {
         setPrompt={setPrompt}
         handleGenerate={handleGenerate}
         isLoading={isLoading}
-        isModelLoading={isModelLoading}
+        isModelLoading={modelLoaderIsModelLoading}
         error={error}
         code={code}
         setCode={setCode}
@@ -1221,9 +1169,8 @@ export default function ThreeCodeEditor() {
         diff={diff}
         previousCode={previousCode}
         onVersionRevert={handleVersionRevert}
+        lastAgentResponse={lastAgentResponse}
       />
-
-      <div className="resize-handle"></div>
 
       <ThreePreview
         containerRef={containerRef}

@@ -15,6 +15,25 @@ export default function App({ Component, pageProps }) {
       return originalFetch.apply(this, args);
     };
 
+    // Initialize Socket.IO client
+    const initializeSocketIO = async () => {
+      if (typeof window !== "undefined" && !window.io) {
+        try {
+          const { io } = await import("socket.io-client");
+          window.io = () =>
+            io("/api/socket", {
+              path: "/api/socket",
+              transports: ["websocket", "polling"],
+            });
+          console.log("Socket.IO client initialized");
+        } catch (error) {
+          console.error("Failed to initialize Socket.IO client:", error);
+        }
+      }
+    };
+
+    initializeSocketIO();
+
     return () => {
       // Restore original fetch when component unmounts
       window.fetch = originalFetch;

@@ -7,6 +7,7 @@ import { applyPatchTool } from "@/lib/tools/applyPatchTool";
 import { screenshotTool } from "./screenshotTool";
 import { retrievalTool } from "./retrievalTool";
 import { writeChromaTool } from "./writeChromaTool";
+import { fixBugTool } from "./fixBugTool";
 
 /**
  * 工具类别枚举
@@ -112,6 +113,13 @@ export class ToolRegistry {
       writeChromaTool.name,
       writeChromaTool as unknown as Tool,
       ToolCategory.STORAGE
+    );
+
+    // 注册Bug修复工具
+    this.registerTool(
+      fixBugTool.name,
+      fixBugTool as unknown as Tool,
+      ToolCategory.CODE
     );
 
     console.log("[ToolRegistry] Initialized tools");
