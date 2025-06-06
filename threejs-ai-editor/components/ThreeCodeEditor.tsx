@@ -708,21 +708,44 @@ export default function ThreeCodeEditor() {
           if (error) setError("");
         } catch (e) {
           console.error("代码执行错误:", e);
-          setError(
+          const errorMessage =
             "Code execution error: " +
-              (e instanceof Error ? e.message : String(e))
-          );
+            (e instanceof Error ? e.message : String(e));
+          setError(errorMessage);
+
+          // 尝试自动修复错误
+          if (e instanceof Error) {
+            handleCodeError(e, "Code execution").catch((fixError) => {
+              console.error("Auto-fix failed:", fixError);
+            });
+          }
         }
       } catch (e) {
         console.error("代码评估错误:", e);
-        setError(
+        const errorMessage =
           "Code evaluation error: " +
-            (e instanceof Error ? e.message : String(e))
-        );
+          (e instanceof Error ? e.message : String(e));
+        setError(errorMessage);
+
+        // 尝试自动修复错误
+        if (e instanceof Error) {
+          handleCodeError(e, "Code evaluation").catch((fixError) => {
+            console.error("Auto-fix failed:", fixError);
+          });
+        }
       }
     } catch (e) {
       console.error("场景处理错误:", e);
-      setError("场景处理错误: " + (e instanceof Error ? e.message : String(e)));
+      const errorMessage =
+        "场景处理错误: " + (e instanceof Error ? e.message : String(e));
+      setError(errorMessage);
+
+      // 尝试自动修复错误
+      if (e instanceof Error) {
+        handleCodeError(e, "Scene processing").catch((fixError) => {
+          console.error("Auto-fix failed:", fixError);
+        });
+      }
     }
   }, [code]);
 
@@ -1147,6 +1170,99 @@ export default function ThreeCodeEditor() {
           error instanceof Error ? error.message : String(error)
         }`
       );
+    }
+  };
+
+  // 错误捕获和自动修复函数
+  const handleCodeError = async (
+    error: Error,
+    errorContext?: string
+  ): Promise<boolean> => {
+    const errorMessage = error.message;
+    const errorStack = error.stack;
+
+    console.log("[AutoFix] Code error detected:", errorMessage);
+
+    // 检查是否为可自动修复的错误
+    const isFixableError =
+      errorMessage.includes("is not a constructor") ||
+      errorMessage.includes("is not defined") ||
+      errorMessage.includes("Cannot read properties") ||
+      errorMessage.includes("TypeError") ||
+      errorMessage.includes("ReferenceError") ||
+      errorMessage.includes("SyntaxError");
+
+    if (!isFixableError) {
+      console.log("[AutoFix] Error not automatically fixable");
+      return false;
+    }
+
+    try {
+      setError("Automatically fixing error: " + errorMessage);
+
+      // 获取当前场景状态
+      let currentSceneState: Record<string, unknown>[] = [];
+      if (typeof serializeSceneState === "function") {
+        currentSceneState = serializeSceneState();
+      }
+
+      // 调用后端修复API
+      const response = await fetch("/api/agent", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          action: "fix-bug",
+          code: code,
+          prompt: "Fix the error automatically",
+          errorDescription: errorMessage,
+          errorDetails: `Error Context: ${
+            errorContext || "Code execution"
+          }\nStack: ${errorStack}`,
+          lintErrors: lintErrors,
+          sceneState: currentSceneState,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Fix API failed: ${response.statusText}`);
+      }
+
+      const fixResult = await response.json();
+
+      if (fixResult.success && fixResult.directCode) {
+        console.log("[AutoFix] Error fixed successfully, applying fixed code");
+
+        // 应用修复后的代码
+        setCode(fixResult.directCode);
+        setError("");
+
+        // 添加修复通知
+        if (window.dispatchEvent) {
+          window.dispatchEvent(
+            new CustomEvent("showNotification", {
+              detail: {
+                type: "success",
+                message: `Auto-fixed error: ${errorMessage}`,
+                duration: 5000,
+              },
+            })
+          );
+        }
+
+        return true;
+      } else {
+        throw new Error(fixResult.error || "Failed to fix error");
+      }
+    } catch (fixError) {
+      console.error("[AutoFix] Failed to auto-fix error:", fixError);
+      setError(
+        `Original error: ${errorMessage}\nAuto-fix failed: ${
+          fixError instanceof Error ? fixError.message : String(fixError)
+        }`
+      );
+      return false;
     }
   };
 

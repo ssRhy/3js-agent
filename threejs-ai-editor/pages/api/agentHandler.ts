@@ -98,6 +98,19 @@ export default async function handler(
       case "generate-model":
         return await handleModelGeneration(req, res, requestId, code, prompt);
 
+      case "fix-bug":
+        return await handleBugFix(
+          req,
+          res,
+          requestId,
+          code,
+          prompt,
+          body.errorDescription,
+          body.errorDetails,
+          lintErrors,
+          sceneState
+        );
+
       case "reset-session":
         // 清除会话状态
         clearSessionState();
@@ -305,6 +318,67 @@ async function handleModelGeneration(
     console.error(`[${requestId}] Model generation failed:`, error);
     return res.status(500).json({
       error: "Model generation failed",
+      details: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+}
+
+/**
+ * 处理错误修复请求
+ * 使用fixBugTool修复前端传递的错误
+ */
+async function handleBugFix(
+  req: NextApiRequest,
+  res: NextApiResponse,
+  requestId: string,
+  code: string,
+  prompt: string,
+  errorDescription?: string,
+  errorDetails?: string,
+  lintErrors?: LintError[],
+  sceneState?: SceneStateObject[]
+) {
+  console.log(`[${requestId}] Processing bug fix request`);
+
+  // 验证必需参数
+  if (!errorDescription) {
+    console.log(`[${requestId}] Missing required parameter: errorDescription`);
+    return res.status(400).json({
+      error: "Missing required parameter: errorDescription",
+    });
+  }
+
+  try {
+    // 导入fixBugTool
+    const { fixBugTool } = await import("../../lib/tools/fixBugTool");
+
+    // 调用fixBugTool修复错误
+    console.log(
+      `[${requestId}] Calling fixBugTool to fix error: ${errorDescription}`
+    );
+
+    const fixedCode = await fixBugTool.func({
+      errorDescription,
+      errorDetails,
+      currentCode: code,
+      sceneState: sceneState as Record<string, unknown>[] | undefined,
+      lintErrors: lintErrors as Record<string, unknown>[] | undefined,
+      preserveModels: true,
+    });
+
+    // 返回修复结果
+    console.log(`[${requestId}] Bug fix completed successfully`);
+    return res.status(200).json({
+      success: true,
+      directCode: fixedCode,
+      message: "错误已修复",
+      errorDescription,
+      timestamp: Date.now(),
+    });
+  } catch (error) {
+    console.error(`[${requestId}] Bug fix failed:`, error);
+    return res.status(500).json({
+      error: "Bug fix failed",
       details: error instanceof Error ? error.message : "Unknown error",
     });
   }

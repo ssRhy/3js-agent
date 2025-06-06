@@ -160,6 +160,104 @@ const Sidebar: React.FC<SidebarProps> = ({
     scrollToBottom();
   };
 
+  // 手动修复错误函数
+  const handleFixBug = async () => {
+    if (!error || isLoading || socketConnectionStatus !== "open") return;
+
+    try {
+      const userMessage: ChatMessage = {
+        id: Date.now().toString(),
+        type: "user",
+        content: "Fix the current error",
+        timestamp: new Date(),
+      };
+
+      const loadingMessage: ChatMessage = {
+        id: (Date.now() + 1).toString(),
+        type: "assistant",
+        content: "Analyzing and fixing the error...",
+        timestamp: new Date(),
+        isLoading: true,
+      };
+
+      setChatMessages((prev) => [...prev, userMessage, loadingMessage]);
+
+      // 调用错误修复API
+      const response = await fetch("/api/agent", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          action: "fix-bug",
+          code: code,
+          prompt: "Fix the current error",
+          errorDescription: error,
+          errorDetails: `User manually requested error fix. Current error: ${error}`,
+          lintErrors: lintErrors,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Fix API failed: ${response.statusText}`);
+      }
+
+      const fixResult = await response.json();
+
+      if (fixResult.success && fixResult.directCode) {
+        // 应用修复后的代码
+        setCode(fixResult.directCode);
+
+        // 更新聊天消息
+        setChatMessages((prev) =>
+          prev.map((msg) =>
+            msg.isLoading
+              ? {
+                  ...msg,
+                  content: "Error has been fixed! The code has been updated.",
+                  isLoading: false,
+                }
+              : msg
+          )
+        );
+      } else {
+        // 修复失败
+        setChatMessages((prev) =>
+          prev.map((msg) =>
+            msg.isLoading
+              ? {
+                  ...msg,
+                  content: `Failed to fix error: ${
+                    fixResult.error || "Unknown error"
+                  }`,
+                  isLoading: false,
+                }
+              : msg
+          )
+        );
+      }
+    } catch (fixError) {
+      console.error("Manual fix failed:", fixError);
+      setChatMessages((prev) =>
+        prev.map((msg) =>
+          msg.isLoading
+            ? {
+                ...msg,
+                content: `Fix failed: ${
+                  fixError instanceof Error
+                    ? fixError.message
+                    : String(fixError)
+                }`,
+                isLoading: false,
+              }
+            : msg
+        )
+      );
+    }
+
+    scrollToBottom();
+  };
+
   // 监听错误状态，更新聊天消息
   useEffect(() => {
     if (error) {
@@ -619,25 +717,40 @@ const Sidebar: React.FC<SidebarProps> = ({
                 rows={3}
                 disabled={socketConnectionStatus !== "open"}
               />
-              <button
-                onClick={handleSendMessage}
-                disabled={
-                  !prompt.trim() ||
-                  isLoading ||
-                  socketConnectionStatus !== "open"
-                }
-                className="send-button"
-              >
-                {isLoading ? (
-                  <div className="loading-spinner"></div>
-                ) : (
-                  <span>Send</span>
+              <div className="button-group">
+                <button
+                  onClick={handleSendMessage}
+                  disabled={
+                    !prompt.trim() ||
+                    isLoading ||
+                    socketConnectionStatus !== "open"
+                  }
+                  className="send-button"
+                >
+                  {isLoading ? (
+                    <div className="loading-spinner"></div>
+                  ) : (
+                    <span>Send</span>
+                  )}
+                </button>
+
+                {/* Fix Bug 按钮 - 仅在有错误时显示 */}
+                {error && (
+                  <button
+                    onClick={handleFixBug}
+                    disabled={isLoading || socketConnectionStatus !== "open"}
+                    className="fix-bug-button"
+                    title="Fix the current error automatically"
+                  >
+                    Fix Bug
+                  </button>
                 )}
-              </button>
+              </div>
             </div>
 
             <div className="input-hint">
               Press Ctrl+Enter to send • Be specific for better results
+              {error && " • Click 'Fix Bug' to automatically resolve errors"}
             </div>
           </div>
         )}
@@ -1022,34 +1135,32 @@ const Sidebar: React.FC<SidebarProps> = ({
         .message-input-container {
           display: flex;
           gap: var(--spacing-sm);
-          align-items: flex-end;
+          background: var(--bg-card);
+          border: 1px solid var(--border-primary);
+          border-radius: var(--radius-lg);
+          padding: var(--spacing-sm);
+          transition: border-color 0.2s ease;
+        }
+
+        .message-input-container:focus-within {
+          border-color: var(--accent-primary);
         }
 
         .message-input {
           flex: 1;
-          background: var(--bg-input);
-          border: 1px solid var(--border-primary);
-          border-radius: var(--radius-lg);
-          padding: var(--spacing-md);
+          background: none;
+          border: none;
           color: var(--text-primary);
-          font-family: inherit;
           font-size: 14px;
           line-height: 1.4;
           resize: none;
           outline: none;
-          transition: all 0.2s ease;
-          min-height: 44px;
-          max-height: 120px;
+          font-family: inherit;
+          padding: var(--spacing-sm);
         }
 
         .message-input::placeholder {
           color: var(--text-tertiary);
-        }
-
-        .message-input:focus {
-          border-color: var(--accent-subtle);
-          background: var(--bg-secondary);
-          box-shadow: 0 0 0 1px var(--accent-subtle);
         }
 
         .message-input:disabled {
@@ -1057,34 +1168,50 @@ const Sidebar: React.FC<SidebarProps> = ({
           cursor: not-allowed;
         }
 
-        .send-button {
-          min-width: 64px;
-          height: 44px;
-          padding: 0 var(--spacing-md);
+        .button-group {
+          display: flex;
+          gap: var(--spacing-xs);
+          flex-direction: column;
+        }
+
+        .send-button,
+        .fix-bug-button {
           background: var(--accent-primary);
           border: none;
-          border-radius: var(--radius-lg);
           color: var(--bg-primary);
+          padding: var(--spacing-sm) var(--spacing-md);
+          border-radius: var(--radius-md);
+          font-size: 13px;
+          font-weight: 500;
           cursor: pointer;
           transition: all 0.2s ease;
           display: flex;
           align-items: center;
           justify-content: center;
-          font-size: 12px;
-          font-weight: 600;
-          flex-shrink: 0;
+          min-height: 32px;
+          white-space: nowrap;
         }
 
-        .send-button:hover:not(:disabled) {
+        .send-button:hover:not(:disabled),
+        .fix-bug-button:hover:not(:disabled) {
           background: var(--accent-secondary);
           transform: translateY(-1px);
         }
 
-        .send-button:disabled {
-          background: var(--bg-tertiary);
-          color: var(--text-disabled);
+        .send-button:disabled,
+        .fix-bug-button:disabled {
+          opacity: 0.5;
           cursor: not-allowed;
           transform: none;
+        }
+
+        .fix-bug-button {
+          background: var(--status-warning);
+          font-size: 12px;
+        }
+
+        .fix-bug-button:hover:not(:disabled) {
+          background: #f59e0b;
         }
 
         .loading-spinner {

@@ -41,6 +41,9 @@ export interface AgentRequest {
   modelSize?: number;
   renderingComplete?: boolean;
   lintErrors?: LintError[];
+  // 新增错误修复相关字段
+  errorDescription?: string;
+  errorDetails?: string;
 }
 
 export default async function agentEndpoint(

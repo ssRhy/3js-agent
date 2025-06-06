@@ -122,6 +122,10 @@ export const fixBugTool = new DynamicStructuredTool({
       .string()
       .optional()
       .describe("Detailed error messages, stack traces, or console errors"),
+    currentCode: z
+      .string()
+      .optional()
+      .describe("The current code that contains the error to be fixed"),
     sceneState: z
       .array(z.record(z.unknown()))
       .optional()
@@ -141,6 +145,7 @@ export const fixBugTool = new DynamicStructuredTool({
   func: async ({
     errorDescription,
     errorDetails,
+    currentCode,
     sceneState,
     lintErrors,
     preserveModels = true,
@@ -181,19 +186,27 @@ export const fixBugTool = new DynamicStructuredTool({
     }
 
     try {
-      // Step 1: Get current code
+      // Step 1: Get current code - prioritize passed code, fallback to cached
       console.log(
         `[${requestId}] [FixBug Tool] 📁 Retrieving current code for analysis...`
       );
-      const currentCode = getCachedCode();
-      if (!currentCode) {
+
+      let codeToFix = currentCode;
+      if (!codeToFix) {
+        // Fallback to cached code if no code provided
+        const cachedCode = getCachedCode();
+        codeToFix = cachedCode || undefined;
+      }
+
+      if (!codeToFix) {
         console.error(
           `[${requestId}] [FixBug Tool] ❌ No current code available for bug fixing`
         );
-        return "No current code available for bug fixing";
+        return "Error: No current code available for bug fixing. Please ensure code is provided in the request.";
       }
+
       console.log(
-        `[${requestId}] [FixBug Tool] ✅ Current code retrieved (${currentCode.length} characters)`
+        `[${requestId}] [FixBug Tool] ✅ Current code retrieved (${codeToFix.length} characters)`
       );
 
       // Step 2: Get model history if preservation is enabled
@@ -243,7 +256,7 @@ ${lintErrorsSection}
 
 ## Current Code to Fix
 \`\`\`javascript
-${currentCode}
+${codeToFix}
 \`\`\`
 
 ${modelHistorySection}
