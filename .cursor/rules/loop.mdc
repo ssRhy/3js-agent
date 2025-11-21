@@ -1,0 +1,59 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+主要目的是通过AI agenttic workflow:用户创建和编辑Three.js场景。项目采用Next.js框架开发，结合了三维可视化(Three.js)、代码编辑器(Monaco)和AI生成能力(LangChainjs0.3)。
+
+
+##
+核心功能和结构：
+三维场景编辑：通过Three.js实现3D场景的可视化和交互，支持模型加载、渲染和操作。
+代码编辑：集成Monaco编辑器，允许用户直接编写和修改Three.js代码，实现对场景的编程控制。
+
+##
+状态管理：
+使用Zustand管理全局状态，包括场景对象、执行历史和用户意图
+实现对象注册表和状态缓存系统
+##
+
+##
+工具链：
+codeGenTool：基于用户提示生成或修复Three.js代码
+modelGenTool：基于用户需求生成3D模型
+applyPatchTool：应用代码补丁，管理代码状态。专管在原始代码上打补丁，无须关心内容
+screenshotTool:截图检查场景并且返回建议，专管前端渲染后的视觉验证
+retrievalTool & writeChromaTool：构建历史上下文库，为 Agent 提供持久化记忆与语义检索。Three.js 
+
+##
+交互流程：
+## 用户提示
+前端将用户的自然语言指令（包含上下文）发给 Agent。
+## 策略决策
+Agent 根据指令判断要调用哪种生成：
+modelGenTool：仅生成 GLTF 等模型文件。
+threejsGenTool：直接产出 Three.js 场景初始化 + Mesh 代码。
+双策略：先模型再场景，或并行生成。
+## 初版代码生产
+由 codeGenTool生成一段 Three.js 场景代码，并返回给前端。
+## 前端渲染
+前端把这段代码注入 Canvas 中执行，完整渲染出 3D 画面。
+## 截图与反馈
+前端调用 screenshotTool 截取 Canvas（或指定视角）并将图像发回 Agent。
+Agent 分析截图（借助视觉模型）判断效果是否符合预期。
+## 分支处理
+符合：跳到步骤 9，直接渲染给用户，无需再改代码。
+不符：生成反馈给 codeGenTool，形成补丁指令。
+## 补丁应用
+codeGenTool 根据截图反馈输出一段代码补丁（diff 或完整替换片段）。
+applyPatchTool 在源代码上应用该补丁，形成新版本代码。
+## 持久化与历史检索
+writeChromaTool 将新版本中新增/修改的物件 JSON 写入本地 ChromaDB。
+retrievalTool 可随时按 ID、语义或标签从 ChromaDB 拉取历史物件 JSON，并将它们注入到下一轮 codeGenTool 的 Prompt 中，保证上下文完整。
+## 最终渲染
+前端用最终代码渲染场景，用户看到稳定、持久化，实时的结果。
+
+##
+-agent循环：循环反馈：渲染→截图→反馈修改（从chromadb检索所需物体，保证上下文记忆）→补丁→渲染，直到视觉校验通过。
+-场景持久和稳定性：精准执行、实时校验、可持续演进，并且所有生成的物体都存入本地化 ChromaDB，随时可被检索、复用和组合，保障 Three.js 场景的稳定性与可维护性。
+-持久化上下文：每次补丁后的物件都写到 ChromaDB，Agent 下次生成时可一键拉回，确保版本不丢失。

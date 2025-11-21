@@ -1,0 +1,18 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+Agent-initiated screenshot:
+Agent calls screenshotTool
+screenshotTool calls socket-client.requestScreenshot()
+socket-client uses global SocketIOServer to request screenshot
+Client returns screenshot via socket.ts
+screenshotTool analyzes the screenshot
+##
+Result returns to agent
+Client-initiated analysis:
+Client calls screenshot.ts API with screenshot data
+screenshot.ts calls screenshotTool with useProvidedScreenshot=true
+screenshotTool analyzes without requesting via WebSocket
+Result returns to client

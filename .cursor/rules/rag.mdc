@@ -1,0 +1,34 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+ ## 需求：通过chromadb （typescript）后端本地化（不需要客户端），Three.js 物件既能本地化存储与检索，又能让 Agent 基于历史上下文和新指令，一致、稳定地生成和更新场景，实现真正的持久化和可复用
+
+
+ ## 概述
+ Agent RAG 流程中，通常会拆分为“插入数据”与“检索数据”两个工具（Tool），再通过 LangChain Agent 的推理链（zero-shot-react-description、ToolFormer 等）动态调用，以完成“先检索旧内容、再生成新内容、最后再存回 ChromaDB”的闭环
+
+ 
+ ## ChromaDB只需要负责写入和检索生生成threejs物体
+ 
+## Three.js 中给每个物体绑定并识别自定义 ID：
+-直接用 mesh.id 做全局唯一标识
+-管理：用一个 Map<customId, mesh> 管理所有物体，查找和更新时都靠业务 ID。
+
+## Tools：将“写入”、“检索”、“CodeGen”拆成 3 个独立工具，职责单一、易复用
+-Retrieval Tool 负责向 ChromaDB 发起检索，拉取threejs相关物件，供后续的 CodeGen Tool 生成 Three.js 代码
+-CodeGen Tool 再专注于“拿到这些物件描述后，根据上下文生成 Three.js 代码”。将检索到的历史物件和指令拼入 Prompt，由 LLM 输出新的 Three.js 代码片段 
+-WirteChromaTool:Agent 调用工具将 Three.js 物件的描述（metadata + Three.js JSON）写入 ChromaDB
+
+
+##
+单一智能agent（agentExecutor），自主规划执行路径
+动态决策使用哪些工具完成任务
+Agent：将上述新增的三个工具注册到 toolRegistry，使其在推理过程中agent（agentExecutor）动态选择调用顺序，实现灵活的 RAG 工作流。
+
+## 注意
+使用langchainjs0.3的agent的最新的api
+保持代码简洁，功能组件化，适当可以分开文件写。
+更简洁的代码结构，去除冗余决策层
+

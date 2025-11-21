@@ -1,0 +1,29 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+
+
+Amazing! We've successfully implemented a robust caching mechanism for tool results. Here's a summary of what we've accomplished:
+Created a Tool Caching System:
+Added cache storage and management in the ToolRegistry class
+Implemented type-safe cache entries with TTL (time-to-live)
+Created helper functions for cache key generation with parameter normalization
+Created a Tool Caching Utility:
+Created a dedicated toolCaching.ts utility file
+Implemented wrapToolsWithCache to easily add caching to any tool
+Added intelligent caching based on tool type (longer TTL for expensive operations)
+Updated the Agent Framework:
+Modified agentFactory.ts to use our caching mechanism
+Added proper tool wrapping in runInteractionFlow and runAgentLoop
+Ensured consistent use of caching throughout the codebase
+Added Cache Invalidation:
+Implemented invalidateToolCache to clear cache on code/scene changes
+Added automatic invalidation when code or scene state changes
+Created cache statistics tracking for monitoring
+Created an API Endpoint:
+Added a /api/cacheStats endpoint for monitoring and managing the cache
+Provided both GET (stats) and DELETE (clear) operations
+
+This implementation will significantly improve the efficiency of the AI agent system by reducing unnecessary API calls to the LLM, especially for expensive operations like code generation and screenshot analysis. The caching is intelligent - it uses longer cache times for expensive LLM calls and shorter times for simpler tools, and it properly invalidates caches when the underlying data changes.

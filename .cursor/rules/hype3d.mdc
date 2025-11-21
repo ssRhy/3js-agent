@@ -1,0 +1,30 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+在langchainjs0.3的agent自定义 3D 模型生成工具（generate_3d_model）
+。
+##
+Agent 中注册该工具
+在 Prompt 明确工具用途（生成复杂模型时候调用工具），让 Agent 知道何时调用。
+
+
+
+##后端
+/lib/hyper3d.ts（SDK 封装，封装调用 Hyper3D 官方接口的逻辑，- 构造请求，处理网络错误，返回标准化的数据结构
+相当于你项目里专门维护的一套调用 Hyper3D 官方 API 的“工具箱”／“客户端库”。
+它里边只关心怎样跟 Hyper3D 的服务器通信：如何组装请求、处理错误、解析返回值（generate、checkStatus、download 三个核心方法）。
+任何地方只要想调用 Hyper3D，就可以 import hyper3d from '/lib/hyper3d'，然后直接用 hyper3d.generate(options)。
+
+##前端(前端页面ThreeCodeEditor.tsx)
+pages/api/hyper3d.ts（HTTP 接口），对外暴露一个统一的 HTTP 接口给前端，- 接受前端请求- 调用封装好的方法- 组织完整的生成→轮询→下载流程- 返回最终结果。只能作为 Next.js 的一个路由存在
+pages/api/hyper3d.ts（“HTTP 接口”）
+这是 Next.js 提供给前端（浏览器）调用的一个 API 路由，URL 例如 /api/hyper3d。
+它接收来自前端的 HTTP 请求（POST 过来 GenerateOptions），然后在内部：
+调用你在 /lib/hyper3d.ts 里封装好的 generate；
+轮询 checkStatus；
+再用 download 拿到模型 URL 列表；
+最终把这些 URL 通过 HTTP Response 返回给前端页面。
+前端只需要关心去请求 /api/hyper3d，无需知道底层跟 Hyper3D 交互的细节。
+

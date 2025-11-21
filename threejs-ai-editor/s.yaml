@@ -1,0 +1,56 @@
+edition: 3.0.0
+name: fc3-example
+access: default
+resources:
+  fcDemo:
+    component: fc3
+    props:
+      region: cn-hangzhou
+      handler: index.handler
+      role: ""
+      disableOndemand: false
+      description: "Three.js AI Editor with WebSocket support"
+      timeout: 600 # 增加到10分钟，支持较长的Agent工作流程
+      diskSize: 512
+      internetAccess: true
+      #resourceGroupId: rg-acfmz3u5n2ymrea
+      instanceIsolationMode: SHARE
+      # 为polling模式优化
+      instanceLifecycleConfig:
+        preFreeze:
+          handler: index.preFreeze
+          timeout: 3 # 3秒内响应预冻结
+      customRuntimeConfig:
+        port: 9000
+        command:
+          - npm
+          - run
+          - start
+      functionName: threejsagent
+      runtime: custom.debian10
+      cpu: 0.1 # 确保内存/CPU比例在1-4之间 (0.256/0.1=2.56)
+      instanceConcurrency: 10 # 增加并发，polling模式可以支持更多连接
+      memorySize: 256 # 256MB内存
+      environmentVariables:
+        PATH: >-
+          /var/fc/lang/nodejs18/bin:/usr/local/bin/apache-maven/bin:/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/ruby/bin:/opt/bin:/code:/code/bin
+        LD_LIBRARY_PATH: /code:/code/lib:/usr/lib:/opt/lib:/usr/local/lib
+        NODE_PATH: /opt/nodejs/node_modules
+        PORT: "9000"
+      code: ./
+      triggers:
+        - triggerConfig:
+            methods:
+              - GET
+              - POST
+              - PUT
+              - DELETE
+              - HEAD
+              - OPTIONS
+              - PATCH
+            authType: anonymous
+            disableURLInternet: true
+          triggerName: defaultTrigger
+          description: ""
+          qualifier: LATEST
+          triggerType: http

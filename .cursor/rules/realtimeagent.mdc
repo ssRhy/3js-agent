@@ -1,32 +1,85 @@
 ---
 description: 
 globs: 
-alwaysApply: true
+alwaysApply: false
 ---
-Agentic Workflow:
-动态决策与推理：每次任务执行时，AI 代理根据用户的输入、历史数据、反馈信息等进行决策，选择合适的工具并生成增量代码。
 
-工具选择：代理能够选择不同的工具来分析图像、生成代码、优化性能等。
 
-记忆管理：代理记住每次任务的历史上下文，确保在多轮任务中能够根据历史数据做出更精确的决策。
+模块化设计：将代码按功能划分为明确的模块
+减少重复：消除提示词、代码处理和模型调用的重复逻辑
+统一接口：标准化各模块之间的接口
+单一职责原则：每个函数和模块只负责一项任务
+工具注册机制：引入工具注册表用于更灵活的工具管理
 
-多轮修正：通过多轮交互，代理能基于每轮的结果进行自我修正，持续优化代码。
+集成步骤
+1. 创建新的目录结构
+首先，按照新的目录结构组织文件：
+/lib
+  /agents
+    agentFactory.ts
+    agentExecutor.ts
+  /prompts
+    systemPrompts.ts
+    humanPrompts.ts
+  /processors
+    codeProcessor.ts
+    modelExtractor.ts
+  /memory
+    memoryManager.ts (已有)
+  /tools
+    applyPatchTool.ts (已有)
+    codeGenTool.ts (已有)
+    modelGenTool.ts (已有)
+    toolRegistry.ts (新增)
+  /types
+    agentTypes.ts
+    codeTypes.ts
+    sceneTypes.ts
+    modelTypes.ts
+/pages/api
+  screenshotAnalyzer.ts
+  agentHandler.ts
+2. 类型定义迁移
+首先创建类型文件，将所有接口定义迁移到独立的类型文件中：
 
-核心流程：Agent 能自动截图自检→多模态诊断→生成修正→前端增量更新，实现真正的 AI 驱动 3D 场景自我优化闭环
-使用的是AZure OpenAI
+从原始代码中提取所有接口定义
+将它们按照功能分类到各自的类型文件
+更新所有导入以使用新的类型文件
 
-注意：
-返回JSON格式数据
-使用AzureOpenAI和langchainjs0.3的api和函数，接口。
-✅ 每次只传差异（diff），而非完整代码块；
-✅ 用 intent 和 summary 做语义导航/用户可视记录；
-✅ 截图接收：接收前端上传的截图并处理。以使用 HTML5 <canvas> 元素直接进行截图，并通过 toDataURL() 方法将图像转换为 Base64 编码格式。
-✅ 用 intent 和 summary 做语义导航/用户可视记录；
-多模态诊断：使用 GPT-4 Vision 模型分析截图。
-✅ 用 intent 和 summary 做语义导航/用户可视记录；
-生成修正：根据诊断结果生成 Three.js 代码的增量修正。
-✅内存管理：使用 BufferMemory 维护上下文和用户的代码状态。
-✅ 使用 Structured Output Parser 确保返回 JSON，防止 LLM“发散”；
-✅ 用 intent 和 summary 做语义导航/用户可视记录；
-✅ 前端 Zustant 管理 Three.js 对象，不用每次清空场景；
-✅ diff-match-patch 保证代码精准合并，引入jsdiff 等专门的差异化算法，可以显著提高增量修改的稳定性和一致性。结合增强的 diff 输出和标准的增量更新逻辑
+3. 提示词模板迁移
+将所有提示词模板逻辑移动到专用模块：
+
+从原始代码中提取createSystemPrompt和相关提示词逻辑
+将其移动到lib/prompts/systemPrompts.ts
+从代码中提取人类消息模板并移动到lib/prompts/humanPrompts.ts
+更新所有导入以使用新的提示词模块
+
+4. 代码处理函数迁移
+将所有代码处理函数整合到专用模块：
+
+从原始代码中提取cleanCodeOutput、extractTextContent等函数
+将它们移动到lib/processors/codeProcessor.ts
+将模型URL提取逻辑移动到lib/processors/modelExtractor.ts
+更新所有导入以使用新的处理器模块
+
+5. 工具注册机制实现
+实现新的工具注册中心：
+
+创建lib/tools/toolRegistry.ts文件
+实现单例模式的ToolRegistry类，用于管理工具
+将所有现有工具注册到此注册表中
+更新代码以通过注册表获取工具，而不是直接导入
+
+6. Agent工厂和执行器实现
+拆分Agent创建和执行逻辑：
+
+将Agent创建逻辑移动到lib/agents/agentFactory.ts
+将执行循环逻辑移动到lib/agents/agentExecutor.ts
+确保执行器可以处理失败情况并提供回退机制
+更新API处理程序以使用新的Agent模块
+
+7. API端点更新
+重构API端点以使用新的模块化结构：
+创建pages/api/screenshotAnalyzer.ts专门处理截图分析
+创建pages/api/agentHandler.ts作为主要入口点
+更新请求处理逻辑以利用新的模块化结构
